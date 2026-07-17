@@ -220,6 +220,37 @@ re-resolves. This is where the previous implementation's `method_to_protocol` ma
 last-write-wins, and the fix is the same as the `expr_types` keystone — record the decision
 at the point it is made.
 
+## Rigid type variables, and the trap in them
+
+Inside `fn show[T](x: T)`, `T` is opaque: a singleton disjoint from every concrete type,
+represented with the same finite-or-cofinite machinery as atoms. That is what lets a
+generic body be checked once instead of per call site.
+
+It has a sharp edge, and the edge is a **soundness** issue rather than a limitation:
+
+    fn g(s: str) -> str { s }
+    fn f[T](x: T) -> str {
+        if x is i64 { g(x) } else { "no" }   // x : T ∧ i64 = never
+    }
+
+`T ∧ i64` is empty, so the then-branch binds `x: never` — and `never <: str`, so `g(x)`
+typechecks **vacuously**. Then `f(5)` instantiates `T := i64`, the branch is live, and `g`
+receives an `i64`. The checker accepted a wrong program.
+
+This is the same trap the error-recovery section below describes, entered by a different
+door: a type meaning "cannot happen" satisfies everything downstream, so the cascade is
+silent rather than noisy.
+
+**The rule: an empty branch from a narrowing is a diagnostic, never silently-dead code.**
+`x is i64` where `x: T` is rejected as "this test can never succeed". With that guardrail
+rigid variables are sound; without it they are worse than not having variables at all. The
+same applies to two distinct variables, since `T ∧ U = ∅` while `T := U := i64` is a legal
+instantiation.
+
+So: a type parameter cannot be narrowed, **and cannot be pretended to have been narrowed
+either**. Polymorphic semantic subtyping (Castagna & Xu 2011) is the real answer and is not
+v1.
+
 ## Error recovery
 
 The parser recovers; so does the checker. A file with ten type errors should report ten,
