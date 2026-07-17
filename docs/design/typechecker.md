@@ -156,6 +156,83 @@ useless: `never <: T` for every `T`, so every downstream check would vacuously s
 A test asserts that no `Descriptor::Error` survives a successful check, and that the only
 route to ⊤ is a user writing `any`.
 
+### 7. Type variables, generics, and constructors
+
+`fn f[T](x: T) -> T` must be checked **once, with `T` opaque** — not only at call sites,
+or a generic body's errors surface at every caller instead of at the definition. So the
+descriptor needs a `TypeVar` atom, and `protocol Container for C[_]` needs a
+type-constructor application atom (`C[T]` where `C` is itself a variable).
+
+Variables are atoms like any other; a bound `where T: Display` is a constraint checked at
+the instantiation, not a bound baked into the atom. Generic arguments are **covariant**
+(`decisions.md`) — sound because collections are values.
+
+Full polymorphic set-theoretic types (Castagna's later work: type variables under
+union/intersection/negation, with a semantic notion of instantiation) are a non-goal. v1
+generics are parametric, checked with opaque variables, and monomorphised per call site.
+
+### 8. Arrows carry their error type
+
+    ArrowAtom { params: Vec<Ty>, ret: Ty, throws: Ty }
+
+`throws` is covariant, like the return: a function that throws less can stand where one
+that throws more is expected. `main` is `() throws Error -> ()` and its signature is fixed
+(`decisions.md`).
+
+### 9. Bidirectional: `expected` flows down
+
+Not a nicety — the system does not work without it.
+
+    let nested: Json = [[1.0], ["a"]]
+
+Bottom-up, the inner literals are `List[f64]` and `List[str]`. Only the *expected* type
+tells them they are `List[Json]`. Covariance makes that a subtype question rather than an
+equality one, but the expected type still has to reach the literal for there to be a
+question at all. The same mechanism decides which of `u8`/`i64` a bare `1` is, and is why
+`let x: u8 = 999` must be rejected at the literal.
+
+So every check is `check(expr, expected: Option<Ty>) -> Ty`, and `expected` threads through
+branches, arms, arguments and elements.
+
+### 10. Narrowing
+
+`match s { is Circle => ... }` refines `s` to `Circle` inside the arm; `if p != null` does
+the same for the else branch. Narrowing is a separate pass over patterns and conditions,
+and it is a *set* operation — the arm's binding is `s ∧ Circle`, the fallthrough is
+`s ∧ ¬Circle`. This is where the set-theoretic representation pays for itself, and where
+exhaustiveness falls out: the match is exhaustive iff `s ∧ ¬(⋁ arms)` is empty.
+
+### 11. Protocols and dispatch
+
+The subsystem `resolved_calls` comes from, and the largest thing this document does not yet
+specify.
+
+Resolving an unqualified `len(x)`: lexical lookup first (locals and module functions shadow
+protocols), then collect protocol candidates, filter by receiver and argument types, and
+demand exactly one survivor — 0 or 2+ is a diagnostic naming them. The checker records its
+choice; nothing downstream re-resolves. This is where the previous implementation's
+`method_to_protocol` map was last-write-wins, and the fix was to record the decision, which
+is the same shape as the `expr_types` keystone.
+
+Needs its own design pass before implementation.
+
+## Error recovery
+
+The parser recovers; so does the checker. A file with ten type errors should report ten,
+not one per compile cycle.
+
+`Descriptor::Error` is the poison. It is produced **only** where a diagnostic has already
+been emitted, it satisfies nothing and is satisfied by nothing, and **any check involving
+it emits no further diagnostic**. So one bad expression yields one error rather than
+twenty, and checking continues through the rest of the function and the rest of the file.
+
+It is not ⊤ and not ⊥. `never` would be actively worse: `never <: T` for every `T`, so
+every downstream check would vacuously succeed and the cascade would be silent instead of
+noisy.
+
+Poison never reaches lowering, because a failed check does not lower. A test asserts that
+no `Error` survives a successful check.
+
 ## Module layout
 
     typecheck/
@@ -164,6 +241,8 @@ route to ⊤ is a user writing `any`.
       subtype.rs   s <: t  ==  is_empty(s ∧ ¬t)   (thin)
       env.rs       records, aliases, protocols, impls; the mu side table
       resolve.rs   ast::TypeSpec -> Descriptor. Contractivity and covariance live here.
+      narrow.rs    pattern and condition refinement; exhaustiveness
+      dispatch.rs  protocol resolution (needs its own design pass)
       check/       the checker: walks the AST, computes a type for every expression
       result.rs    TypecheckResult
 
@@ -218,3 +297,8 @@ it is checked *against*, which is also what makes `[[1.0], ["a"]] : Json` work a
 - **The expansion of nominal-to-structural interacts with `opaque` and with contractivity**
   — the same nominal is a data constructor in its own module and an atom outside. Emptiness
   queries are therefore module-relative, which is unusual and easy to forget.
+- **Protocol dispatch is unspecified here** and is the biggest remaining hole. It is also
+  where the previous implementation's `resolved_calls` was last-write-wins.
+- **Covariance plus `expected` propagation may hide inference gaps.** Covariance makes many
+  checks succeed that invariance would have rejected, so a missing `expected` thread shows
+  up later and further away than it otherwise would.

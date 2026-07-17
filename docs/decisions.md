@@ -78,6 +78,27 @@ would discard the singleton precision that makes `:ok | :err` unions and exhaust
 work, which is the entire reason atoms are types. An annotation is required exactly where
 you intend to rebind, which is where one earns its keep.
 
+### Generic arguments are covariant
+
+    List[i64]  <:  List[i64 | str]
+
+Sound **because collections are values**. Covariance is only unsound for *mutable*
+containers — that is why Java's arrays are broken and why Rust needs variance
+annotations. An immutable `List[i64]` genuinely is a `List[i64 | str]`: there is no
+operation that could write a `str` into it and be observed through the first type.
+
+*Against invariance* (`List[i64]` and `List[i32]` unrelated, which a prior implementation
+required): it contradicts μ-types. The rule that a recursive reference must occur in a
+covariant position makes `mu type A = :ok | List[A]` illegal under invariance, because
+`A` then sits in a non-covariant position — rejecting the canonical example. Invariance
+also turns out to be a *lowering* constraint in disguise: `List_I64` and `List_Any` are
+different C structs, and that leaked upward into the type system. Codegen's
+representation problem is not the type system's.
+
+*Against per-parameter annotations* (`record Box[+T]`): the only option if a mutable
+container ever appears, and worth revisiting then. For now every collection is a value, so
+there is nothing to annotate.
+
 ### A nominal record satisfies a structural parameter
 
 `fn name_only(item: { name: str })` accepts `User { name: "Alice", age: 30 }`. This is what
