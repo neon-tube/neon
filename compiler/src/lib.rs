@@ -5,6 +5,7 @@ pub mod format;
 pub mod lexer;
 pub mod ops;
 pub mod parser;
+pub mod typecheck;
 
 /// Placeholder for the pipeline entry point.
 pub fn version() -> &'static str {
