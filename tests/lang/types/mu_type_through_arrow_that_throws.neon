@@ -1,0 +1,18 @@
+// Recursion through an arrow that throws. The `throws` is covariant exactly as
+// the return is, so it guards the recursion the same way: `(i64) throws :err -> F`
+// is contractive in `F`. decisions.md rule 2, and the sibling
+// mu_type_through_arrow_return test.
+//
+// The parameter remains the one position that guards nothing — see
+// mu_type_in_arrow_parameter.
+
+use std::io;
+
+mu type F = null | (i64) throws :err -> F
+
+fn is_done(f: F) -> bool { f is null }
+
+fn main() {
+    let done: F = null;
+    io::println(if is_done(done) { "done" } else { "more" });
+}

@@ -758,10 +758,16 @@ impl<'a> Fmt<'a> {
                 self.push("!");
                 self.ty(inner, TP_NEGATE);
             }
-            TypeSpecKind::Fn { params, ret } => {
+            TypeSpecKind::Fn { params, throws, ret } => {
                 self.push("(");
                 self.ty_run(params, ", ", TP_ANY);
-                self.push(") -> ");
+                self.push(")");
+                if let Some(t) = throws {
+                    self.push(" throws ");
+                    // A bare arrow here would rebind to this clause's own `->`.
+                    self.ty(t, TP_UNION);
+                }
+                self.push(" -> ");
                 self.ty(ret, TP_ANY);
             }
             TypeSpecKind::Tuple(v) => {

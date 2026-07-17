@@ -281,12 +281,19 @@ impl Solver {
     ///
     /// Frisch, Castagna, Benzaken, *Semantic subtyping*, JACM 2008, §4.
     /// Exponential in |P| — the count of positive arrows in one intersection.
+    ///
+    /// The codomain is a *sum*: a call returns or it throws. So it decomposes into
+    /// two independent components, each carrying its own intersection — never a
+    /// tuple of the two. A tuple is empty as soon as one side is, and `never` is a
+    /// subtype of everything, so every non-throwing function would pass the
+    /// codomain check regardless of its return.
     fn arrow_le(&mut self, pos: &[u32], s: &ArrowAtom) -> bool {
         let s_dom = self.t.tuple(s.params.clone());
         let n = pos.len();
         for mask in 0..(1u32 << n) {
             let mut dom_union = self.t.never();
             let mut ret_inter = self.t.any();
+            let mut throws_inter = self.t.any();
             for (k, &i) in pos.iter().enumerate() {
                 let a = self.t.arrow_atoms[i as usize].clone();
                 if mask >> k & 1 == 1 {
@@ -294,12 +301,13 @@ impl Solver {
                     dom_union = self.t.union(dom_union, d);
                 } else {
                     ret_inter = self.t.intersect(ret_inter, a.ret);
+                    throws_inter = self.t.intersect(throws_inter, a.throws);
                 }
             }
             if self.is_subtype(s_dom, dom_union) {
                 continue;
             }
-            if self.is_subtype(ret_inter, s.ret) {
+            if self.is_subtype(ret_inter, s.ret) && self.is_subtype(throws_inter, s.throws) {
                 continue;
             }
             return false;

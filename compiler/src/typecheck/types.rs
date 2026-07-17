@@ -100,6 +100,9 @@ pub struct TupleAtom {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct ArrowAtom {
     pub params: Vec<TyId>,
+    /// What the function may throw. A function that throws nothing has `never`
+    /// here, so an absent `throws` clause must resolve to `never` and never `any`.
+    pub throws: TyId,
     pub ret: TyId,
 }
 
@@ -495,8 +498,8 @@ impl Types {
         })
     }
 
-    pub fn arrow(&mut self, params: Vec<TyId>, ret: TyId) -> TyId {
-        let id = self.arrow_atom(ArrowAtom { params, ret });
+    pub fn arrow(&mut self, params: Vec<TyId>, throws: TyId, ret: TyId) -> TyId {
+        let id = self.arrow_atom(ArrowAtom { params, throws, ret });
         let b = self.arrow_bdd.atom(id);
         let atoms = self.atomset(AtomSet::empty());
         let vars = self.atomset(AtomSet::empty());

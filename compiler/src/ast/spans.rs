@@ -103,9 +103,12 @@ fn ty(t: &mut TypeSpec) {
             }
         }
         TypeSpecKind::Negate(t) => ty(t),
-        TypeSpecKind::Fn { params, ret } => {
+        TypeSpecKind::Fn { params, throws, ret } => {
             for p in params {
                 ty(p);
+            }
+            if let Some(t) = throws {
+                ty(t);
             }
             ty(ret);
         }

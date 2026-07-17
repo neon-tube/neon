@@ -116,9 +116,8 @@ pub struct FnSig {
     pub generics: Vec<String>,
     pub params: Vec<(String, TyId)>,
     pub ret: TyId,
-    /// `throws E`, written before `->`. Held apart from `ty` because `ArrowAtom`
-    /// has no `throws` field.
-    pub throws: Option<TyId>,
+    /// `throws E`, written before `->`. No clause is `never`.
+    pub throws: TyId,
     /// `where T: Display` — the protocol path, not a type.
     pub wheres: Vec<(String, Vec<String>)>,
     /// The signature as an arrow, for a value-position use of the name.
@@ -467,11 +466,14 @@ impl Env {
             // No return type is `()`, and `()` is the empty tuple.
             None => self.solver.t.tuple(vec![]),
         };
-        let throws = f.throws.as_ref().map(|t| self.resolve(&scope, t));
+        let throws = match &f.throws {
+            Some(t) => self.resolve(&scope, t),
+            None => self.solver.t.never(),
+        };
         let wheres = f.wheres.iter().filter_map(|w| bound_path(w).map(|p| (w.param.clone(), p))).collect();
         let ty = {
             let ps = params.iter().map(|p| p.1).collect();
-            self.solver.t.arrow(ps, ret)
+            self.solver.t.arrow(ps, throws, ret)
         };
         FnSig {
             name: f.name.clone(),
@@ -806,7 +808,7 @@ impl Contract<'_> {
                     self.walk(&f.ty, ctx, under);
                 }
             }
-            ast::TypeSpecKind::Fn { params, ret } => {
+            ast::TypeSpecKind::Fn { params, throws, ret } => {
                 // decisions.md rule 2: a parameter is contravariant and excluded, a
                 // return is covariant and allowed. The arrow guards the return like
                 // any other constructor — `ArrowAtom` holds it as a raw `TyId`, which
@@ -815,6 +817,10 @@ impl Contract<'_> {
                 let param = Pos { contra: true, ..under };
                 for p in params {
                     self.walk(p, ctx, param);
+                }
+                // `throws` is covariant like the return, so it guards too.
+                if let Some(t) = throws {
+                    self.walk(t, ctx, under);
                 }
                 self.walk(ret, ctx, under);
             }

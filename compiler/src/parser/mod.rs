@@ -503,16 +503,29 @@ where
             .delimited_by(just(Token::LBrace), just(Token::RBrace))
             .map(TypeSpecKind::Struct);
 
-        // `(A, B) -> C` and `(A, B)`; `(A)` is just a grouping.
+        // `throws E` binds to the `->` that follows it, so a `throws` with no arrow
+        // is an error rather than a tuple that silently ate its clause.
+        let codomain = just(Token::Throws)
+            .ignore_then(ty.clone())
+            .or_not()
+            .then_ignore(just(Token::Arrow))
+            .then(ty.clone())
+            .or_not();
+
+        // `(A, B) throws E -> C`, `(A, B) -> C` and `(A, B)`; `(A)` is just a grouping.
         let parenthesised = ty
             .clone()
             .separated_by(just(Token::Comma))
             .allow_trailing()
             .collect::<Vec<_>>()
             .delimited_by(just(Token::LParen), just(Token::RParen))
-            .then(just(Token::Arrow).ignore_then(ty.clone()).or_not())
-            .map(|(items, ret)| match ret {
-                Some(ret) => TypeSpecKind::Fn { params: items, ret: Box::new(ret) },
+            .then(codomain)
+            .map(|(items, codomain)| match codomain {
+                Some((throws, ret)) => TypeSpecKind::Fn {
+                    params: items,
+                    throws: throws.map(Box::new),
+                    ret: Box::new(ret),
+                },
                 None if items.len() == 1 => items.into_iter().next().expect("len 1").kind,
                 None => TypeSpecKind::Tuple(items),
             });

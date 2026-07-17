@@ -337,6 +337,22 @@ fn a_function_signature_puts_throws_before_the_arrow() {
 }
 
 #[test]
+fn an_arrow_type_puts_throws_before_the_arrow() {
+    pin(
+        "type H=(i64)throws :error->i64\ntype P = (i64) -> i64\n",
+        "type H = (i64) throws :error -> i64\ntype P = (i64) -> i64\n",
+    );
+}
+
+#[test]
+fn an_arrow_type_may_throw_a_union() {
+    pin(
+        "type H = (i64) throws :a|:b -> i64\n",
+        "type H = (i64) throws :a | :b -> i64\n",
+    );
+}
+
+#[test]
 fn type_aliases_take_no_semicolon() {
     pin(
         "type Color=Red|Green\nmu type A=:ok|List[A]\nnewtype Meters=i64\n",

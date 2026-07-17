@@ -79,14 +79,19 @@ pub fn resolve(env: &mut Env, scope: &Scope, spec: &TypeSpec) -> TyId {
             let ts = resolve_all(env, scope, xs);
             or_poison(env, &ts, |e| e.solver.t.tuple(ts.clone()))
         }
-        TypeSpecKind::Fn { params, ret } => {
-            let mut ts = resolve_all(env, scope, params);
+        TypeSpecKind::Fn { params, throws, ret } => {
+            let ps = resolve_all(env, scope, params);
+            // No `throws` clause is `never` — a function that throws nothing. `any`
+            // would make every arrow a supertype of every other.
+            let thr = match throws {
+                Some(t) => resolve(env, scope, t),
+                None => env.solver.t.never(),
+            };
             let r = resolve(env, scope, ret);
+            let mut ts = ps.clone();
+            ts.push(thr);
             ts.push(r);
-            or_poison(env, &ts, |e| {
-                let ps = ts[..ts.len() - 1].to_vec();
-                e.solver.t.arrow(ps, r)
-            })
+            or_poison(env, &ts, |e| e.solver.t.arrow(ps, thr, r))
         }
         TypeSpecKind::Struct(fields) => {
             let mut ts = Vec::with_capacity(fields.len());

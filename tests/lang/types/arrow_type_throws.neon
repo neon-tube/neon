@@ -1,0 +1,22 @@
+// An arrow type carries its error channel: `throws` sits between the parameter
+// list and `->`, the same order a `fn` declaration uses. typechecker.md §8.
+//
+// `throws` is covariant, like the return: a function that throws LESS is usable
+// where one that throws MORE is expected. An absent clause is `never` — a
+// function that throws nothing — so `Pure` is a subtype of `Risky`, and not the
+// reverse. `never` is the only sound default here: `any` would read as "may throw
+// anything", making every arrow a supertype of every other.
+
+use std::io;
+
+record IoError {}
+
+type Risky = (i64) throws IoError -> i64
+type Pure = (i64) -> i64
+
+// A thrown type is a type, so it unions like one.
+type Fussy = (i64) throws IoError | :timeout -> i64
+
+fn main() {
+    io::println("ok");
+}

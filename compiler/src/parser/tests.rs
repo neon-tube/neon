@@ -55,6 +55,51 @@ fn the_vertical_slice() {
 }
 
 #[test]
+fn an_arrow_type_carries_a_throws() {
+    let m = ok("type H = (i64) throws :error -> i64");
+    match &m.decls[0].kind {
+        DeclKind::TypeAlias(a) => match &a.value.kind {
+            TypeSpecKind::Fn { params, throws, ret } => {
+                assert_eq!(params.len(), 1);
+                assert_eq!(throws.as_ref().expect("throws").kind, TypeSpecKind::Atom("error".into()));
+                assert!(matches!(ret.kind, TypeSpecKind::Named { .. }));
+            }
+            other => panic!("expected a fn type, got {other:?}"),
+        },
+        other => panic!("expected a type alias, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_arrow_type_without_a_throws_has_none() {
+    let m = ok("type H = (i64) -> i64");
+    match &m.decls[0].kind {
+        DeclKind::TypeAlias(a) => match &a.value.kind {
+            TypeSpecKind::Fn { throws, .. } => assert!(throws.is_none()),
+            other => panic!("expected a fn type, got {other:?}"),
+        },
+        other => panic!("expected a type alias, got {other:?}"),
+    }
+}
+
+/// `throws` binds to the `->` that follows it. Without one there is no arrow to
+/// attach to, and the clause must not be silently swallowed by a tuple.
+#[test]
+fn a_throws_with_no_arrow_is_rejected() {
+    errs("type H = (i64) throws :error");
+}
+
+/// A thrown type is read by the full type parser, which claims a trailing `->`
+/// for itself — so a parenthesised one eats the arrow it was meant to precede
+/// and leaves the outer type without one. Harmless in practice: a thrown type is
+/// an error record, never an arrow or a tuple. `fn` declarations inherit the same
+/// ambiguity, and there it misparses silently rather than erroring.
+#[test]
+fn a_parenthesised_throws_cannot_be_written_in_an_arrow_type() {
+    errs("type H = (i64) throws (str) -> i64");
+}
+
+#[test]
 fn throws_comes_before_the_return_type() {
     let m = ok("fn get[T](xs: List[T], i: i64) throws IndexError -> T { xs }");
     match &m.decls[0].kind {

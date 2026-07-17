@@ -1,0 +1,12 @@
+//@ compile-fail
+//@ error-contains: contravariant
+//
+// A `throws` clause is covariant and guards, but it does not rescue a parameter:
+// the parameter position is still contravariant, so the recursion has no fixed
+// point. The sibling mu_type_through_arrow_that_throws test is the legal shape.
+
+mu type F = null | (F) throws :err -> i64
+
+fn f(v: F) -> i64 { 0 }
+
+fn main() {}

@@ -578,15 +578,22 @@ fn an_impl_of_an_unknown_protocol_is_rejected() {
 }
 
 #[test]
-fn a_fn_signature_carries_its_throws_and_bounds_apart_from_its_arrow() {
-    let e = env(
+fn a_fn_signature_carries_its_throws_in_its_arrow_and_its_bounds_apart() {
+    let mut e = env(
         "record IoError { }\n\
          protocol Display for T { fn show(t: T) -> str }\n\
          fn dump[T](x: T) throws IoError -> str where T: Display { \"\" }",
     );
     assert_clean(&e);
-    let sig = e.fns().iter().find(|f| f.name == "dump").expect("declared");
-    assert!(sig.throws.is_some(), "`throws` is not part of the arrow");
+    let sig = e.fns().iter().find(|f| f.name == "dump").expect("declared").clone();
+
+    let nothrow = e.solver.t.never();
+    assert_ne!(sig.throws, nothrow, "`throws IoError` was resolved");
+    let ps = sig.params.iter().map(|p| p.1).collect();
+    let erased = e.solver.t.arrow(ps, nothrow, sig.ret);
+    assert_ne!(sig.ty, erased, "`throws` is part of the arrow");
+
+    // A bound is a protocol path, not a type: it has nowhere to live in the arrow.
     assert_eq!(sig.wheres, vec![("T".to_string(), vec!["Display".to_string()])]);
     assert!(sig.has_body);
 }

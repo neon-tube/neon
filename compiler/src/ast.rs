@@ -179,8 +179,8 @@ pub enum TypeSpecKind {
     Intersect(Vec<TypeSpec>),
     /// `!A`
     Negate(Box<TypeSpec>),
-    /// `(A, B) -> C`
-    Fn { params: Vec<TypeSpec>, ret: Box<TypeSpec> },
+    /// `(A, B) throws E -> C`. An absent `throws` is `never`.
+    Fn { params: Vec<TypeSpec>, throws: Option<Box<TypeSpec>>, ret: Box<TypeSpec> },
     /// `(A, B)`
     Tuple(Vec<TypeSpec>),
     Error,

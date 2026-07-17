@@ -362,9 +362,10 @@ fn arrows_are_contravariant_in_parameters() {
     let i = s.t.i64();
     let st = s.t.str();
     let u = s.t.union(i, st);
+    let nothrow = s.t.never();
 
-    let accepts_more = s.t.arrow(vec![u], i);
-    let accepts_less = s.t.arrow(vec![i], i);
+    let accepts_more = s.t.arrow(vec![u], nothrow, i);
+    let accepts_less = s.t.arrow(vec![i], nothrow, i);
 
     assert!(
         s.is_subtype(accepts_more, accepts_less),
@@ -379,9 +380,10 @@ fn arrows_are_covariant_in_return() {
     let i = s.t.i64();
     let st = s.t.str();
     let u = s.t.union(i, st);
+    let nothrow = s.t.never();
 
-    let narrow_ret = s.t.arrow(vec![i], i);
-    let wide_ret = s.t.arrow(vec![i], u);
+    let narrow_ret = s.t.arrow(vec![i], nothrow, i);
+    let wide_ret = s.t.arrow(vec![i], nothrow, u);
     assert!(s.is_subtype(narrow_ret, wide_ret));
     assert!(!s.is_subtype(wide_ret, narrow_ret));
 }
@@ -389,9 +391,10 @@ fn arrows_are_covariant_in_return() {
 #[test]
 fn arrow_arity_separates() {
     let mut s = s();
+    let nothrow = s.t.never();
     let i = s.t.i64();
-    let a1 = s.t.arrow(vec![i], i);
-    let a2 = s.t.arrow(vec![i, i], i);
+    let a1 = s.t.arrow(vec![i], nothrow, i);
+    let a2 = s.t.arrow(vec![i, i], nothrow, i);
     let meet = s.t.intersect(a1, a2);
     assert!(s.is_empty(meet));
 }
@@ -399,8 +402,9 @@ fn arrow_arity_separates() {
 #[test]
 fn arrow_is_disjoint_from_other_kinds() {
     let mut s = s();
+    let nothrow = s.t.never();
     let i = s.t.i64();
-    let a = s.t.arrow(vec![i], i);
+    let a = s.t.arrow(vec![i], nothrow, i);
     let meet = s.t.intersect(a, i);
     assert!(s.is_empty(meet));
 }
@@ -410,23 +414,126 @@ fn arrow_intersection_is_overloading() {
     let mut s = s();
     let i = s.t.i64();
     let st = s.t.str();
+    let nothrow = s.t.never();
 
     // (i64 -> i64) & (str -> str) is the overloaded function.
     let f = {
-        let a = s.t.arrow(vec![i], i);
-        let b = s.t.arrow(vec![st], st);
+        let a = s.t.arrow(vec![i], nothrow, i);
+        let b = s.t.arrow(vec![st], nothrow, st);
         s.t.intersect(a, b)
     };
     assert!(!s.is_empty(f));
 
-    let ii = s.t.arrow(vec![i], i);
+    let ii = s.t.arrow(vec![i], nothrow, i);
     assert!(s.is_subtype(f, ii), "the overload can be used at i64 -> i64");
 
     let u = s.t.union(i, st);
-    let uu = s.t.arrow(vec![u], u);
+    let uu = s.t.arrow(vec![u], nothrow, u);
     assert!(
         s.is_subtype(f, uu),
         "and at (i64|str) -> (i64|str), which is the point of the FCB rule"
+    );
+}
+
+// ---- arrows that throw ----
+
+fn err_atom(s: &mut Solver, name: &str) -> TyId {
+    let n = s.t.name(name);
+    s.t.atom(n)
+}
+
+#[test]
+fn arrows_are_covariant_in_throws() {
+    let mut s = s();
+    let i = s.t.i64();
+    let e = err_atom(&mut s, "err");
+    let e2 = err_atom(&mut s, "other");
+    let both = s.t.union(e, e2);
+
+    let throws_less = s.t.arrow(vec![i], e, i);
+    let throws_more = s.t.arrow(vec![i], both, i);
+    assert!(
+        s.is_subtype(throws_less, throws_more),
+        "throwing less is usable where more is expected"
+    );
+    assert!(!s.is_subtype(throws_more, throws_less));
+}
+
+#[test]
+fn an_absent_throws_is_never_and_sits_below_every_throws() {
+    let mut s = s();
+    let i = s.t.i64();
+    let nothrow = s.t.never();
+    let e = err_atom(&mut s, "err");
+
+    let pure = s.t.arrow(vec![i], nothrow, i);
+    let throwing = s.t.arrow(vec![i], e, i);
+    assert!(
+        s.is_subtype(pure, throwing),
+        "(i64) throws never -> i64  <:  (i64) throws :err -> i64"
+    );
+    assert!(
+        !s.is_subtype(throwing, pure),
+        "a throwing function cannot stand where a pure one is expected"
+    );
+}
+
+/// `never` throws is the common case, so a codomain rule that collapses on it
+/// would make every same-arity arrow a subtype of every other. Modelling the
+/// codomain as `tuple([ret, throws])` does exactly that: the tuple is empty
+/// whenever `throws` is `never`, and `never` is below everything, so the return
+/// is never compared. The codomain is a sum, not a product.
+#[test]
+fn a_never_throws_does_not_mask_a_mismatched_return() {
+    let mut s = s();
+    let i = s.t.i64();
+    let st = s.t.str();
+    let nothrow = s.t.never();
+
+    let to_i = s.t.arrow(vec![i], nothrow, i);
+    let to_str = s.t.arrow(vec![i], nothrow, st);
+    assert!(!s.is_subtype(to_i, to_str), "(i64) -> i64 is not (i64) -> str");
+    assert!(!s.is_subtype(to_str, to_i));
+}
+
+#[test]
+fn throws_separates_two_otherwise_identical_arrows() {
+    let mut s = s();
+    let i = s.t.i64();
+    let nothrow = s.t.never();
+    let e = err_atom(&mut s, "err");
+
+    let pure = s.t.arrow(vec![i], nothrow, i);
+    let throwing = s.t.arrow(vec![i], e, i);
+    assert!(!s.is_equiv(pure, throwing), "`throws` is part of the arrow's identity");
+}
+
+#[test]
+fn an_overload_may_throw_on_one_branch_only() {
+    let mut s = s();
+    let i = s.t.i64();
+    let st = s.t.str();
+    let nothrow = s.t.never();
+    let e = err_atom(&mut s, "err");
+
+    // (i64 -> i64, pure) & (str throws :err -> str)
+    let pure = s.t.arrow(vec![i], nothrow, i);
+    let throwing = s.t.arrow(vec![st], e, st);
+    let f = s.t.intersect(pure, throwing);
+    assert!(!s.is_empty(f), "differing throws do not make the overload empty");
+
+    assert!(s.is_subtype(f, pure), "used at i64 it throws nothing");
+    assert!(s.is_subtype(f, throwing));
+
+    // At the merged domain either branch may run, so the merged arrow must admit
+    // the throw — and must not claim purity.
+    let u = s.t.union(i, st);
+    let uu_throwing = s.t.arrow(vec![u], e, u);
+    assert!(s.is_subtype(f, uu_throwing));
+    let uu_pure = s.t.arrow(vec![u], nothrow, u);
+    assert!(
+        !s.is_subtype(f, uu_pure),
+        "the str branch throws, so the overload is not pure at (i64|str)"
     );
 }
 
@@ -622,9 +729,10 @@ fn reserve_under_union_keeps_the_recursion() {
 
 /// `mu F = null | (i64) -> F`
 fn mu_arrow(s: &mut Solver) -> TyId {
+    let nothrow = s.t.never();
     let f = s.t.reserve();
     let i = s.t.i64();
-    let arrow = s.t.arrow(vec![i], f);
+    let arrow = s.t.arrow(vec![i], nothrow, f);
     let null = s.t.null();
     let body = s.t.union(null, arrow);
     let d = s.t.data(body);
@@ -643,29 +751,99 @@ fn recursion_through_an_arrow_return_is_inhabited() {
 #[test]
 fn a_one_deep_function_is_a_member() {
     let mut s = s();
+    let nothrow = s.t.never();
     let f = mu_arrow(&mut s);
     let i = s.t.i64();
     let null = s.t.null();
-    let one = s.t.arrow(vec![i], null);
+    let one = s.t.arrow(vec![i], nothrow, null);
     assert!(s.is_subtype(one, f), "`(i64) -> null` is an F");
 }
 
 #[test]
 fn a_function_returning_the_wrong_thing_is_not_a_member() {
     let mut s = s();
+    let nothrow = s.t.never();
     let f = mu_arrow(&mut s);
     let i = s.t.i64();
-    let bad = s.t.arrow(vec![i], i);
+    let bad = s.t.arrow(vec![i], nothrow, i);
     assert!(!s.is_subtype(bad, f), "`(i64) -> i64` is not an F");
 }
 
 #[test]
 fn a_recursive_arrow_is_equi_recursive() {
     let mut s = s();
+    let nothrow = s.t.never();
     let f = mu_arrow(&mut s);
     let i = s.t.i64();
     let null = s.t.null();
-    let arrow = s.t.arrow(vec![i], f);
+    let arrow = s.t.arrow(vec![i], nothrow, f);
+    let unfolded = s.t.union(null, arrow);
+    assert!(s.is_equiv(f, unfolded));
+}
+
+/// `mu F = null | (i64) throws :err -> F`
+fn mu_throwing_arrow(s: &mut Solver) -> TyId {
+    let f = s.t.reserve();
+    let i = s.t.i64();
+    let e = err_atom(s, "err");
+    let arrow = s.t.arrow(vec![i], e, f);
+    let null = s.t.null();
+    let body = s.t.union(null, arrow);
+    let d = s.t.data(body);
+    s.t.define(f, d);
+    f
+}
+
+#[test]
+fn recursion_through_a_throwing_arrow_is_inhabited() {
+    let mut s = s();
+    let f = mu_throwing_arrow(&mut s);
+    assert!(!s.is_empty(f), "`null` is the base case");
+    assert!(s.is_subtype(f, f));
+}
+
+#[test]
+fn a_one_deep_throwing_function_is_a_member() {
+    let mut s = s();
+    let f = mu_throwing_arrow(&mut s);
+    let i = s.t.i64();
+    let null = s.t.null();
+    let e = err_atom(&mut s, "err");
+    let one = s.t.arrow(vec![i], e, null);
+    assert!(s.is_subtype(one, f), "`(i64) throws :err -> null` is an F");
+}
+
+/// The throws is covariant, so a member may throw *less* than the declaration.
+#[test]
+fn a_pure_function_is_a_member_of_a_throwing_mu() {
+    let mut s = s();
+    let f = mu_throwing_arrow(&mut s);
+    let i = s.t.i64();
+    let null = s.t.null();
+    let nothrow = s.t.never();
+    let pure = s.t.arrow(vec![i], nothrow, null);
+    assert!(s.is_subtype(pure, f), "`(i64) -> null` throws less than `:err`");
+}
+
+#[test]
+fn a_function_throwing_the_wrong_thing_is_not_a_member() {
+    let mut s = s();
+    let f = mu_throwing_arrow(&mut s);
+    let i = s.t.i64();
+    let null = s.t.null();
+    let other = err_atom(&mut s, "other");
+    let bad = s.t.arrow(vec![i], other, null);
+    assert!(!s.is_subtype(bad, f), "`throws :other` is not an F");
+}
+
+#[test]
+fn a_recursive_throwing_arrow_is_equi_recursive() {
+    let mut s = s();
+    let f = mu_throwing_arrow(&mut s);
+    let i = s.t.i64();
+    let null = s.t.null();
+    let e = err_atom(&mut s, "err");
+    let arrow = s.t.arrow(vec![i], e, f);
     let unfolded = s.t.union(null, arrow);
     assert!(s.is_equiv(f, unfolded));
 }
@@ -673,12 +851,13 @@ fn a_recursive_arrow_is_equi_recursive() {
 #[test]
 fn a_recursive_arrow_with_no_base_case_is_empty() {
     let mut s = s();
+    let nothrow = s.t.never();
     // `mu G = (i64) -> G`. Unlike the record case this IS inhabited: a function is a
     // value whether or not calling it ever terminates, so the arrow does not need a
     // base case the way a record's field does.
     let g = s.t.reserve();
     let i = s.t.i64();
-    let arrow = s.t.arrow(vec![i], g);
+    let arrow = s.t.arrow(vec![i], nothrow, g);
     let d = s.t.data(arrow);
     s.t.define(g, d);
     assert!(!s.is_empty(g));
