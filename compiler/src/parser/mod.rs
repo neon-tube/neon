@@ -8,13 +8,13 @@ pub use error::{Expected, ParseError, ParseErrorKind, Span};
 use crate::ast::*;
 use crate::lexer::{Spanned, Token};
 use chumsky::input::{Input, ValueInput};
+use chumsky::pratt::{infix, left};
 use chumsky::prelude::*;
 
 type Extra = extra::Err<ParseError>;
 
-/// Adapts the lexer's output to chumsky. `.boxed()` is used liberally below to
-/// keep the type of each sub-parser opaque: without it the combinator types
-/// nest into one another and compile time grows superlinearly.
+/// `.boxed()` is used liberally below. Without it each combinator's type nests
+/// into the next and compile time grows superlinearly.
 pub fn parse(tokens: &[Spanned], eoi: usize) -> (Option<Module>, Vec<ParseError>) {
     let owned: Vec<(Token, Span)> = tokens
         .iter()
@@ -27,7 +27,37 @@ pub fn parse(tokens: &[Spanned], eoi: usize) -> (Option<Module>, Vec<ParseError>
     parser.parse(input).into_output_errors()
 }
 
-fn module<'t, I>() -> impl Parser<'t, I, Module, Extra> + Clone
+trait P<'t, I, O>: Parser<'t, I, O, Extra> + Clone
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+}
+impl<'t, I, O, T> P<'t, I, O> for T
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+    T: Parser<'t, I, O, Extra> + Clone,
+{
+}
+
+/// Where recovery stops skipping: a new declaration, or the `}` that ends the
+/// enclosing module.
+const DECL_STOP: [Token; 13] = [
+    Token::Fn,
+    Token::Test,
+    Token::Bench,
+    Token::Record,
+    Token::Opaque,
+    Token::Type,
+    Token::Mu,
+    Token::Newtype,
+    Token::Protocol,
+    Token::Impl,
+    Token::Use,
+    Token::Const,
+    Token::RBrace,
+];
+
+fn module<'t, I>() -> impl P<'t, I, Module>
 where
     I: ValueInput<'t, Token = Token, Span = Span>,
 {
@@ -39,12 +69,125 @@ where
         .boxed()
 }
 
-fn decl<'t, I>() -> impl Parser<'t, I, Decl, Extra> + Clone
+// ---- declarations ----
+
+fn decl<'t, I>() -> impl P<'t, I, Decl>
 where
     I: ValueInput<'t, Token = Token, Span = Span>,
 {
-    let fn_decl = just(Token::Fn)
+    recursive(|decl| {
+        let inner = choice((
+            fn_decl().map(DeclKind::Fn),
+            record_decl().map(DeclKind::Record),
+            protocol_decl().map(DeclKind::Protocol),
+            impl_decl().map(DeclKind::Impl),
+            mu_type_decl(),
+            type_alias_decl(),
+            newtype_decl(),
+            use_decl(),
+            mod_decl(decl),
+            const_decl(),
+            test_decl(),
+            enum_decl(),
+        ))
+        .map_with(|kind, e| Decl { kind, span: e.span() })
+        .boxed();
+
+        // On a bad declaration, swallow it and resume at the next one. One
+        // broken decl must not discard the rest of the file.
+        //
+        // The leading any() is load-bearing. Recovery restarts from where the
+        // declaration *began* — itself a decl-start token — so a strategy that
+        // skips "until a decl start" matches immediately, retries at the same
+        // token, fails identically, and gets abandoned.
+        // Skipping a bad declaration has to respect braces two ways.
+        //
+        // A lone `}` must stop recovery: inside `mod m { .. }` it is what ends
+        // the repetition, and eating it leaves the module unterminated. Hence
+        // `none_of([RBrace])` on the first token and RBrace in DECL_STOP.
+        //
+        // But a *balanced* `{ .. }` is part of the declaration being discarded —
+        // `fn broken( {}` has a body — so it is skipped as a unit. Without that,
+        // recovery halts on the body's own `}` and everything after it is lost.
+        let recovery = none_of([Token::RBrace])
+            .then(
+                choice((nested_braces(), none_of(DECL_STOP).ignored()))
+                    .repeated(),
+            )
+            .map_with(|_, e| Decl { kind: DeclKind::Error, span: e.span() })
+            .boxed();
+
+        inner.recover_with(via_parser(recovery)).boxed()
+    })
+}
+
+fn annotations<'t, I>() -> impl P<'t, I, Vec<Annotation>>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    just(Token::At)
         .ignore_then(ident())
+        .then(
+            plain_str()
+                .delimited_by(just(Token::LParen), just(Token::RParen))
+                .or_not(),
+        )
+        .map_with(|(name, arg), e| Annotation { name, arg, span: e.span() })
+        .repeated()
+        .collect()
+        .boxed()
+}
+
+/// `[T, U]` on a declaration.
+fn generic_params<'t, I>() -> impl P<'t, I, Vec<String>>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    ident()
+        .separated_by(just(Token::Comma))
+        .allow_trailing()
+        .collect()
+        .delimited_by(just(Token::LBracket), just(Token::RBracket))
+        .or_not()
+        .map(Option::unwrap_or_default)
+        .boxed()
+}
+
+fn where_clauses<'t, I>() -> impl P<'t, I, Vec<WhereClause>>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    just(Token::Where)
+        .ignore_then(
+            ident()
+                .then_ignore(just(Token::Colon))
+                .then(type_spec())
+                .map(|(param, bound)| WhereClause { param, bound })
+                .separated_by(just(Token::Comma))
+                .at_least(1)
+                .collect(),
+        )
+        .or_not()
+        .map(Option::unwrap_or_default)
+        .boxed()
+}
+
+/// A function. `body_required` is false for a protocol's method signatures.
+fn fn_like<'t, I>(body_required: bool) -> impl P<'t, I, FnDecl>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    let body = if body_required {
+        block().map(Some).boxed()
+    } else {
+        // A protocol method may end at the signature, or supply a default body.
+        block().or_not().boxed()
+    };
+
+    annotations()
+        .then_ignore(just(Token::Fn))
+        .then(ident())
+        .then(generic_params())
         .then(
             param()
                 .separated_by(just(Token::Comma))
@@ -52,71 +195,34 @@ where
                 .collect::<Vec<_>>()
                 .delimited_by(just(Token::LParen), just(Token::RParen)),
         )
-        // `throws E` comes before `->`, matching the signature order.
+        // `throws E` is written before `->`.
         .then(just(Token::Throws).ignore_then(type_spec()).or_not())
         .then(just(Token::Arrow).ignore_then(type_spec()).or_not())
-        .then(block())
-        .map(|((((name, params), throws), ret), body)| {
-            DeclKind::Fn(FnDecl { name, params, throws, ret, body })
-        })
-        .boxed();
-
-    let test_block = choice((
-        just(Token::Test).to(TestKind::Test),
-        just(Token::Bench).to(TestKind::Bench),
-    ))
-    .then(plain_str())
-    .then(block())
-    .map(|((kind, name), body)| DeclKind::TestBlock(TestBlock { kind, name, body }))
-    .boxed();
-
-    // `enum` lexes as an ordinary identifier, so catch it here and say what to
-    // do instead. Without this the user gets a cascade about an unexpected
-    // identifier, which explains nothing.
-    let enum_decl = ident_named("enum")
-        .then(ident())
-        .then(nested_braces())
-        .validate(|_, e, emitter| {
-            emitter.emit(ParseError::new(e.span(), ParseErrorKind::EnumDeclaration));
-            DeclKind::Error
-        })
-        .boxed();
-
-    // On a bad declaration, swallow it and resume at the next one. One broken
-    // decl must not discard the rest of the file: reporting every error in a
-    // pass is the point.
-    //
-    // The leading `any()` is load-bearing. Recovery restarts from where the
-    // declaration *began* — which is itself a decl-start token — so a strategy
-    // that skips "until a decl start" would match immediately, retry at the same
-    // token, fail identically, and get abandoned. Consuming one token first
-    // guarantees progress.
-    let recovery = any()
-        .then(none_of(DECL_START).repeated())
-        .map_with(|_, e| Decl { kind: DeclKind::Error, span: e.span() })
-        .boxed();
-
-    choice((fn_decl, test_block, enum_decl))
-        .map_with(|kind, e| Decl { kind, span: e.span() })
-        .recover_with(via_parser(recovery))
+        .then(where_clauses())
+        .then(body)
+        .map(
+            |(((((((annotations, name), generics), params), throws), ret), wheres), body)| FnDecl {
+                name,
+                generics,
+                params,
+                throws,
+                ret,
+                wheres,
+                body,
+                annotations,
+            },
+        )
         .boxed()
 }
 
-/// Tokens that can begin a declaration; recovery resumes at one of these.
-const DECL_START: [Token; 10] = [
-    Token::Fn,
-    Token::Test,
-    Token::Bench,
-    Token::Record,
-    Token::Type,
-    Token::Mu,
-    Token::Newtype,
-    Token::Protocol,
-    Token::Impl,
-    Token::Use,
-];
+fn fn_decl<'t, I>() -> impl P<'t, I, FnDecl>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    fn_like(true)
+}
 
-fn param<'t, I>() -> impl Parser<'t, I, Param, Extra> + Clone
+fn param<'t, I>() -> impl P<'t, I, Param>
 where
     I: ValueInput<'t, Token = Token, Span = Span>,
 {
@@ -127,15 +233,229 @@ where
         .boxed()
 }
 
-fn type_spec<'t, I>() -> impl Parser<'t, I, TypeSpec, Extra> + Clone
+fn field<'t, I>() -> impl P<'t, I, Field>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    ident()
+        .then_ignore(just(Token::Colon))
+        .then(type_spec())
+        .map_with(|(name, ty), e| Field { name, ty, span: e.span() })
+        .boxed()
+}
+
+fn record_decl<'t, I>() -> impl P<'t, I, RecordDecl>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    annotations()
+        .then(just(Token::Opaque).or_not().map(|o| o.is_some()))
+        .then_ignore(just(Token::Record))
+        .then(ident())
+        .then(generic_params())
+        .then(
+            field()
+                .separated_by(just(Token::Comma))
+                .allow_trailing()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+        )
+        .map(|((((annotations, opaque), name), generics), fields)| RecordDecl {
+            name,
+            generics,
+            opaque,
+            fields,
+            annotations,
+        })
+        .boxed()
+}
+
+fn protocol_decl<'t, I>() -> impl P<'t, I, ProtocolDecl>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    // The subject is a type or a type constructor: `for T` or `for C[_]`.
+    let subject = ident()
+        .then(
+            ident_named("_")
+                .separated_by(just(Token::Comma))
+                .at_least(1)
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LBracket), just(Token::RBracket))
+                .or_not()
+                .map(|p| p.map_or(0, |v| v.len())),
+        )
+        .boxed();
+
+    just(Token::Protocol)
+        .ignore_then(ident())
+        .then_ignore(just(Token::For))
+        .then(subject)
+        .then(
+            fn_like(false)
+                .repeated()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+        )
+        .map(|((name, (subject, subject_arity)), methods)| ProtocolDecl {
+            name,
+            subject,
+            subject_arity,
+            methods,
+        })
+        .boxed()
+}
+
+fn impl_decl<'t, I>() -> impl P<'t, I, ImplDecl>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    just(Token::Impl)
+        .ignore_then(generic_params())
+        .then(path())
+        .then_ignore(just(Token::For))
+        .then(type_spec())
+        .then(
+            fn_decl()
+                .repeated()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+        )
+        .map(|(((generics, protocol), target), methods)| ImplDecl {
+            protocol,
+            generics,
+            target,
+            methods,
+        })
+        .boxed()
+}
+
+fn alias_body<'t, I>() -> impl P<'t, I, AliasDecl>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    ident()
+        .then(generic_params())
+        .then_ignore(just(Token::Eq))
+        .then(type_spec())
+        // No trailing semicolon after a type alias.
+        .map(|((name, generics), value)| AliasDecl { name, generics, value })
+        .boxed()
+}
+
+fn type_alias_decl<'t, I>() -> impl P<'t, I, DeclKind>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    just(Token::Type)
+        .ignore_then(alias_body())
+        .map(DeclKind::TypeAlias)
+        .boxed()
+}
+
+fn mu_type_decl<'t, I>() -> impl P<'t, I, DeclKind>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    just(Token::Mu)
+        .ignore_then(just(Token::Type))
+        .ignore_then(alias_body())
+        .map(DeclKind::MuType)
+        .boxed()
+}
+
+fn newtype_decl<'t, I>() -> impl P<'t, I, DeclKind>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    just(Token::Newtype)
+        .ignore_then(alias_body())
+        .map(DeclKind::Newtype)
+        .boxed()
+}
+
+fn use_decl<'t, I>() -> impl P<'t, I, DeclKind>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    just(Token::Use)
+        .ignore_then(path())
+        .then_ignore(just(Token::Semi).or_not())
+        .map_with(|path, e| DeclKind::Use(UsePath { path, span: e.span() }))
+        .boxed()
+}
+
+fn mod_decl<'t, I>(decl: impl P<'t, I, Decl> + 't) -> impl P<'t, I, DeclKind>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    just(Token::Internal)
+        .or_not()
+        .map(|i| i.is_some())
+        .then_ignore(just(Token::Mod))
+        .then(ident())
+        .then(
+            decl.repeated()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+        )
+        .map(|((internal, name), decls)| DeclKind::Mod(ModDecl { name, internal, decls }))
+        .boxed()
+}
+
+fn const_decl<'t, I>() -> impl P<'t, I, DeclKind>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    just(Token::Const)
+        .ignore_then(ident())
+        .then(just(Token::Colon).ignore_then(type_spec()).or_not())
+        .then_ignore(just(Token::Eq))
+        .then(expr())
+        .then_ignore(just(Token::Semi).or_not())
+        .map(|((name, ty), value)| DeclKind::Const(ConstDecl { name, ty, value }))
+        .boxed()
+}
+
+fn test_decl<'t, I>() -> impl P<'t, I, DeclKind>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    choice((
+        just(Token::Test).to(TestKind::Test),
+        just(Token::Bench).to(TestKind::Bench),
+    ))
+    .then(plain_str())
+    .then(block())
+    .map(|((kind, name), body)| DeclKind::TestBlock(TestBlock { kind, name, body }))
+    .boxed()
+}
+
+/// `enum` lexes as an ordinary identifier. Catch it here and say what to do
+/// instead: without this the user gets a cascade about an unexpected
+/// identifier, which explains nothing.
+fn enum_decl<'t, I>() -> impl P<'t, I, DeclKind>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    ident_named("enum")
+        .then(ident())
+        .then(nested_braces())
+        .validate(|_, e, emitter| {
+            emitter.emit(ParseError::new(e.span(), ParseErrorKind::EnumDeclaration));
+            DeclKind::Error
+        })
+        .boxed()
+}
+
+// ---- types ----
+
+fn type_spec<'t, I>() -> impl P<'t, I, TypeSpec>
 where
     I: ValueInput<'t, Token = Token, Span = Span>,
 {
     recursive(|ty| {
-        let path = ident()
-            .separated_by(just(Token::ColonColon))
-            .at_least(1)
-            .collect::<Vec<_>>()
+        let named = path()
             .then(
                 ty.clone()
                     .separated_by(just(Token::Comma))
@@ -147,50 +467,816 @@ where
             )
             .map(|(path, args)| TypeSpecKind::Named { path, args });
 
+        let structural = ty
+            .clone()
+            .pipe_field()
+            .separated_by(just(Token::Comma))
+            .allow_trailing()
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LBrace), just(Token::RBrace))
+            .map(TypeSpecKind::Struct);
+
+        // `(A, B) -> C` and `(A, B)`; `(A)` is just a grouping.
+        let parenthesised = ty
+            .clone()
+            .separated_by(just(Token::Comma))
+            .allow_trailing()
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LParen), just(Token::RParen))
+            .then(just(Token::Arrow).ignore_then(ty.clone()).or_not())
+            .map(|(items, ret)| match ret {
+                Some(ret) => TypeSpecKind::Fn { params: items, ret: Box::new(ret) },
+                None if items.len() == 1 => items.into_iter().next().expect("len 1").kind,
+                None => TypeSpecKind::Tuple(items),
+            });
+
         let atom = select! { Token::Atom(a) => TypeSpecKind::Atom(a) };
         let null = just(Token::Null).to(TypeSpecKind::Null);
         let any = ident_named("any").to(TypeSpecKind::Any);
 
-        choice((null, any, atom, path))
+        let atomic = choice((null, any, atom, structural, parenthesised, named))
             .map_with(|kind, e| TypeSpec { kind, span: e.span() })
+            .boxed();
+
+        // `!A` binds tightest, then `&`, then `|` — a union of intersections is
+        // the shape people mean.
+        let negated = just(Token::Bang)
+            .repeated()
+            .foldr_with(atomic, |_, ty, e| TypeSpec {
+                kind: TypeSpecKind::Negate(Box::new(ty)),
+                span: e.span(),
+            })
+            .boxed();
+
+        let intersect = negated
+            .separated_by(just(Token::Ampersand))
+            .at_least(1)
+            .collect::<Vec<_>>()
+            .map_with(|mut v, e| {
+                if v.len() == 1 {
+                    v.pop().expect("len 1")
+                } else {
+                    TypeSpec { kind: TypeSpecKind::Intersect(v), span: e.span() }
+                }
+            })
+            .boxed();
+
+        intersect
+            .separated_by(just(Token::Bar))
+            .at_least(1)
+            .collect::<Vec<_>>()
+            .map_with(|mut v, e| {
+                if v.len() == 1 {
+                    v.pop().expect("len 1")
+                } else {
+                    TypeSpec { kind: TypeSpecKind::Union(v), span: e.span() }
+                }
+            })
             .labelled("a type")
             .boxed()
     })
 }
 
-fn block<'t, I>() -> impl Parser<'t, I, Block, Extra> + Clone
+/// Helper so a structural type's fields reuse the recursive `ty` parser.
+trait PipeField<'t, I>: Sized
 where
     I: ValueInput<'t, Token = Token, Span = Span>,
 {
-    // Placeholder: an empty body, enough for the vertical slice. Statements and
-    // expressions land next.
-    just(Token::LBrace)
-        .ignore_then(just(Token::RBrace))
-        .map_with(|_, e| Block { stmts: Vec::new(), tail: None, span: e.span() })
+    fn pipe_field(self) -> impl P<'t, I, Field>;
+}
+
+impl<'t, I, T> PipeField<'t, I> for T
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+    T: P<'t, I, TypeSpec> + 't,
+{
+    fn pipe_field(self) -> impl P<'t, I, Field> {
+        ident()
+            .then_ignore(just(Token::Colon))
+            .then(self)
+            .map_with(|(name, ty), e| Field { name, ty, span: e.span() })
+            .boxed()
+    }
+}
+
+// ---- statements and blocks ----
+
+/// Expressions and blocks are mutually recursive: a block holds expressions, and
+/// a block is itself an expression (`if`, `loop`, a bare `{ .. }`). `recursive`
+/// closes one knot, so these need `declare`/`define` to close both. Building
+/// them separately would have each call construct the other from scratch, which
+/// is infinite recursion at construction time — a stack overflow before a single
+/// token is read.
+fn expr_and_block<'t, I>() -> (impl P<'t, I, Expr>, impl P<'t, I, Block>)
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    let mut expr = Recursive::declare();
+    let mut cond = Recursive::declare();
+    let mut block = Recursive::declare();
+
+    // A block is a run of items; the last one, if it is an expression with no
+    // semicolon, is the block's value.
+    //
+    // This cannot be `stmt.repeated().then(expr.or_not())`: `repeated` is greedy,
+    // so a trailing `if a { 1 } else { 2 }` would be consumed as a statement and
+    // the block would lose its value. Collecting uniformly and deciding
+    // afterwards is the only way to tell "last" from "not last".
+    block.define(
+        choice((
+            binding_stmt(expr.clone()).map(Item::Stmt),
+            expr.clone()
+                .then(just(Token::Semi).or_not())
+                .map(|(e, semi)| Item::Expr(e, semi.is_some())),
+        ))
+        .repeated()
+        .collect::<Vec<_>>()
+        .delimited_by(just(Token::LBrace), just(Token::RBrace))
+        .validate(|items, e, emitter| {
+            let mut stmts = Vec::new();
+            let mut tail = None;
+            let last = items.len().saturating_sub(1);
+            for (i, item) in items.into_iter().enumerate() {
+                match item {
+                    Item::Stmt(s) => stmts.push(s),
+                    Item::Expr(x, semi) => {
+                        if i == last && !semi {
+                            tail = Some(Box::new(x));
+                        } else {
+                            // A block-like expression stands alone as a
+                            // statement; anything else needs its semicolon.
+                            if !semi && !is_block_like(&x) {
+                                emitter.emit(ParseError::new(
+                                    x.span.end..x.span.end,
+                                    ParseErrorKind::Expected {
+                                        expected: vec![Expected::Token(Token::Semi)],
+                                        found: None,
+                                    },
+                                ));
+                            }
+                            let span = x.span.clone();
+                            stmts.push(Stmt { kind: StmtKind::Expr(x), span });
+                        }
+                    }
+                }
+            }
+            Block { stmts, tail, span: e.span() }
+        })
+        .boxed(),
+    );
+
+    expr.define({
+        let atom = atom_expr(expr.clone(), cond.clone(), block.clone(), true).boxed();
+        let postfixed = postfix_ops(atom, expr.clone()).boxed();
+        binary_ops(postfixed).boxed()
+    });
+
+    // The condition of `if`/`while`/`for` and a match scrutinee sit directly
+    // before a `{`, so a record literal there is ambiguous with the body:
+    // `while a { }` would read `a { }` as an empty record and then find no body.
+    // Rust has the same problem and solves it the same way. Parenthesise to get
+    // a record literal back: `while (a { }) { }`.
+    cond.define({
+        let atom = atom_expr(expr.clone(), cond.clone(), block.clone(), false).boxed();
+        let postfixed = postfix_ops(atom, expr.clone()).boxed();
+        binary_ops(postfixed).boxed()
+    });
+
+    (expr, block)
+}
+
+fn block<'t, I>() -> impl P<'t, I, Block>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    expr_and_block().1
+}
+
+fn expr<'t, I>() -> impl P<'t, I, Expr>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    expr_and_block().0
+}
+
+/// One entry in a block, before deciding which is the tail.
+enum Item {
+    Stmt(Stmt),
+    /// The bool is whether a `;` followed.
+    Expr(Expr, bool),
+}
+
+/// Expressions that end in a block stand alone as statements, with no `;`.
+fn is_block_like(e: &Expr) -> bool {
+    matches!(
+        e.kind,
+        ExprKind::If { .. }
+            | ExprKind::Match { .. }
+            | ExprKind::Loop { .. }
+            | ExprKind::While { .. }
+            | ExprKind::For { .. }
+            | ExprKind::Block(_)
+    )
+}
+
+/// `let` and rebinding. Expression statements are handled by the block itself,
+/// which has to know whether they are last.
+fn binding_stmt<'t, I>(expr: impl P<'t, I, Expr> + 't) -> impl P<'t, I, Stmt>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    let let_stmt = just(Token::Let)
+        .ignore_then(pattern(expr.clone()))
+        .then(just(Token::Colon).ignore_then(type_spec()).or_not())
+        .then_ignore(just(Token::Eq))
+        .then(expr.clone())
+        .then_ignore(just(Token::Semi).or_not())
+        .map(|((pat, ty), value)| StmtKind::Let { pat, ty, value })
+        .boxed();
+
+    // `x = e`. Bindings rebind; there is no `mut`.
+    //
+    // The target is parsed as a full expression only so `p.f = e` and
+    // `xs[i] = e` can be rejected with a diagnostic saying what to write
+    // instead. Both are mutation, and records and lists are values — but people
+    // will type them, so a parse failure would be a bad way to find out.
+    let assign = expr
+        .clone()
+        .then_ignore(just(Token::Eq))
+        .then(expr.clone())
+        .then_ignore(just(Token::Semi).or_not())
+        .validate(|(target, value), e, emitter| match target.kind {
+            ExprKind::Path(name) => StmtKind::Assign { name, value },
+            ExprKind::Field { .. } => {
+                emitter.emit(ParseError::new(target.span, ParseErrorKind::FieldAssignment));
+                StmtKind::Error
+            }
+            ExprKind::Index { .. } => {
+                emitter.emit(ParseError::new(target.span, ParseErrorKind::IndexAssignment));
+                StmtKind::Error
+            }
+            _ => {
+                emitter.emit(ParseError::new(e.span(), ParseErrorKind::InvalidAssignTarget));
+                StmtKind::Error
+            }
+        })
+        .boxed();
+
+    choice((let_stmt, assign))
+        .map_with(|kind, e| Stmt { kind, span: e.span() })
         .boxed()
+}
+
+// ---- patterns ----
+
+fn pattern<'t, I>(expr: impl P<'t, I, Expr> + 't) -> impl P<'t, I, Pattern>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    recursive(|pat| {
+        let wildcard = ident_named("_").to(PatternKind::Wildcard);
+
+        let is_pat = just(Token::Is)
+            .ignore_then(type_spec())
+            .map(PatternKind::Is);
+
+        // `Point { x, y }` — `x` alone binds the field to `x`.
+        let field_pat = ident()
+            .then(just(Token::Colon).ignore_then(pat.clone()).or_not())
+            .map_with(|(name, pat), e| FieldPat { name, pat, span: e.span() })
+            .boxed();
+
+        let record_pat = path()
+            .or_not()
+            .map(Option::unwrap_or_default)
+            .then(
+                field_pat
+                    .separated_by(just(Token::Comma))
+                    .allow_trailing()
+                    .collect::<Vec<_>>()
+                    .then(just(Token::DotDot).or_not().map(|r| r.is_some()))
+                    .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+            )
+            .map(|(path, (fields, rest))| PatternKind::Record { path, fields, rest })
+            .boxed();
+
+        let tuple_pat = pat
+            .clone()
+            .separated_by(just(Token::Comma))
+            .allow_trailing()
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LParen), just(Token::RParen))
+            .map(PatternKind::Tuple)
+            .boxed();
+
+        let literal = literal_expr(expr.clone()).map(|e| PatternKind::Literal(Box::new(e))).boxed();
+
+        let bind = ident().map(PatternKind::Bind);
+
+        choice((wildcard, is_pat, record_pat, tuple_pat, literal, bind))
+            .map_with(|kind, e| Pattern { kind, span: e.span() })
+            .labelled("a pattern")
+            .boxed()
+    })
+}
+
+// ---- expressions ----
+
+/// Literals only, for pattern position where a full expression would be wrong.
+fn literal_expr<'t, I>(expr: impl P<'t, I, Expr> + 't) -> impl P<'t, I, Expr>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    let neg = just(Token::Minus)
+        .ignore_then(select! {
+            Token::Int(n) => ExprKind::Int(n),
+            Token::Float(f) => ExprKind::Float(f),
+        })
+        .map_with(|kind, e| Expr {
+            kind: ExprKind::Unary {
+                op: UnOp::Neg,
+                rhs: Box::new(Expr { kind, span: e.span() }),
+            },
+            span: e.span(),
+        });
+
+    let plain = select! {
+        Token::Int(n) => ExprKind::Int(n),
+        Token::Float(f) => ExprKind::Float(f),
+        Token::Rune(c) => ExprKind::Rune(c),
+        Token::Atom(a) => ExprKind::Atom(a),
+        Token::True => ExprKind::Bool(true),
+        Token::False => ExprKind::Bool(false),
+        Token::Null => ExprKind::Null,
+    }
+    .map_with(|kind, e| Expr { kind, span: e.span() });
+
+    choice((neg, plain, string_expr(expr))).boxed()
+}
+
+/// Reassembles the lexer's flat string token run into parts.
+fn string_expr<'t, I>(expr: impl P<'t, I, Expr> + 't) -> impl P<'t, I, Expr>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    let text = select! { Token::StrText(s) => StrPart::Text(s) };
+    let interp = expr
+        .delimited_by(just(Token::InterpStart), just(Token::InterpEnd))
+        .map(StrPart::Interp);
+
+    choice((text, interp))
+        .repeated()
+        .collect::<Vec<_>>()
+        .delimited_by(just(Token::StrStart), just(Token::StrEnd))
+        .map_with(|parts, e| Expr { kind: ExprKind::Str(parts), span: e.span() })
+        .boxed()
+}
+
+/// Primary expressions.
+fn atom_expr<'t, I>(
+    expr: impl P<'t, I, Expr> + 't,
+    cond: impl P<'t, I, Expr> + 't,
+    block: impl P<'t, I, Block> + 't,
+    allow_record_lit: bool,
+) -> impl P<'t, I, Expr>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    let paren = expr
+        .clone()
+        .separated_by(just(Token::Comma))
+        .allow_trailing()
+        .collect::<Vec<_>>()
+        .delimited_by(just(Token::LParen), just(Token::RParen))
+        .map(|items| {
+            if items.len() == 1 {
+                items.into_iter().next().expect("len 1").kind
+            } else {
+                ExprKind::Tuple(items)
+            }
+        })
+        .boxed();
+
+    // `[1, 2, ..rest]`
+    let list = choice((
+        just(Token::DotDot).ignore_then(expr.clone()).map(Elem::Spread),
+        expr.clone().map(Elem::Value),
+    ))
+    .separated_by(just(Token::Comma))
+    .allow_trailing()
+    .collect::<Vec<_>>()
+    .delimited_by(just(Token::LBracket), just(Token::RBracket))
+    .map(ExprKind::List)
+    .boxed();
+
+    // `Point { x: 1, ..base }` and the bare `{ x: 1 }`.
+    let field_init = ident()
+        .then_ignore(just(Token::Colon))
+        .then(expr.clone())
+        .map_with(|(name, value), e| FieldInit { name, value, span: e.span() })
+        .boxed();
+
+    let record_lit = path()
+        .or_not()
+        .map(Option::unwrap_or_default)
+        .then(
+            field_init
+                .separated_by(just(Token::Comma))
+                .allow_trailing()
+                .collect::<Vec<_>>()
+                .then(
+                    just(Token::DotDot)
+                        .ignore_then(expr.clone())
+                        .or_not(),
+                )
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+        )
+        .map(|(path, (fields, spread))| ExprKind::RecordLit {
+            path,
+            fields,
+            spread: spread.map(Box::new),
+        })
+        // In condition position a record literal is indistinguishable from the
+        // body that follows, so it is switched off entirely rather than guessed
+        // at. `empty().filter(..)` would still commit to the `{`.
+        .filter(move |_| allow_record_lit)
+        .boxed();
+
+    let lambda = ident()
+        .then(just(Token::Colon).ignore_then(type_spec()).or_not())
+        .map(|(name, ty)| LambdaParam { name, ty })
+        .separated_by(just(Token::Comma))
+        .allow_trailing()
+        .collect::<Vec<_>>()
+        .delimited_by(just(Token::LParen), just(Token::RParen))
+        .then_ignore(just(Token::FatArrow))
+        .then(expr.clone())
+        .map(|(params, body)| ExprKind::Lambda { params, body: Box::new(body) })
+        .boxed();
+
+    let if_expr = if_chain(cond.clone(), block.clone()).boxed();
+
+    let match_expr = just(Token::Match)
+        .ignore_then(cond.clone())
+        .then(
+            pattern(expr.clone())
+                .then(just(Token::If).ignore_then(expr.clone()).or_not())
+                .then_ignore(just(Token::FatArrow))
+                .then(expr.clone())
+                .map_with(|((pat, guard), body), e| MatchArm { pat, guard, body, span: e.span() })
+                .separated_by(just(Token::Comma))
+                .allow_trailing()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+        )
+        .map(|(scrutinee, arms)| ExprKind::Match { scrutinee: Box::new(scrutinee), arms })
+        .boxed();
+
+    let loop_expr = just(Token::Loop)
+        .ignore_then(block.clone())
+        .map(|body| ExprKind::Loop { body })
+        .boxed();
+
+    let while_expr = just(Token::While)
+        .ignore_then(cond.clone())
+        .then(block.clone())
+        .map(|(cond, body)| ExprKind::While { cond: Box::new(cond), body })
+        .boxed();
+
+    let for_expr = just(Token::For)
+        .ignore_then(pattern(expr.clone()))
+        .then_ignore(just(Token::In))
+        .then(cond.clone())
+        .then(block.clone())
+        .map(|((pat, iter), body)| ExprKind::For { pat, iter: Box::new(iter), body })
+        .boxed();
+
+    let break_expr = just(Token::Break)
+        .ignore_then(expr.clone().or_not())
+        .map(|v| ExprKind::Break(v.map(Box::new)))
+        .boxed();
+    let continue_expr = just(Token::Continue).to(ExprKind::Continue);
+    let return_expr = just(Token::Return)
+        .ignore_then(expr.clone().or_not())
+        .map(|v| ExprKind::Return(v.map(Box::new)))
+        .boxed();
+    let throw_expr = just(Token::Throw)
+        .ignore_then(expr.clone())
+        .map(|v| ExprKind::Throw(Box::new(v)))
+        .boxed();
+
+    let try_expr = try_forms(expr.clone(), block.clone()).boxed();
+
+    let assert_expr = choice((
+        just(Token::Assert).to(AssertKind::Assert),
+        just(Token::AssertEq).to(AssertKind::Eq),
+        just(Token::AssertNe).to(AssertKind::Ne),
+        just(Token::AssertThrows).to(AssertKind::Throws),
+    ))
+    .then(
+        expr.clone()
+            .separated_by(just(Token::Comma))
+            .allow_trailing()
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LParen), just(Token::RParen)),
+    )
+    .map(|(kind, args)| ExprKind::Assert { kind, args })
+    .boxed();
+
+    let block_expr = block.clone().map(ExprKind::Block).boxed();
+
+    let path_expr = path().map(ExprKind::Path).boxed();
+
+    let unary = choice((
+        just(Token::Minus).to(UnOp::Neg),
+        just(Token::Bang).to(UnOp::Not),
+        just(Token::Bnot).to(UnOp::Bnot),
+    ));
+
+    let core = choice((
+        // Keyword-led forms first: they can never be a path.
+        if_expr,
+        match_expr,
+        loop_expr,
+        while_expr,
+        for_expr,
+        break_expr,
+        continue_expr,
+        return_expr,
+        throw_expr,
+        try_expr,
+        assert_expr,
+        // `(x) => e` before a parenthesised expression, since both start `(`.
+        lambda,
+        paren,
+        list,
+        // A record literal needs a path or `{`; try it before a bare path so
+        // `Point { x: 1 }` is not read as `Point` followed by a block.
+        record_lit,
+        block_expr,
+        string_expr(expr.clone()).map(|e| e.kind).boxed(),
+        select! {
+            Token::Int(n) => ExprKind::Int(n),
+            Token::Float(f) => ExprKind::Float(f),
+            Token::Rune(c) => ExprKind::Rune(c),
+            Token::Atom(a) => ExprKind::Atom(a),
+            Token::True => ExprKind::Bool(true),
+            Token::False => ExprKind::Bool(false),
+            Token::Null => ExprKind::Null,
+        }
+        .boxed(),
+        path_expr,
+    ))
+    .map_with(|kind, e| Expr { kind, span: e.span() })
+    .labelled("an expression")
+    .boxed();
+
+    unary
+        .repeated()
+        .foldr_with(core, |op, rhs, e| Expr {
+            kind: ExprKind::Unary { op, rhs: Box::new(rhs) },
+            span: e.span(),
+        })
+        .boxed()
+}
+
+/// `if c { .. } else if d { .. } else { .. }`. `else` is optional here; whether
+/// it is *required* depends on the position the value is consumed in, which the
+/// parser records rather than deciding.
+fn if_chain<'t, I>(
+    expr: impl P<'t, I, Expr> + 't,
+    block: impl P<'t, I, Block> + 't,
+) -> impl P<'t, I, ExprKind>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    recursive(|if_chain| {
+        just(Token::If)
+            .ignore_then(expr.clone())
+            .then(block.clone())
+            .then(
+                just(Token::Else)
+                    .ignore_then(choice((
+                        if_chain.map_with(|kind, e| Expr { kind, span: e.span() }).boxed(),
+                        block.clone()
+                            .map_with(|b, e| Expr { kind: ExprKind::Block(b), span: e.span() })
+                            .boxed(),
+                    )))
+                    .or_not(),
+            )
+            .map(|((cond, then), else_)| ExprKind::If {
+                cond: Box::new(cond),
+                then,
+                else_: else_.map(Box::new),
+            })
+            .boxed()
+    })
+}
+
+/// `try e`, `try? e`, `try! e`, `try e catch (x) { .. }`. All forms accept a
+/// block, so `try { a(); b() } catch (e) { .. }` covers every throwing call
+/// inside.
+fn try_forms<'t, I>(
+    expr: impl P<'t, I, Expr> + 't,
+    block: impl P<'t, I, Block> + 't,
+) -> impl P<'t, I, ExprKind>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    just(Token::Try)
+        .ignore_then(choice((
+            just(Token::Question).to(TryForm::Soften),
+            just(Token::Bang).to(TryForm::Assert),
+            empty().to(TryForm::Propagate),
+        )))
+        .then(expr)
+        .then(
+            just(Token::Catch)
+                .ignore_then(
+                    ident().delimited_by(just(Token::LParen), just(Token::RParen)),
+                )
+                .then(block.clone())
+                .map_with(|(binding, body), e| CatchArm { binding, body, span: e.span() })
+                .or_not(),
+        )
+        .map(|((form, body), catch)| ExprKind::Try { form, body: Box::new(body), catch })
+        .boxed()
+}
+
+/// Call, index, field access, `is` and `as` — all bind tighter than any binary
+/// operator.
+fn postfix_ops<'t, I>(
+    atom: impl P<'t, I, Expr> + 't,
+    expr: impl P<'t, I, Expr> + 't,
+) -> impl P<'t, I, Expr>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    enum Post {
+        Call(Vec<TypeSpec>, Vec<Expr>),
+        Index(Expr),
+        Field(String),
+        Is(TypeSpec),
+        As(TypeSpec),
+    }
+
+    let call = generic_args()
+        .then(
+            expr.clone()
+                .separated_by(just(Token::Comma))
+                .allow_trailing()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LParen), just(Token::RParen)),
+        )
+        .map(|(g, args)| Post::Call(g, args))
+        .boxed();
+
+    let index = expr
+        .delimited_by(just(Token::LBracket), just(Token::RBracket))
+        .map(Post::Index)
+        .boxed();
+
+    let field = just(Token::Dot).ignore_then(ident()).map(Post::Field).boxed();
+    let is_op = just(Token::Is).ignore_then(type_spec()).map(Post::Is).boxed();
+    let as_op = just(Token::As).ignore_then(type_spec()).map(Post::As).boxed();
+
+    atom.foldl_with(
+        choice((call, index, field, is_op, as_op)).repeated(),
+        |lhs, post, e| {
+            let kind = match post {
+                Post::Call(generics, args) => ExprKind::Call {
+                    callee: Box::new(lhs),
+                    generics,
+                    args,
+                },
+                Post::Index(index) => ExprKind::Index {
+                    base: Box::new(lhs),
+                    index: Box::new(index),
+                },
+                Post::Field(name) => ExprKind::Field { base: Box::new(lhs), name },
+                Post::Is(ty) => ExprKind::Is { lhs: Box::new(lhs), ty },
+                Post::As(ty) => ExprKind::As { lhs: Box::new(lhs), ty },
+            };
+            Expr { kind, span: e.span() }
+        },
+    )
+    .boxed()
+}
+
+/// Turbofish: `f[i64](x)`.
+fn generic_args<'t, I>() -> impl P<'t, I, Vec<TypeSpec>>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    type_spec()
+        .separated_by(just(Token::Comma))
+        .at_least(1)
+        .collect::<Vec<_>>()
+        .delimited_by(just(Token::LBracket), just(Token::RBracket))
+        .or_not()
+        .map(Option::unwrap_or_default)
+        .boxed()
+}
+
+/// The precedence ladder, loosest first. One table: the formatter reads the same
+/// one, so the two cannot disagree about what a program means.
+///
+/// `and` binds tighter than `or`. `|>` binds tighter than comparison — a pipe is
+/// a call, and `x |> f() == 3` means `(x |> f()) == 3`; piping into a comparison
+/// could never be a valid pipe target.
+fn binary_ops<'t, I>(atom: impl P<'t, I, Expr> + 't) -> impl P<'t, I, Expr>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    // One entry per precedence level, not per operator: the op parser yields the
+    // BinOp, so same-precedence operators collapse into a `choice`. Chumsky only
+    // implements Operator for tuples up to a fixed arity, and a level-per-entry
+    // table keeps the ladder readable anyway.
+    // Captures nothing, so it is Copy and the same closure serves every level.
+    // MapExtra is spelled out rather than inferred: with `&mut _` the closure's
+    // type gets fixed before I and E are known, and the Operator impl then has
+    // nothing to unify against.
+    let fold = |lhs: Expr,
+                op: BinOp,
+                rhs: Expr,
+                _e: &mut chumsky::input::MapExtra<'t, '_, I, Extra>|
+     -> Expr {
+        let span = lhs.span.start..rhs.span.end;
+        Expr {
+            kind: ExprKind::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs) },
+            span,
+        }
+    };
+
+    let cmp = choice((
+        just(Token::EqEq).to(BinOp::Eq),
+        just(Token::NotEq).to(BinOp::Ne),
+        just(Token::LtEq).to(BinOp::Le),
+        just(Token::GtEq).to(BinOp::Ge),
+        just(Token::Lt).to(BinOp::Lt),
+        just(Token::Gt).to(BinOp::Gt),
+    ));
+    let shift = choice((
+        just(Token::Bsl).to(BinOp::Bsl),
+        just(Token::Bsr).to(BinOp::Bsr),
+    ));
+    let additive = choice((
+        just(Token::Plus).to(BinOp::Add),
+        just(Token::Minus).to(BinOp::Sub),
+    ));
+    let multiplicative = choice((
+        just(Token::Star).to(BinOp::Mul),
+        just(Token::Slash).to(BinOp::Div),
+        just(Token::Percent).to(BinOp::Rem),
+    ));
+
+    atom.pratt((
+        infix(left(1), just(Token::Orelse).to(BinOp::Orelse), fold),
+        infix(left(2), just(Token::Or).to(BinOp::Or), fold),
+        infix(left(3), just(Token::And).to(BinOp::And), fold),
+        infix(left(4), cmp, fold),
+        infix(left(5), just(Token::Pipe).to(BinOp::Pipe), fold),
+        infix(left(6), just(Token::Bor).to(BinOp::Bor), fold),
+        infix(left(7), just(Token::Bxor).to(BinOp::Bxor), fold),
+        infix(left(8), just(Token::Band).to(BinOp::Band), fold),
+        infix(left(9), shift, fold),
+        infix(left(10), additive, fold),
+        infix(left(11), multiplicative, fold),
+    ))
+    .boxed()
 }
 
 // ---- leaves ----
 
-fn ident<'t, I>() -> impl Parser<'t, I, String, Extra> + Clone
+fn path<'t, I>() -> impl P<'t, I, Vec<String>>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    ident()
+        .separated_by(just(Token::ColonColon))
+        .at_least(1)
+        .collect()
+        .boxed()
+}
+
+fn ident<'t, I>() -> impl P<'t, I, String>
 where
     I: ValueInput<'t, Token = Token, Span = Span>,
 {
     select! { Token::Ident(name) => name }.labelled("an identifier")
 }
 
-/// A specific identifier. `enum` and `any` are not keywords, so they arrive as
-/// idents and are matched by text.
-fn ident_named<'t, I>(want: &'static str) -> impl Parser<'t, I, (), Extra> + Clone
+/// A specific identifier. `enum`, `any` and `_` are not keywords, so they arrive
+/// as idents and are matched by text.
+fn ident_named<'t, I>(want: &'static str) -> impl P<'t, I, ()>
 where
     I: ValueInput<'t, Token = Token, Span = Span>,
 {
     select! { Token::Ident(name) if name == want => () }
 }
 
-/// A string with no interpolation. Test names are the only place this is
-/// currently required.
-fn plain_str<'t, I>() -> impl Parser<'t, I, String, Extra> + Clone
+/// A string with no interpolation.
+fn plain_str<'t, I>() -> impl P<'t, I, String>
 where
     I: ValueInput<'t, Token = Token, Span = Span>,
 {
@@ -203,14 +1289,16 @@ where
 }
 
 /// A balanced `{ ... }` run, consumed and discarded. Used only to swallow the
-/// body of a construct we are rejecting outright.
-fn nested_braces<'t, I>() -> impl Parser<'t, I, (), Extra> + Clone
+/// body of a construct being rejected outright.
+fn nested_braces<'t, I>() -> impl P<'t, I, ()>
 where
     I: ValueInput<'t, Token = Token, Span = Span>,
 {
     recursive(|inner| {
         choice((
-            inner.clone().delimited_by(just(Token::LBrace), just(Token::RBrace)),
+            inner
+                .clone()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
             none_of([Token::LBrace, Token::RBrace]).ignored(),
         ))
         .repeated()

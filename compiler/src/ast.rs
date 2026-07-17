@@ -1,6 +1,6 @@
 //! The syntax tree.
 //!
-//! Spans are carried on every node the parser can point a diagnostic at.
+//! Spans are carried on every node a diagnostic can point at.
 
 use crate::lexer::Span;
 
@@ -18,22 +18,48 @@ pub struct Decl {
 #[derive(Debug, Clone, PartialEq)]
 pub enum DeclKind {
     Fn(FnDecl),
-    /// `test "name" { ... }` / `bench "name" { ... }`.
+    Record(RecordDecl),
+    Protocol(ProtocolDecl),
+    Impl(ImplDecl),
+    /// `type A = B`. Non-recursive: a recursive plain alias is an error.
+    TypeAlias(AliasDecl),
+    /// `mu type A = ...`. The binder asserts recursion.
+    MuType(AliasDecl),
+    /// `newtype A = B`. Nominal wrapper; may not be recursive.
+    Newtype(AliasDecl),
+    Use(UsePath),
+    Mod(ModDecl),
+    Const(ConstDecl),
     TestBlock(TestBlock),
-    /// A declaration that failed to parse. Recovery produces one of these so a
-    /// later pass can still see the shape of the file, and so one bad
-    /// declaration does not discard the rest.
+    /// Recovery produces this so one bad declaration does not discard the file.
     Error,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FnDecl {
     pub name: String,
+    pub generics: Vec<String>,
     pub params: Vec<Param>,
-    /// `throws E` — written before `->`.
+    /// `throws E`, written before `->`.
     pub throws: Option<TypeSpec>,
     pub ret: Option<TypeSpec>,
-    pub body: Block,
+    pub wheres: Vec<WhereClause>,
+    /// `None` for a protocol's required method, which has no body.
+    pub body: Option<Block>,
+    pub annotations: Vec<Annotation>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Annotation {
+    pub name: String,
+    pub arg: Option<String>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WhereClause {
+    pub param: String,
+    pub bound: TypeSpec,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -44,17 +70,82 @@ pub struct Param {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct RecordDecl {
+    pub name: String,
+    pub generics: Vec<String>,
+    /// Fields are visible in the declaring module and one parent module only.
+    pub opaque: bool,
+    pub fields: Vec<Field>,
+    pub annotations: Vec<Annotation>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Field {
+    pub name: String,
+    pub ty: TypeSpec,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProtocolDecl {
+    pub name: String,
+    /// `protocol Name for T { ... }`
+    pub subject: String,
+    /// `protocol Name for C[_] { ... }` — the subject is a type constructor of
+    /// this arity. 0 for a plain type.
+    pub subject_arity: usize,
+    pub methods: Vec<FnDecl>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImplDecl {
+    pub protocol: Vec<String>,
+    pub generics: Vec<String>,
+    pub target: TypeSpec,
+    pub methods: Vec<FnDecl>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AliasDecl {
+    pub name: String,
+    pub generics: Vec<String>,
+    pub value: TypeSpec,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UsePath {
+    pub path: Vec<String>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModDecl {
+    pub name: String,
+    pub internal: bool,
+    pub decls: Vec<Decl>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConstDecl {
+    pub name: String,
+    pub ty: Option<TypeSpec>,
+    pub value: Expr,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct TestBlock {
     pub kind: TestKind,
     pub name: String,
     pub body: Block,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TestKind {
     Test,
     Bench,
 }
+
+// ---- types ----
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeSpec {
@@ -64,15 +155,29 @@ pub struct TypeSpec {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeSpecKind {
-    /// `i64`, `str`, `User`, `std::io::Reader`
+    /// `i64`, `List[T]`, `std::io::Reader`
     Named { path: Vec<String>, args: Vec<TypeSpec> },
-    /// `:ok` used as a type — the singleton inhabited by that atom.
+    /// `:ok` as a type — the singleton inhabited by that atom.
     Atom(String),
     Null,
     /// The one legitimate erasure boundary.
     Any,
+    /// `{ name: str, age: i64 }`
+    Struct(Vec<Field>),
+    /// `A | B`
+    Union(Vec<TypeSpec>),
+    /// `A & B`
+    Intersect(Vec<TypeSpec>),
+    /// `!A`
+    Negate(Box<TypeSpec>),
+    /// `(A, B) -> C`
+    Fn { params: Vec<TypeSpec>, ret: Box<TypeSpec> },
+    /// `(A, B)`
+    Tuple(Vec<TypeSpec>),
     Error,
 }
+
+// ---- statements ----
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Block {
@@ -90,10 +195,16 @@ pub struct Stmt {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum StmtKind {
-    Let { name: String, ty: Option<TypeSpec>, value: Expr },
+    /// Bindings rebind; there is no `mut`.
+    Let { pat: Pattern, ty: Option<TypeSpec>, value: Expr },
+    /// `x = e`. The target is always a plain binding: `xs[i] = e` and `p.f = e`
+    /// do not exist, because lists and records are values.
+    Assign { name: Vec<String>, value: Expr },
     Expr(Expr),
     Error,
 }
+
+// ---- expressions ----
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Expr {
@@ -115,18 +226,141 @@ pub enum ExprKind {
     Path(Vec<String>),
     Unary { op: UnOp, rhs: Box<Expr> },
     Binary { op: BinOp, lhs: Box<Expr>, rhs: Box<Expr> },
-    Call { callee: Box<Expr>, args: Vec<Expr> },
+    /// `f(a, b)`; `f[T](a)` carries turbofish args.
+    Call { callee: Box<Expr>, generics: Vec<TypeSpec>, args: Vec<Expr> },
+    /// `xs[i]` — traps on a bad index rather than throwing.
+    Index { base: Box<Expr>, index: Box<Expr> },
+    /// `p.field`
+    Field { base: Box<Expr>, name: String },
+    /// `[1, 2, ..rest]`
+    List(Vec<Elem>),
+    /// `Point { x: 1, ..base }` and the bare `{ x: 1 }` record literal.
+    RecordLit { path: Vec<String>, fields: Vec<FieldInit>, spread: Option<Box<Expr>> },
+    /// `(a, b)`
+    Tuple(Vec<Expr>),
+    /// `(x) => e`, `(x: i64) => e`
+    Lambda { params: Vec<LambdaParam>, body: Box<Expr> },
+    /// `else` is required when the value is consumed; the parser records its
+    /// absence rather than substituting null.
+    If { cond: Box<Expr>, then: Block, else_: Option<Box<Expr>> },
+    Match { scrutinee: Box<Expr>, arms: Vec<MatchArm> },
     Block(Block),
+    Loop { body: Block },
+    While { cond: Box<Expr>, body: Block },
+    For { pat: Pattern, iter: Box<Expr>, body: Block },
+    Break(Option<Box<Expr>>),
+    Continue,
+    Return(Option<Box<Expr>>),
+    Throw(Box<Expr>),
+    /// `try e`, `try? e`, `try! e`, and `try e catch (x) { .. }`. All forms
+    /// accept a block.
+    Try { form: TryForm, body: Box<Expr>, catch: Option<CatchArm> },
+    /// `x is T`
+    Is { lhs: Box<Expr>, ty: TypeSpec },
+    /// `x as T`
+    As { lhs: Box<Expr>, ty: TypeSpec },
+    /// `assert(..)`, `assert_eq(..)` — intrinsics, so failures can report the
+    /// actual values and a span.
+    Assert { kind: AssertKind, args: Vec<Expr> },
     Error,
 }
 
-/// A string is a sequence of literal text and interpolated expressions. The
-/// lexer emits these as a flat token run; this is the reassembled tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TryForm {
+    /// Propagate to the caller.
+    Propagate,
+    /// Soften to `T | null`.
+    Soften,
+    /// Assert: a failure panics.
+    Assert,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssertKind {
+    Assert,
+    Eq,
+    Ne,
+    Throws,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CatchArm {
+    pub binding: String,
+    pub body: Block,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LambdaParam {
+    pub name: String,
+    pub ty: Option<TypeSpec>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldInit {
+    pub name: String,
+    pub value: Expr,
+    pub span: Span,
+}
+
+/// A list element: a value, or `..xs` splicing another list in.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Elem {
+    Value(Expr),
+    Spread(Expr),
+}
+
+/// A string is literal text and interpolated expressions. The lexer emits these
+/// as a flat token run; this is the reassembled tree.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StrPart {
     Text(String),
     Interp(Expr),
 }
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchArm {
+    pub pat: Pattern,
+    pub guard: Option<Expr>,
+    pub body: Expr,
+    pub span: Span,
+}
+
+// ---- patterns ----
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pattern {
+    pub kind: PatternKind,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PatternKind {
+    /// `_`
+    Wildcard,
+    /// `x`
+    Bind(String),
+    /// `is T`
+    Is(TypeSpec),
+    /// `1`, `"s"`, `:ok`, `true`, `null`, `-1`. Boxed: `For` holds a Pattern
+    /// inline, so an unboxed Expr here would close a cycle.
+    Literal(Box<Expr>),
+    /// `Point { x, y }` — field shorthand binds `x` to the field.
+    Record { path: Vec<String>, fields: Vec<FieldPat>, rest: bool },
+    /// `(a, b)`
+    Tuple(Vec<Pattern>),
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldPat {
+    pub name: String,
+    /// `None` for the `{ x }` shorthand.
+    pub pat: Option<Pattern>,
+    pub span: Span,
+}
+
+// ---- operators ----
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnOp {
@@ -155,6 +389,7 @@ pub enum BinOp {
     Bxor,
     Bsl,
     Bsr,
+    /// Tests a nullable union's tag. Never "if truthy".
     Orelse,
     Pipe,
 }

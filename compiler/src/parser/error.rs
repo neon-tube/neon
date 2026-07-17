@@ -29,6 +29,12 @@ pub enum ParseErrorKind {
     EnumDeclaration,
     /// `fn main() -> i64` / `fn main() throws E` — main's signature is fixed.
     MainSignatureFixed,
+    /// `p.f = e` — records are values; there is no field assignment.
+    FieldAssignment,
+    /// `xs[i] = e` — lists and maps are values; there is no index assignment.
+    IndexAssignment,
+    /// `f() = e` and friends: the target is not something that can be rebound.
+    InvalidAssignTarget,
 }
 
 /// What the parser wanted. Mirrors chumsky's `DefaultExpected`, but owned and
@@ -70,6 +76,19 @@ impl fmt::Display for ParseError {
                 "`main` takes no return type and no `throws` clause: it returns `()` and \
                  implicitly throws `Error`. Use `std::exit(n)` for an exit code"
             ),
+            ParseErrorKind::FieldAssignment => write!(
+                f,
+                "records are values: there is no field assignment. \
+                 Build a new record instead, e.g. `p = Point {{ ..p, x: 1 }}`"
+            ),
+            ParseErrorKind::IndexAssignment => write!(
+                f,
+                "lists and maps are values: there is no index assignment. \
+                 Use the returned copy instead, e.g. `xs = list::set(xs, i, v)`"
+            ),
+            ParseErrorKind::InvalidAssignTarget => {
+                write!(f, "cannot assign to this: only a binding can be rebound")
+            }
         }
     }
 }
