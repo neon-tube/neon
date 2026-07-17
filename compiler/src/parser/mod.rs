@@ -608,7 +608,7 @@ where
     // the block would lose its value. Collecting uniformly and deciding
     // afterwards is the only way to tell "last" from "not last".
     block.define(
-        item(ty.clone(), expr.clone())
+        item(ty.clone(), expr.clone(), cond.clone(), block.clone())
             .repeated()
             .collect::<Vec<_>>()
             .delimited_by(just(Token::LBrace), just(Token::RBrace))
@@ -699,10 +699,26 @@ where
 fn item<'t, I>(
     ty: impl P<'t, I, TypeSpec> + 't,
     expr: impl P<'t, I, Expr> + 't,
+    cond: impl P<'t, I, Expr> + 't,
+    block: impl P<'t, I, Block> + 't,
 ) -> impl P<'t, I, Item>
 where
     I: ValueInput<'t, Token = Token, Span = Span>,
 {
+    // A block-like expression at the START of a statement is a statement, not
+    // the left operand of whatever follows. Without this, `if a { } else { }`
+    // followed by a line beginning `-1;` parses as one subtraction and the
+    // second line silently vanishes into the first. Same rule as Rust;
+    // parenthesise to use one as an operand.
+    //
+    // It must come before `rest`, which would otherwise parse the whole thing as
+    // a binary expression.
+    let block_like_stmt = keyword_block_like(expr.clone(), cond, block, ty.clone())
+        .map_with(|kind, e| Expr { kind, span: e.span() })
+        .then(just(Token::Semi).or_not())
+        .map(|(e, semi)| Item::Expr(e, semi.is_some()))
+        .boxed();
+
     let let_stmt = just(Token::Let)
         .ignore_then(pattern(ty.clone(), expr.clone()))
         .then(just(Token::Colon).ignore_then(ty).or_not())
@@ -751,7 +767,7 @@ where
         })
         .boxed();
 
-    choice((let_stmt, rest)).boxed()
+    choice((let_stmt, block_like_stmt, rest)).boxed()
 }
 
 // ---- patterns ----
@@ -941,43 +957,6 @@ where
         .map(|(params, body)| ExprKind::Lambda { params, body: Box::new(body) })
         .boxed();
 
-    let if_expr = if_chain(cond.clone(), block.clone()).boxed();
-
-    let match_expr = just(Token::Match)
-        .ignore_then(cond.clone())
-        .then(
-            pattern(ty.clone(), expr.clone())
-                .then(just(Token::If).ignore_then(expr.clone()).or_not())
-                .then_ignore(just(Token::FatArrow))
-                .then(expr.clone())
-                .map_with(|((pat, guard), body), e| MatchArm { pat, guard, body, span: e.span() })
-                .separated_by(just(Token::Comma))
-                .allow_trailing()
-                .collect::<Vec<_>>()
-                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
-        )
-        .map(|(scrutinee, arms)| ExprKind::Match { scrutinee: Box::new(scrutinee), arms })
-        .boxed();
-
-    let loop_expr = just(Token::Loop)
-        .ignore_then(block.clone())
-        .map(|body| ExprKind::Loop { body })
-        .boxed();
-
-    let while_expr = just(Token::While)
-        .ignore_then(cond.clone())
-        .then(block.clone())
-        .map(|(cond, body)| ExprKind::While { cond: Box::new(cond), body })
-        .boxed();
-
-    let for_expr = just(Token::For)
-        .ignore_then(pattern(ty, expr.clone()))
-        .then_ignore(just(Token::In))
-        .then(cond)
-        .then(block.clone())
-        .map(|((pat, iter), body)| ExprKind::For { pat, iter: Box::new(iter), body })
-        .boxed();
-
     let break_expr = just(Token::Break)
         .ignore_then(expr.clone().or_not())
         .map(|v| ExprKind::Break(v.map(Box::new)))
@@ -1010,16 +989,12 @@ where
     .map(|(kind, args)| ExprKind::Assert { kind, args })
     .boxed();
 
-    let block_expr = block.map(ExprKind::Block).boxed();
+    let block_expr = block.clone().map(ExprKind::Block).boxed();
     let path_expr = path().map(ExprKind::Path).boxed();
 
     choice((
         // Keyword-led forms first: they can never be a path.
-        if_expr,
-        match_expr,
-        loop_expr,
-        while_expr,
-        for_expr,
+        keyword_block_like(expr.clone(), cond, block.clone(), ty.clone()),
         break_expr,
         continue_expr,
         return_expr,
@@ -1059,6 +1034,66 @@ where
         span: e.span(),
     })
     .boxed()
+}
+
+/// The keyword-led block-like forms: `if`, `match`, `loop`, `while`, `for`.
+///
+/// Extracted because statement position needs them on their own. A block-like
+/// expression at the start of a statement IS a statement — `if a { } else { }`
+/// followed by a line starting `-1;` is two statements, not one subtraction.
+/// Without this the `if` is swallowed as a binary operand and the following line
+/// silently disappears into it. Same rule as Rust; parenthesise to use one as an
+/// operand.
+///
+/// A bare `{ .. }` is deliberately not here: at statement position it is
+/// ambiguous with a record literal, and that is a separate question.
+fn keyword_block_like<'t, I>(
+    expr: impl P<'t, I, Expr> + 't,
+    cond: impl P<'t, I, Expr> + 't,
+    block: impl P<'t, I, Block> + 't,
+    ty: impl P<'t, I, TypeSpec> + 't,
+) -> impl P<'t, I, ExprKind>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    let if_expr = if_chain(cond.clone(), block.clone()).boxed();
+
+    let match_expr = just(Token::Match)
+        .ignore_then(cond.clone())
+        .then(
+            pattern(ty.clone(), expr.clone())
+                .then(just(Token::If).ignore_then(expr.clone()).or_not())
+                .then_ignore(just(Token::FatArrow))
+                .then(expr.clone())
+                .map_with(|((pat, guard), body), e| MatchArm { pat, guard, body, span: e.span() })
+                .separated_by(just(Token::Comma))
+                .allow_trailing()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+        )
+        .map(|(scrutinee, arms)| ExprKind::Match { scrutinee: Box::new(scrutinee), arms })
+        .boxed();
+
+    let loop_expr = just(Token::Loop)
+        .ignore_then(block.clone())
+        .map(|body| ExprKind::Loop { body })
+        .boxed();
+
+    let while_expr = just(Token::While)
+        .ignore_then(cond.clone())
+        .then(block.clone())
+        .map(|(cond, body)| ExprKind::While { cond: Box::new(cond), body })
+        .boxed();
+
+    let for_expr = just(Token::For)
+        .ignore_then(pattern(ty, expr.clone()))
+        .then_ignore(just(Token::In))
+        .then(cond)
+        .then(block.clone())
+        .map(|((pat, iter), body)| ExprKind::For { pat, iter: Box::new(iter), body })
+        .boxed();
+
+    choice((if_expr, match_expr, loop_expr, while_expr, for_expr)).boxed()
 }
 
 /// `if c { .. } else if d { .. } else { .. }`. `else` is optional here; whether

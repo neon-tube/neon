@@ -427,3 +427,50 @@ fn nested_block_comment_text_survives() {
     assert_eq!(l.trivia.len(), 1);
     assert_eq!(l.trivia[0].text, " a /* b */ c ");
 }
+
+#[test]
+fn a_colon_glued_to_an_identifier_is_punctuation() {
+    // Without the look-back the lexer is whitespace-sensitive: `{ x:y }` lexed
+    // as `x` then the atom `:y`, while `{ x: y }` lexed as `x : y` — the same
+    // record literal meaning two different things depending on a space, and
+    // silently. `let x:i64` had the same problem.
+    assert_eq!(toks("{ x:y }"), vec![
+        Token::LBrace,
+        Token::Ident("x".into()),
+        Token::Colon,
+        Token::Ident("y".into()),
+        Token::RBrace,
+    ]);
+    assert_eq!(toks("{ x:y }"), toks("{ x: y }"));
+    assert_eq!(toks("let x:i64"), toks("let x: i64"));
+}
+
+#[test]
+fn an_atom_after_anything_else_still_lexes() {
+    // The look-back only fires on an identifier, so every real atom position is
+    // unaffected.
+    assert_eq!(toks("m[:key]"), vec![
+        Token::Ident("m".into()),
+        Token::LBracket,
+        Token::Atom("key".into()),
+        Token::RBracket,
+    ]);
+    assert_eq!(toks("f(:ok)"), vec![
+        Token::Ident("f".into()),
+        Token::LParen,
+        Token::Atom("ok".into()),
+        Token::RParen,
+    ]);
+    assert_eq!(toks("x ==:ok"), vec![
+        Token::Ident("x".into()),
+        Token::EqEq,
+        Token::Atom("ok".into()),
+    ]);
+    assert_eq!(toks("[:a, :b]"), vec![
+        Token::LBracket,
+        Token::Atom("a".into()),
+        Token::Comma,
+        Token::Atom("b".into()),
+        Token::RBracket,
+    ]);
+}

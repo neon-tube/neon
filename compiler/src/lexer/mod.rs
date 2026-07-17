@@ -262,9 +262,23 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// A `:` starts an atom only if an identifier follows it immediately.
-    /// Otherwise it is punctuation — `{ x: 1 }`, `a::b`.
+    /// A `:` starts an atom only if an identifier follows it immediately AND it
+    /// does not directly follow one.
+    ///
+    /// The look-back is what keeps the language from being whitespace-sensitive.
+    /// Without it `{ x:y }` lexes as `x` then the atom `:y` while `{ x: y }`
+    /// lexes as `x : y` — the same record literal meaning two different things
+    /// depending on a space, and silently. `let x:i64` had the same problem.
+    /// A colon glued to an identifier is always punctuation; `m[:key]`, `f(:ok)`
+    /// and `x == :ok` all follow something else, so they are unaffected.
     fn atom_ahead(&self) -> bool {
+        if self
+            .out
+            .last()
+            .is_some_and(|t| t.span.end == self.pos && matches!(t.token, Token::Ident(_)))
+        {
+            return false;
+        }
         match self.peek_at(1) {
             Some(b) if b.is_ascii() => is_ascii_ident_start(b),
             Some(_) => self.text[self.pos + 1..]

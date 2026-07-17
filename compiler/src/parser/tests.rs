@@ -680,3 +680,35 @@ fn a_native_fn_has_no_body() {
         other => panic!("expected a fn, got {other:?}"),
     }
 }
+
+#[test]
+fn a_block_like_expression_at_statement_start_is_a_statement() {
+    // `if a { } else { }` followed by a line beginning `-1;` is two statements.
+    // As a binary operand the `if` would swallow the next line and it would
+    // silently vanish. Same rule as Rust.
+    let b = body("fn main() { if a { g() } else { h() }\n -1; }");
+    assert_eq!(b.stmts.len(), 2, "expected two statements, got {:?}", b.stmts);
+    match &b.stmts[0].kind {
+        StmtKind::Expr(e) => assert!(matches!(e.kind, ExprKind::If { .. })),
+        other => panic!("expected the if as a statement, got {other:?}"),
+    }
+    match &b.stmts[1].kind {
+        StmtKind::Expr(e) => assert!(matches!(e.kind, ExprKind::Unary { op: UnOp::Neg, .. })),
+        other => panic!("expected the negation as its own statement, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_block_like_expression_is_still_a_value_where_one_is_expected() {
+    // Only statement position is special: after `=` it is an ordinary operand.
+    let b = body("fn main() { let x = if a { 1 } else { 2 } + 3; }");
+    match &b.stmts[0].kind {
+        StmtKind::Let { value, .. } => {
+            assert_eq!(binop(value).0, BinOp::Add, "the if is the left operand here")
+        }
+        other => panic!("expected a let, got {other:?}"),
+    }
+    // And a trailing block-like expression is still the block's value.
+    let b = body("fn main() { if a { 1 } else { 2 } }");
+    assert!(b.tail.is_some(), "the trailing if is the block's value");
+}
