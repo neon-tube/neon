@@ -142,6 +142,14 @@ Structurally, here:
   runtime representation; that is a consequence of ⊤, not its meaning, and it is decided
   in codegen. The checker never mentions it.
 
+  This is a deferral, not a solution, and it carries an **obligation**: lowering must define
+  a *total* map from `Descriptor` to representation. `i64 | str` has no layout until
+  something picks one. Boxing a known union is a legitimate answer; the old disaster was not
+  boxing per se, it was boxing because the type was *unknown*. Keeping the checker's answers
+  (below) means lowering is never in that position — but if the repr map has a hole, codegen
+  will grow a fallback to fill it, and `*_Any` is exactly what that fallback looks like.
+  **This map is undesigned and is the next design pass.**
+
 There is one poison, and it is not erasure:
 
     Descriptor::Error   // recovery only
@@ -204,17 +212,13 @@ exhaustiveness falls out: the match is exhaustive iff `s ∧ ¬(⋁ arms)` is em
 
 ### 11. Protocols and dispatch
 
-The subsystem `resolved_calls` comes from, and the largest thing this document does not yet
-specify.
+The subsystem `resolved_calls` comes from. **Specified in `dispatch.md`** — see it for the
+algorithm, bounded impls, HKT subjects, and defaults.
 
-Resolving an unqualified `len(x)`: lexical lookup first (locals and module functions shadow
-protocols), then collect protocol candidates, filter by receiver and argument types, and
-demand exactly one survivor — 0 or 2+ is a diagnostic naming them. The checker records its
-choice; nothing downstream re-resolves. This is where the previous implementation's
-`method_to_protocol` map was last-write-wins, and the fix was to record the decision, which
-is the same shape as the `expr_types` keystone.
-
-Needs its own design pass before implementation.
+The shape that matters here: the checker records its choice, and nothing downstream
+re-resolves. This is where the previous implementation's `method_to_protocol` map was
+last-write-wins, and the fix is the same as the `expr_types` keystone — record the decision
+at the point it is made.
 
 ## Error recovery
 
