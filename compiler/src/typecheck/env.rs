@@ -288,6 +288,9 @@ pub struct Env {
     decls: HashMap<String, TypeDecl>,
     /// Module key -> (bound name, full path).
     uses: HashMap<String, Vec<(String, String)>>,
+    /// `use x::*` — prefixes whose contents are visible unqualified. Lower priority
+    /// than an explicit binding.
+    glob_uses: HashMap<String, Vec<String>>,
     protocols: Vec<Protocol>,
     protocol_ids: HashMap<String, ProtocolId>,
     impls: Vec<ImplDef>,
@@ -323,6 +326,7 @@ impl Env {
             solver,
             decls: HashMap::new(),
             uses: HashMap::new(),
+            glob_uses: HashMap::new(),
             protocols: vec![],
             protocol_ids: HashMap::new(),
             impls: vec![],
@@ -527,12 +531,12 @@ impl Env {
                     });
                 }
                 ast::DeclKind::Use(u) => {
-                    if let Some(last) = u.path.last() {
-                        self.uses
-                            .entry(module.join("::"))
-                            .or_default()
-                            .push((last.clone(), u.path.join("::")));
-                    }
+                    let scope = module.join("::");
+                    let mut binds = Vec::new();
+                    let mut globs = Vec::new();
+                    flatten_use(&u.tree, &[], &mut binds, &mut globs);
+                    self.uses.entry(scope.clone()).or_default().extend(binds);
+                    self.glob_uses.entry(scope).or_default().extend(globs);
                 }
                 ast::DeclKind::Mod(m) => {
                     let mut inner = module.to_vec();
@@ -744,7 +748,13 @@ impl Env {
                 }
             }
             let joined = path.join("::");
-            out.push(if scope.is_empty() { joined } else { format!("{scope}::{joined}") });
+            out.push(if scope.is_empty() { joined.clone() } else { format!("{scope}::{joined}") });
+            // A glob makes `prefix::path` reachable, below an explicit binding.
+            if let Some(gs) = self.glob_uses.get(&scope) {
+                for g in gs {
+                    out.push(format!("{g}::{joined}"));
+                }
+            }
         }
         out
     }
@@ -757,6 +767,25 @@ impl Env {
     /// escape from cross-protocol ambiguity — has to name one.
     pub fn lookup_protocol(&self, module: &[String], path: &[String]) -> Option<ProtocolId> {
         self.candidates(module, path).into_iter().find_map(|k| self.protocol_ids.get(&k).copied())
+    }
+
+    /// If a bare `name` was imported as a protocol method — `use M::P::method` — the
+    /// protocol it came from, so the call dispatches through `P` rather than searching
+    /// every protocol that declares `method`. Import as disambiguation.
+    pub fn imported_method(&self, module: &[String], name: &str) -> Option<ProtocolId> {
+        for n in (0..=module.len()).rev() {
+            let scope = module[..n].join("::");
+            let us = self.uses.get(&scope)?;
+            if let Some((_, full)) = us.iter().find(|(bound, _)| bound == name) {
+                if let Some((proto, _method)) = full.rsplit_once("::") {
+                    let segs: Vec<String> = proto.split("::").map(String::from).collect();
+                    if let Some(id) = self.lookup_protocol(&[], &segs) {
+                        return Some(id);
+                    }
+                }
+            }
+        }
+        None
     }
 
     // ---- instantiation ----
@@ -921,6 +950,36 @@ fn qualify(module: &[String], name: &str) -> String {
         name.to_string()
     } else {
         format!("{}::{name}", module.join("::"))
+    }
+}
+
+/// Flatten a `use` tree into `(bound name, full path)` bindings and glob prefixes.
+/// `prefix` accumulates down through groups, so a nested `x::{ sub::{ y } }` reaches
+/// `y` with the full prefix already assembled.
+fn flatten_use(
+    tree: &ast::UseTree,
+    prefix: &[String],
+    binds: &mut Vec<(String, String)>,
+    globs: &mut Vec<String>,
+) {
+    let joined = |extra: &[String]| {
+        prefix.iter().chain(extra).cloned().collect::<Vec<_>>().join("::")
+    };
+    match tree {
+        ast::UseTree::Leaf { path, alias } => {
+            let full = joined(path);
+            let bound = alias.clone().or_else(|| path.last().cloned());
+            if let Some(bound) = bound {
+                binds.push((bound, full));
+            }
+        }
+        ast::UseTree::Glob { prefix: p } => globs.push(joined(p)),
+        ast::UseTree::Group { prefix: p, children } => {
+            let inner: Vec<String> = prefix.iter().chain(p).cloned().collect();
+            for c in children {
+                flatten_use(c, &inner, binds, globs);
+            }
+        }
     }
 }
 

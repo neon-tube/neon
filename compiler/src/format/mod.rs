@@ -475,7 +475,7 @@ impl<'a> Fmt<'a> {
             }
             DeclKind::Use(u) => {
                 self.push("use ");
-                self.path(&u.path);
+                self.use_tree(&u.tree);
                 self.push(";");
             }
             DeclKind::Mod(m) => {
@@ -1338,6 +1338,40 @@ impl<'a> Fmt<'a> {
                 self.push("::");
             }
             self.push(seg);
+        }
+    }
+
+    fn use_prefix(&mut self, prefix: &[String]) {
+        for seg in prefix {
+            self.push(seg);
+            self.push("::");
+        }
+    }
+
+    fn use_tree(&mut self, tree: &UseTree) {
+        match tree {
+            UseTree::Leaf { path, alias } => {
+                self.path(path);
+                if let Some(a) = alias {
+                    self.push(" as ");
+                    self.push(a);
+                }
+            }
+            UseTree::Glob { prefix } => {
+                self.use_prefix(prefix);
+                self.push("*");
+            }
+            UseTree::Group { prefix, children } => {
+                self.use_prefix(prefix);
+                self.push("{");
+                for (i, c) in children.iter().enumerate() {
+                    if i > 0 {
+                        self.push(", ");
+                    }
+                    self.use_tree(c);
+                }
+                self.push("}");
+            }
         }
     }
 

@@ -36,7 +36,7 @@ pub enum DeclKind {
     MuType(AliasDecl),
     /// `newtype A = B`. Nominal wrapper; may not be recursive.
     Newtype(AliasDecl),
-    Use(UsePath),
+    Use(UseDecl),
     Mod(ModDecl),
     Const(ConstDecl),
     TestBlock(TestBlock),
@@ -125,9 +125,22 @@ pub struct AliasDecl {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct UsePath {
-    pub path: Vec<String>,
+pub struct UseDecl {
+    pub tree: UseTree,
     pub span: Span,
+}
+
+/// `use` mirrors Rust's tree: a leaf path with an optional rename, a glob, or a
+/// braced group that shares a prefix. `use x::{y as z, sub::*}` is one declaration.
+#[derive(Debug, Clone, PartialEq)]
+pub enum UseTree {
+    /// `a::b::c`, or `a::b as name`. Without an alias the bound name is the last
+    /// segment. The last segment may name a fn, a type, or a protocol method.
+    Leaf { path: Vec<String>, alias: Option<String> },
+    /// `prefix::*` — every name under `prefix` becomes visible.
+    Glob { prefix: Vec<String> },
+    /// `prefix::{ children }`.
+    Group { prefix: Vec<String>, children: Vec<UseTree> },
 }
 
 #[derive(Debug, Clone, PartialEq)]

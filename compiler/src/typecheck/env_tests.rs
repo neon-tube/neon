@@ -773,3 +773,100 @@ fn a_stdlib_fn_may_reference_a_later_module() {
     );
     assert!(env.errors().is_empty(), "{:?}", env.errors());
 }
+
+// ---- use trees ----
+
+fn build2(prefix: &[&str], lib: &str, user: &str) -> Env {
+    let lib = parse(lib);
+    let user = parse(user);
+    let p: Vec<String> = prefix.iter().map(|s| s.to_string()).collect();
+    let mut env = Env::build_with(
+        &[(p, &lib), (vec![], &user)],
+        super::env::Unit::RootApplication,
+    );
+    let (_r, errs) = super::check::check_module(&mut env, &user);
+    env.extend_errors(errs);
+    env
+}
+
+#[test]
+fn a_glob_use_brings_a_module_member_into_scope() {
+    let e = build2(
+        &["std", "io"],
+        "@native(\"p\") fn println(s: str)",
+        "use std::io::*\nfn main() { println(\"hi\") }",
+    );
+    assert!(e.errors().is_empty(), "{:?}", e.errors());
+}
+
+#[test]
+fn a_renamed_use_binds_the_alias_not_the_last_segment() {
+    let e = build2(
+        &["std", "io"],
+        "@native(\"p\") fn println(s: str)",
+        "use std::io::println as say\nfn main() { say(\"hi\") }",
+    );
+    assert!(e.errors().is_empty(), "{:?}", e.errors());
+}
+
+#[test]
+fn a_grouped_use_imports_each_member() {
+    let e = build2(
+        &["std", "io"],
+        "@native(\"p\") fn println(s: str)\n@native(\"e\") fn eprintln(s: str)",
+        "use std::io::{println, eprintln}\nfn main() { println(\"a\"); eprintln(\"b\") }",
+    );
+    assert!(e.errors().is_empty(), "{:?}", e.errors());
+}
+
+#[test]
+fn an_explicit_binding_beats_a_glob() {
+    // Two modules both export `f`; the explicit import wins over the glob.
+    let a = parse("@native(\"af\") fn f() -> i64");
+    let b = parse("@native(\"bf\") fn f() -> str");
+    let user = parse("use a::*\nuse b::f\nfn main() -> str { f() }");
+    let mut env = Env::build_with(
+        &[(vec!["a".into()], &a), (vec!["b".into()], &b), (vec![], &user)],
+        super::env::Unit::RootApplication,
+    );
+    let (_r, errs) = super::check::check_module(&mut env, &user);
+    // b::f returns str, matching the annotation. If the glob's a::f (i64) had won,
+    // this would be a mismatch.
+    assert!(errs.is_empty(), "explicit import should win: {errs:?}");
+}
+
+#[test]
+fn importing_a_protocol_method_disambiguates_the_call() {
+    // Two protocols declare `go`, which is normally ambiguous. Importing A's method
+    // by path picks A without a qualifier at the call site.
+    let m = parse(
+        "record R { x: i64 }
+         protocol A for T { fn go(v: T) -> str }
+         protocol B for T { fn go(v: T) -> str }
+         impl A for R { fn go(v: R) -> str { \"a\" } }
+         impl B for R { fn go(v: R) -> str { \"b\" } }
+         use A::go
+         fn f(r: R) -> str { go(r) }",
+    );
+    let mut env = Env::build(&m);
+    let (_r, errs) = super::check::check_module(&mut env, &m);
+    assert!(errs.is_empty(), "the import should disambiguate: {errs:?}");
+}
+
+#[test]
+fn without_the_import_the_ambiguous_call_still_errors() {
+    let m = parse(
+        "record R { x: i64 }
+         protocol A for T { fn go(v: T) -> str }
+         protocol B for T { fn go(v: T) -> str }
+         impl A for R { fn go(v: R) -> str { \"a\" } }
+         impl B for R { fn go(v: R) -> str { \"b\" } }
+         fn f(r: R) -> str { go(r) }",
+    );
+    let mut env = Env::build(&m);
+    let (_r, errs) = super::check::check_module(&mut env, &m);
+    assert!(
+        errs.iter().any(|e| matches!(e.kind, TypeErrorKind::AmbiguousCall { .. })),
+        "{errs:?}"
+    );
+}

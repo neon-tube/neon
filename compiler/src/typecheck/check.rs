@@ -628,7 +628,8 @@ impl Checker<'_> {
 
         let arg_tys: Vec<TyId> = args.iter().map(|a| self.expr(module, a, None)).collect();
         let (name, qualified) = match p.split_last() {
-            Some((last, [])) => (last.clone(), None),
+            // A bare name may have been imported as a specific protocol's method.
+            Some((last, [])) => (last.clone(), self.env.imported_method(module, last)),
             Some((last, rest)) => (last.clone(), self.env.lookup_protocol(module, rest)),
             None => return self.poison(),
         };

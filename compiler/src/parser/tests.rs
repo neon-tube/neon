@@ -845,3 +845,29 @@ fn unit_and_larger_tuples_are_unaffected() {
     let TypeSpecKind::Tuple(v) = &a.value.kind else { panic!("a tuple") };
     assert_eq!(v.len(), 2);
 }
+
+#[test]
+fn use_trees_in_every_shape() {
+    for src in [
+        "use x::y::z;",
+        "use x::y as w;",
+        "use x::*;",
+        "use x::{a, b as c};",
+        "use std::collections::{list, map};",
+        "use thing::Frobulate::frobulate;",
+        "use a::{b::{c, d}, e::*};",
+    ] {
+        let m = ok(src);
+        assert!(matches!(m.decls[0].kind, DeclKind::Use(_)), "{src}");
+    }
+}
+
+#[test]
+fn a_use_group_flattens_its_prefix() {
+    let m = ok("use x::{a, b as c};");
+    let DeclKind::Use(u) = &m.decls[0].kind else { panic!() };
+    let UseTree::Group { prefix, children } = &u.tree else { panic!("a group") };
+    assert_eq!(prefix, &["x"]);
+    assert_eq!(children.len(), 2);
+    assert!(matches!(&children[1], UseTree::Leaf { alias: Some(a), .. } if a == "c"));
+}

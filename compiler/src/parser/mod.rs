@@ -417,10 +417,49 @@ where
     I: ValueInput<'t, Token = Token, Span = Span>,
 {
     just(Token::Use)
-        .ignore_then(path())
+        .ignore_then(use_tree())
         .then_ignore(just(Token::Semi).or_not())
-        .map_with(|path, e| DeclKind::Use(UsePath { path, span: e.span() }))
+        .map_with(|tree, e| DeclKind::Use(UseDecl { tree, span: e.span() }))
         .boxed()
+}
+
+/// `a::b::c`, `a::b as z`, `a::*`, `a::{ b, c as d, sub::* }` — and nested.
+///
+/// A leading path is read first, then what follows the final `::` decides the
+/// shape: `*` is a glob, `{` a group, `as name` a rename, nothing a plain leaf.
+fn use_tree<'t, I>() -> impl P<'t, I, UseTree>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    recursive(|tree| {
+        // `a:: b::` — segments each closed by `::`. A glob and a group both follow
+        // such a prefix, so they are only reachable after at least one `::`.
+        let prefix = || {
+            select! { Token::Ident(s) => s }
+                .then_ignore(just(Token::ColonColon))
+                .repeated()
+                .collect::<Vec<String>>()
+        };
+
+        let glob = prefix()
+            .then_ignore(just(Token::Star))
+            .map(|prefix| UseTree::Glob { prefix });
+
+        let group = prefix()
+            .then(
+                tree.separated_by(just(Token::Comma))
+                    .allow_trailing()
+                    .collect::<Vec<_>>()
+                    .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+            )
+            .map(|(prefix, children)| UseTree::Group { prefix, children });
+
+        let leaf = path()
+            .then(just(Token::As).ignore_then(select! { Token::Ident(s) => s }).or_not())
+            .map(|(path, alias)| UseTree::Leaf { path, alias });
+
+        choice((glob, group, leaf)).boxed()
+    })
 }
 
 fn mod_decl<'t, I>(decl: impl P<'t, I, Decl> + 't) -> impl P<'t, I, DeclKind>
