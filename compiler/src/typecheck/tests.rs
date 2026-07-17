@@ -862,3 +862,25 @@ fn a_recursive_arrow_with_no_base_case_is_empty() {
     s.t.define(g, d);
     assert!(!s.is_empty(g));
 }
+
+#[test]
+fn a_defined_id_is_the_canonical_one() {
+    let mut s = s();
+    let a = s.t.reserve();
+    let i = s.t.i64();
+    let n = s.t.name("Box");
+    let body = s.t.nominal(n, vec![i], vec![]);
+    let d = s.t.data(body);
+    s.t.define(a, d);
+
+    // `define` runs after the body is interned, so an id for this shape already
+    // exists. Unless the reserved id is made canonical, `Box[i64]` is one id by
+    // name and a different one through any boolean op — and `==`, which is the
+    // whole reason to hash-cons, silently answers no.
+    let never = s.t.never();
+    let through_union = s.t.union(never, a);
+    assert_eq!(through_union, a, "`t | never` must be `t`, by id and not merely by meaning");
+
+    let rebuilt = s.t.nominal(n, vec![i], vec![]);
+    assert_eq!(rebuilt, a, "rebuilding the shape reaches the defined id");
+}

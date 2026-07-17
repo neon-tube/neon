@@ -4,12 +4,15 @@
 //! See `docs/design/typechecker.md`.
 
 pub mod bdd;
+pub mod dispatch;
 pub mod empty;
 pub mod env;
 pub mod narrow;
 pub mod resolve;
 pub mod types;
 
+#[cfg(test)]
+mod dispatch_tests;
 #[cfg(test)]
 mod env_tests;
 #[cfg(test)]

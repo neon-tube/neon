@@ -268,9 +268,16 @@ impl Types {
     /// Fill in a reserved id. Registering it in `ty_map` afterwards is what makes the
     /// recursion equi-recursive: a later type with the same shape interns *to* this
     /// id, so `A` and its unfolding are one type with no fold/unfold and no wrapper.
+    ///
+    /// The insert OVERWRITES on purpose. A body is interned while it is being built,
+    /// before `define` runs, so an id for this shape usually already exists — and
+    /// `or_insert` would leave that one canonical and the reserved one a synonym.
+    /// Two ids for one type defeats hash-consing, which is the thing that makes `==`
+    /// a legitimate way to compare types: `Circle` would be one id by name and
+    /// another through any boolean op, and an id comparison would silently answer no.
     pub fn define(&mut self, id: TyId, d: TyData) {
         self.tys[id.0 as usize] = d;
-        self.ty_map.entry(d).or_insert(id);
+        self.ty_map.insert(d, id);
         self.undefined.remove(&id);
         self.discharge();
     }

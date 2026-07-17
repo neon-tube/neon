@@ -640,7 +640,9 @@ impl Env {
         None
     }
 
-    fn lookup_protocol(&self, module: &[String], path: &[String]) -> Option<ProtocolId> {
+    /// A protocol path as seen from `module`. Public because `A::go(r)` — the
+    /// escape from cross-protocol ambiguity — has to name one.
+    pub fn lookup_protocol(&self, module: &[String], path: &[String]) -> Option<ProtocolId> {
         let joined = path.join("::");
         for n in (0..=module.len()).rev() {
             let m = module[..n].join("::");
