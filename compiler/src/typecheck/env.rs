@@ -58,6 +58,23 @@ pub enum TypeErrorKind {
     MuInParameter(String),
     /// `orphan impl` in something another program may depend on.
     OrphanInLibrary(String),
+    /// `actual` is not a subtype of `expected`. The one rule the checker rests on.
+    Mismatch { expected: String, found: String },
+    /// `match s { ... }` leaves `missing` unhandled. The residual IS the message.
+    NotExhaustive { missing: String },
+    /// An `if` with no `else`, consumed as a value.
+    IfWithoutElse,
+    /// `x as T` where the value could never be a `T`.
+    ImpossibleCast { from: String, to: String },
+    /// Two protocols answer. `A::go(r)` picks one.
+    AmbiguousCall { method: String, protocols: Vec<String> },
+    NoImpl { protocol: String, uncovered: String },
+    NoReceiver(String),
+    /// A field read that nothing in the subject has.
+    NoField { field: String, on: String },
+    /// A value-position name nothing declares. Distinct from `Unknown`, which is a
+    /// TYPE nothing declares — `unknown type println` is not a sentence.
+    UnknownName(String),
     /// An orphan that does not fill a gap. `overlap` is the values already covered
     /// — the intersection itself, which is what the representation is for.
     OrphanOverlaps { protocol: String, overlap: String },
@@ -107,6 +124,42 @@ impl fmt::Display for TypeError {
                 "the recursive occurrence of `{n}` sits beneath a negation, which has \
                  no fixed point"
             ),
+            TypeErrorKind::Mismatch { expected, found } => {
+                write!(f, "expected `{expected}`, found `{found}`")
+            }
+            TypeErrorKind::NotExhaustive { missing } => write!(
+                f,
+                "this match is not exhaustive: `{missing}` is not handled"
+            ),
+            TypeErrorKind::IfWithoutElse => write!(
+                f,
+                "this `if` is used as a value but has no `else`, so it has nothing to \
+                 be when the condition is false"
+            ),
+            TypeErrorKind::ImpossibleCast { from, to } => write!(
+                f,
+                "a `{from}` can never be a `{to}`, so this cast can never succeed"
+            ),
+            TypeErrorKind::AmbiguousCall { method, protocols } => write!(
+                f,
+                "`{method}` is declared by more than one protocol in scope ({}); \
+                 qualify the call, e.g. `{}::{method}(..)`",
+                protocols.join(", "),
+                protocols.first().map(String::as_str).unwrap_or("P")
+            ),
+            TypeErrorKind::NoImpl { protocol, uncovered } => write!(
+                f,
+                "no impl of `{protocol}` for `{uncovered}`"
+            ),
+            TypeErrorKind::NoReceiver(n) => write!(
+                f,
+                "`{n}` has no parameter to dispatch on, and nothing here says what it \
+                 should return; annotate the binding or use a turbofish"
+            ),
+            TypeErrorKind::UnknownName(n) => write!(f, "nothing named `{n}` is in scope"),
+            TypeErrorKind::NoField { field, on } => {
+                write!(f, "`{on}` has no field `{field}`")
+            }
             TypeErrorKind::OrphanInLibrary(n) => write!(
                 f,
                 "`orphan impl {n}` may only appear in the root application: a library \
@@ -328,6 +381,11 @@ impl Env {
         }
     }
 
+    /// Add the checker's diagnostics to the declaration pass's.
+    pub fn extend_errors(&mut self, more: Vec<TypeError>) {
+        self.errors.extend(more);
+    }
+
     pub fn errors(&self) -> &[TypeError] {
         &self.errors
     }
@@ -362,6 +420,17 @@ impl Env {
             .filter(|(_, p)| p.methods.iter().any(|m| m.name == name))
             .map(|(i, _)| ProtocolId(i))
             .collect()
+    }
+
+    /// A function by path, as seen from `module`. Lexical lookup comes before
+    /// protocol dispatch, so this is what shadows a protocol method.
+    pub fn fn_named(&self, module: &[String], path: &[String]) -> Option<&FnSig> {
+        let name = path.last()?;
+        // An inner module's fn shadows an outer's, so prefer the longest prefix of
+        // `module` that declares it.
+        (0..=module.len()).rev().find_map(|n| {
+            self.fns.iter().find(|f| &f.name == name && f.module == module[..n])
+        })
     }
 
     pub fn fns(&self) -> &[FnSig] {
