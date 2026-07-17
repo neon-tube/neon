@@ -306,6 +306,40 @@ them, the typo is yours to see.
 *Accepted:* no ordering, no duplicate keys — `[where: a, where: b]` DSL tricks are not
 expressible. And the one-optional-argument case is heavier than `punct: str = "!"` would be.
 
+### One way to turn a value into a string
+
+`Display` declares `to_string(v: T) -> str`, and `#{x}` desugars to `to_string(x)`. One
+mechanism, two syntaxes. There are no `string::int_to_str`-style converters: a
+monomorphic one can never cover a user's record, so keeping one means two mechanisms
+forever.
+
+*Why this needed deciding at all:* the corpus wrapped 289 of its 687 `println` calls in
+`string::int_to_str`, and used interpolation in 7 files out of 201. That was not taste.
+A prior implementation returned `Erased` from every protocol call except `eq` —
+including every `to_string` — so `Display` did not work and interpolation could not. The
+corpus routed around it and fossilised the workaround. `string::int_to_str` was a codegen
+bug wearing a stdlib API's costume, which is the third time that shape has turned up
+here after invariance and `T | null`.
+
+`string::to_int` stays: parsing is not stringifying, and it throws. The pair is
+asymmetric on purpose — `to_string` is total, `to_int` is partial.
+
+### Names count what they say
+
+`string::byte_len`, not `string::len`. It counts bytes — `byte_len("é")` is 2 — and a
+name is where that surprise belongs. A comment on the declaration is not read at the
+call site. `list::len` and `map::len` keep `len`: elements are the only unit they could
+mean.
+
+### There is a prelude, and it holds only what syntax needs
+
+`Display`, `Eq`, `Ord`, `Error`. Nothing else.
+
+Interpolation is syntax and desugars to a protocol call, so without a prelude every file
+containing a string hole needs an import before a language feature works. The rule: **if
+you can write it without naming it, it is in the prelude.** `io::println` still needs
+`use std::io` — it is a function, not syntax.
+
 ### String interpolation is `#{expr}`
 
     "count: #{n}, json: { \"literal\": true }"
