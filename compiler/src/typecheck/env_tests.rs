@@ -614,3 +614,100 @@ fn a_protocol_method_has_no_body() {
     assert!(!e.protocols()[0].methods[0].has_body);
 }
 
+
+// ---- orphan impls ----
+
+fn env_as(src: &str, unit: super::env::Unit) -> Env {
+    Env::build_as(&parse(src), unit)
+}
+
+const SHAPES: &str = "
+    record Circle { r: i64 }
+    record Square { s: i64 }
+    record Tri { t: i64 }
+    protocol Area for T { fn area(v: T) -> i64 }
+";
+
+#[test]
+fn an_orphan_that_fills_a_gap_is_accepted() {
+    let e = env(&format!(
+        "{SHAPES}
+         impl Area for Circle {{ fn area(v: Circle) -> i64 {{ 1 }} }}
+         orphan impl Area for Square {{ fn area(v: Square) -> i64 {{ 2 }} }}"
+    ));
+    assert_eq!(kinds(&e), vec![], "Square is disjoint from Circle, so nothing is stolen");
+}
+
+#[test]
+fn an_orphan_may_not_steal_covered_values() {
+    let e = env(&format!(
+        "{SHAPES}
+         impl Area for Circle {{ fn area(v: Circle) -> i64 {{ 1 }} }}
+         orphan impl Area for Circle {{ fn area(v: Circle) -> i64 {{ 2 }} }}"
+    ));
+    assert_eq!(kinds(&e), vec![TypeErrorKind::OrphanOverlaps("Area".into())]);
+    assert!(errors(&e)[0].contains("gap"));
+}
+
+#[test]
+fn an_orphan_may_not_specialize_a_wider_impl() {
+    // The hijack decisions.md names: the root quietly taking Circle values out of a
+    // library's `impl Area for Shape`, so the library's own code stops taking its
+    // own path. Circle <: Shape, so this is an overlap, not a gap.
+    let e = env(&format!(
+        "{SHAPES}
+         type Shape = Circle | Square
+         impl Area for Shape {{ fn area(v: Shape) -> i64 {{ 1 }} }}
+         orphan impl Area for Circle {{ fn area(v: Circle) -> i64 {{ 2 }} }}"
+    ));
+    assert_eq!(kinds(&e), vec![TypeErrorKind::OrphanOverlaps("Area".into())]);
+}
+
+#[test]
+fn an_orphan_gap_beside_a_wider_impl_is_still_a_gap() {
+    let e = env(&format!(
+        "{SHAPES}
+         type Shape = Circle | Square
+         impl Area for Shape {{ fn area(v: Shape) -> i64 {{ 1 }} }}
+         orphan impl Area for Tri {{ fn area(v: Tri) -> i64 {{ 2 }} }}"
+    ));
+    assert_eq!(kinds(&e), vec![], "Tri is in neither arm of Shape");
+}
+
+#[test]
+fn a_library_may_not_carry_an_orphan() {
+    let e = env_as(
+        &format!(
+            "{SHAPES}
+             orphan impl Area for Circle {{ fn area(v: Circle) -> i64 {{ 1 }} }}"
+        ),
+        super::env::Unit::Library,
+    );
+    assert_eq!(kinds(&e), vec![TypeErrorKind::OrphanInLibrary("Area".into())]);
+    assert!(errors(&e)[0].contains("root application"));
+}
+
+#[test]
+fn the_root_application_may_carry_the_same_orphan() {
+    let e = env_as(
+        &format!(
+            "{SHAPES}
+             orphan impl Area for Circle {{ fn area(v: Circle) -> i64 {{ 1 }} }}"
+        ),
+        super::env::Unit::RootApplication,
+    );
+    assert_eq!(kinds(&e), vec![], "exactly one root, so it cannot disagree with itself");
+}
+
+#[test]
+fn a_plain_impl_is_not_subject_to_the_gap_rule() {
+    // Nested overlap is legal for whoever owns a side: Circle's impl wins for Circle
+    // values. Only orphans are restricted to filling gaps.
+    let e = env(&format!(
+        "{SHAPES}
+         type Shape = Circle | Square
+         impl Area for Shape {{ fn area(v: Shape) -> i64 {{ 1 }} }}
+         impl Area for Circle {{ fn area(v: Circle) -> i64 {{ 2 }} }}"
+    ));
+    assert_eq!(kinds(&e), vec![]);
+}

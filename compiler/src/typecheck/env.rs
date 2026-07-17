@@ -20,6 +20,20 @@ use std::rc::Rc;
 /// diagnostic instead of a hang.
 const MAX_DEPTH: usize = 64;
 
+/// What is being compiled.
+///
+/// Coherence is only violated when two *dependencies* disagree about the same
+/// pair. There is exactly one root application, so it cannot disagree with itself,
+/// and nothing can depend on it and inherit the choice unknowingly — which is why
+/// the escape hatch is safe there and nowhere else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unit {
+    /// The program being run. The only place an `orphan impl` may appear.
+    RootApplication,
+    /// Something another program may depend on.
+    Library,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeError {
     pub span: Span,
@@ -42,6 +56,10 @@ pub enum TypeErrorKind {
     MuUnguarded(String),
     MuUnderNegation(String),
     MuInParameter(String),
+    /// `orphan impl` in something another program may depend on.
+    OrphanInLibrary(String),
+    /// An orphan that does not fill a gap: something already covers those values.
+    OrphanOverlaps(String),
     TooDeep(String),
 }
 
@@ -87,6 +105,20 @@ impl fmt::Display for TypeError {
                 f,
                 "the recursive occurrence of `{n}` sits beneath a negation, which has \
                  no fixed point"
+            ),
+            TypeErrorKind::OrphanInLibrary(n) => write!(
+                f,
+                "`orphan impl {n}` may only appear in the root application: a library \
+                 carrying one imposes its choice on every program that depends on it"
+            ),
+            // Naming the overlapping values would be better, and is what the
+            // set-theoretic representation is for -- the intersection IS the
+            // diagnostic. It needs a TyId printer, which does not exist yet.
+            TypeErrorKind::OrphanOverlaps(n) => write!(
+                f,
+                "this orphan impl of `{n}` does not fill a gap: another impl of `{n}` \
+                 already covers some of those values. An orphan may only add; it \
+                 cannot specialize, override or steal what an existing impl answers for"
             ),
             TypeErrorKind::MuInParameter(n) => write!(
                 f,
@@ -142,6 +174,8 @@ pub struct Protocol {
 #[derive(Debug, Clone)]
 pub struct ImplDef {
     pub protocol: ProtocolId,
+    /// `orphan impl` — declared by an author who owns neither side.
+    pub orphan: bool,
     pub module: Vec<String>,
     pub generics: Vec<String>,
     /// `None` when the target is a bare constructor — `impl Container for Box`,
@@ -206,6 +240,7 @@ pub struct Env {
     mu_bad: Vec<String>,
     depth: usize,
     error_ty: TyId,
+    unit: Unit,
 }
 
 impl Default for Env {
@@ -234,15 +269,64 @@ impl Env {
             mu_bad: vec![],
             depth: 0,
             error_ty,
+            unit: Unit::RootApplication,
         }
     }
 
     pub fn build(module: &ast::Module) -> Self {
+        Env::build_as(module, Unit::RootApplication)
+    }
+
+    pub fn build_as(module: &ast::Module, unit: Unit) -> Self {
         let mut env = Env::new();
+        env.unit = unit;
         env.declare(&[], &module.decls);
         env.check_contractivity();
         env.resolve_bodies(&[], &module.decls);
+        env.check_coherence();
         env
+    }
+
+    /// The rules an `orphan impl` has to clear. Runs after every impl is resolved,
+    /// because "fills a gap" is a question about the whole set.
+    ///
+    /// One rule from decisions.md is missing and cannot be written yet: an orphan
+    /// must own NEITHER side, and a plain impl must own one. Ownership is a property
+    /// of the library a declaration came from, and `use` does not load a dependency
+    /// yet — every declaration `Env` can see is local, so the question has only one
+    /// answer and asking it would be theatre. It belongs here when `use` lands.
+    fn check_coherence(&mut self) {
+        let orphans: Vec<usize> = (0..self.impls.len()).filter(|&n| self.impls[n].orphan).collect();
+
+        for n in orphans {
+            let (protocol, span) = {
+                let i = &self.impls[n];
+                (self.protocols[i.protocol.0].name.clone(), i.span.clone())
+            };
+
+            if self.unit == Unit::Library {
+                self.error(span.clone(), TypeErrorKind::OrphanInLibrary(protocol.clone()));
+            }
+
+            // `target & OR(existing) = empty`. A constructor target (`impl C for Box`)
+            // carries no TyId, so heads are compared by name instead; a mixed pair is
+            // not decided here and is left to dispatch.
+            let Some(target) = self.impls[n].target else {
+                continue;
+            };
+            let others: Vec<TyId> = (0..self.impls.len())
+                .filter(|&m| m != n && self.impls[m].protocol == self.impls[n].protocol)
+                .filter_map(|m| self.impls[m].target)
+                .collect();
+            if others.is_empty() {
+                continue;
+            }
+            let covered = self.solver.t.union_all(&others);
+            let overlap = self.solver.t.intersect(target, covered);
+            if !self.solver.is_empty(overlap) {
+                self.error(span, TypeErrorKind::OrphanOverlaps(protocol));
+            }
+        }
     }
 
     pub fn errors(&self) -> &[TypeError] {
@@ -523,6 +607,7 @@ impl Env {
 
         self.impls.push(ImplDef {
             protocol,
+            orphan: i.orphan,
             module: module.to_vec(),
             generics: i.generics.clone(),
             target,

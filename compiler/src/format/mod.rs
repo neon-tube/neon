@@ -678,6 +678,9 @@ impl<'a> Fmt<'a> {
     }
 
     fn impl_decl(&mut self, i: &ImplDecl, span: &Span) {
+        if i.orphan {
+            self.push("orphan ");
+        }
         self.push("impl");
         self.generic_params(&i.generics);
         self.push(" ");

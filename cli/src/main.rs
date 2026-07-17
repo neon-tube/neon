@@ -28,7 +28,14 @@ enum Command {
     /// Parse a source file and print its syntax tree.
     Parse { file: OsString },
     /// Type-check a source file. Prints nothing and exits 0 when it is well typed.
-    Check { file: OsString },
+    Check {
+        file: OsString,
+        /// Check as something other programs may depend on, rather than as the
+        /// root application. An `orphan impl` is rejected here: a library
+        /// carrying one imposes its choice on every dependent.
+        #[arg(long)]
+        lib: bool,
+    },
     /// Format a source file. Prints the result to stdout by default.
     Fmt {
         file: OsString,
@@ -48,7 +55,7 @@ fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Lex { file, spans } => cmd::lex::run(&file, spans),
         Command::Parse { file } => cmd::parse::run(&file),
-        Command::Check { file } => cmd::check::run(&file),
+        Command::Check { file, lib } => cmd::check::run(&file, lib),
         Command::Fmt { file, write, check } => cmd::fmt::run(&file, write, check),
         Command::Sysroot => cmd::sysroot::run(),
     }

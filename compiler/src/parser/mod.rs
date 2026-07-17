@@ -342,8 +342,13 @@ fn impl_decl<'t, I>(
 where
     I: ValueInput<'t, Token = Token, Span = Span>,
 {
-    just(Token::Impl)
-        .ignore_then(generic_params())
+    // Contextual, not a keyword: `orphan` is only special immediately before
+    // `impl`, so it stays usable as a name.
+    ident_named("orphan")
+        .or_not()
+        .map(|o| o.is_some())
+        .then_ignore(just(Token::Impl))
+        .then(generic_params())
         .then(path())
         .then_ignore(just(Token::For))
         .then(ty.clone())
@@ -353,7 +358,8 @@ where
                 .collect::<Vec<_>>()
                 .delimited_by(just(Token::LBrace), just(Token::RBrace)),
         )
-        .map(|(((generics, protocol), target), methods)| ImplDecl {
+        .map(|((((orphan, generics), protocol), target), methods)| ImplDecl {
+            orphan,
             protocol,
             generics,
             target,

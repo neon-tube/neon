@@ -202,6 +202,37 @@ the default; `impl Area for Circle` overriding it still wins for circles, by ord
 specificity, because the *impls* are what is ranked — not where each impl's body came
 from.
 
+## Coherence: what is enforced, and what cannot be yet
+
+`orphan impl P for T` parses, reaches `ImplDef.orphan`, and clears two of the three
+rules in `decisions.md`:
+
+- **Only in the root application.** `Env::build_as(module, Unit::Library)` rejects it.
+  A library carrying one imposes its choice on every dependent.
+- **Must fill a gap.** `target ∧ ⋁ existing = ∅`, by emptiness query. This is the rule
+  that stops the root hijacking a library's `impl Area for Shape` for Circle values
+  while the library's own code keeps taking the wide path.
+
+The third — **an orphan must own neither side, and a plain impl must own one** — is
+**not implemented and cannot be yet.** Ownership is a property of the *library* a
+declaration came from, and `use` does not load a dependency: every declaration `Env`
+can see is local. The question therefore has exactly one answer, and asking it would
+be theatre. It belongs in `check_coherence` the day `use` resolves a foreign module,
+and until then a plain `impl TheirProtocol for TheirType` cannot be caught because
+`TheirProtocol` cannot exist.
+
+This is worth stating plainly rather than leaving as a green test suite: the corpus
+test `orphan_impl_fills_a_gap` passes today for a *weaker* reason than it will later.
+Its protocol is local, so once ownership is checkable it becomes "you own `Area`; drop
+`orphan`". The test is right about the rule it names and wrong about the one it does
+not.
+
+A related gap: `OrphanOverlaps` names the protocol, not the overlapping values. The
+intersection **is** the diagnostic — that is the whole point of the representation —
+but printing it needs a `TyId` formatter, which does not exist. Every diagnostic that
+wants to name a type is blocked on the same thing.
+
 ## Open
 
-Nothing. Every case the corpus pins has an answer.
+The design has an answer for every case the corpus pins. The implementation gaps above
+are gaps in `use` and in a type printer, not in the design.

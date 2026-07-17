@@ -1,0 +1,26 @@
+//@ compile-fail
+//@ error-contains: gap
+//
+// An orphan impl is strictly additive: its target must be disjoint from every
+// existing impl of that protocol — `target & OR(existing) = empty`.
+//
+// Here `Area` already covers all of `Shape`, and `Circle <: Shape`, so the orphan
+// is not filling a gap but taking Circle values out of an impl that answers for
+// them. Allowed, the root could quietly hijack a library's `impl Area for Shape`
+// and the library's own code would stop taking its own path.
+//
+// Specialization by nesting stays a right of whoever owns the protocol or the
+// type — the only parties who can see the whole picture. The sibling test
+// orphan_impl_fills_a_gap shows the additive case that is allowed.
+
+record Circle { r: i64 }
+record Square { s: i64 }
+type Shape = Circle | Square
+
+protocol Area for T { fn area(v: T) -> i64 }
+
+impl Area for Shape { fn area(v: Shape) -> i64 { 1 } }
+
+orphan impl Area for Circle { fn area(v: Circle) -> i64 { 2 } }
+
+fn main() {}

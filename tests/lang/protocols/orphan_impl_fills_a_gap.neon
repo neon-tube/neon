@@ -1,0 +1,27 @@
+// A library may implement any protocol for a type it owns, or any type for a
+// protocol it owns. If it owns neither, it may not — a dependency carrying such
+// an impl imposes its choice on every program that uses it, and two dependencies
+// disagreeing about the same pair is the coherence violation the rule exists to
+// stop.
+//
+// The root application is the one exception, and `orphan` says so out loud. There
+// is exactly one root, so it cannot disagree with itself, and nothing depends on
+// it and inherits the choice unknowingly.
+
+use std::io;
+use std::string;
+
+record Circle { r: i64 }
+record Square { s: i64 }
+
+protocol Area for T { fn area(v: T) -> i64 }
+
+impl Area for Circle { fn area(v: Circle) -> i64 { v.r * v.r * 3 } }
+
+// Nothing covered Square, so this adds rather than takes.
+orphan impl Area for Square { fn area(v: Square) -> i64 { v.s * v.s } }
+
+fn main() {
+    io::println(string::int_to_str(area(Circle { r: 2 })));
+    io::println(string::int_to_str(area(Square { s: 3 })));
+}

@@ -108,6 +108,9 @@ pub struct ProtocolDecl {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImplDecl {
+    /// `orphan impl P for T` — the author saying out loud that they own neither
+    /// side. Legal only in the root application, and only to fill a gap.
+    pub orphan: bool,
     pub protocol: Vec<String>,
     pub generics: Vec<String>,
     pub target: TypeSpec,
