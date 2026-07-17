@@ -42,11 +42,11 @@ pub fn run(file: &OsString, write: bool, check: bool) -> Result<()> {
 }
 
 fn report(path: &Path, src: &str, e: FormatError) {
-    let errors: Vec<(usize, String)> = match e {
-        FormatError::Lex(es) => es.iter().map(|e| (e.span.start, e.to_string())).collect(),
-        FormatError::Parse(es) => es.iter().map(|e| (e.span.start, e.to_string())).collect(),
+    let errors: Vec<(std::ops::Range<usize>, String)> = match e {
+        FormatError::Lex(es) => es.iter().map(|e| (e.span.clone(), e.to_string())).collect(),
+        FormatError::Parse(es) => es.iter().map(|e| (e.span.clone(), e.to_string())).collect(),
     };
-    for (offset, msg) in errors {
-        eprintln!("{}:{}: error: {}", path.display(), source::line_of(src, offset), msg);
+    for (span, msg) in errors {
+        eprint!("{}", source::render(path, src, span, &msg));
     }
 }

@@ -23,12 +23,7 @@ pub fn run(file: &OsString, spans: bool) -> Result<()> {
             // Every error, not just the first: the lexer accumulates so a
             // diagnostics pass can show them all.
             for e in &errors {
-                eprintln!(
-                    "{}:{}: error: {}",
-                    path.display(),
-                    source::line_of(&src, e.span.start),
-                    e
-                );
+                eprint!("{}", source::render(&path, &src, e.span.clone(), &e.to_string()));
             }
             std::process::exit(1);
         }
