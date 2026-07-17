@@ -1,0 +1,19 @@
+//@ compile-fail
+//@ error-contains: List[i32]
+//@ error-contains: List[i64]
+//
+// Generic arguments of a nominal collection are INVARIANT. `List[i32]` and
+// `List[i64]` are not subtypes of each other in either direction, even though
+// every i32 is representable as an i64 — the element types must be mutual
+// subtypes, and they are not.
+
+use std::io;
+use std::collections::list;
+
+fn takes_i64s(xs: List[i64]) -> i64 { list::len(xs) }
+
+fn main() {
+    let xs: List[i32] = [1, 2, 3];
+    io::println("unreachable");
+    let n = takes_i64s(xs);
+}

@@ -1,0 +1,38 @@
+// The sum type in Neon: N records, one union alias. Unit records give you the
+// payload-free variants, records with fields give you payloads, and the alias
+// names the closed set. There is no `enum` keyword — see tasks/610.
+
+use std::io;
+use std::string;
+
+record Circle { radius: i64 }
+record Square { side: i64 }
+record Empty {}
+
+type Shape = Circle | Square | Empty
+
+fn area(s: Shape) -> i64 {
+    if s is Circle {
+        let c = s as Circle;
+        3 * c.radius * c.radius
+    } else if s is Square {
+        let q = s as Square;
+        q.side * q.side
+    } else {
+        0
+    }
+}
+
+fn name(s: Shape) -> str {
+    if s is Circle { "circle" } else if s is Square { "square" } else { "empty" }
+}
+
+fn report(s: Shape) {
+    io::println(string::concat(name(s), string::concat(" ", string::int_to_str(area(s)))));
+}
+
+fn main() {
+    report(Circle { radius: 2 });
+    report(Square { side: 3 });
+    report(Empty {});
+}

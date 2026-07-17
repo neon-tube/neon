@@ -1,0 +1,13 @@
+//@ compile-fail
+
+// An atom is not a string. `:ok` and `"ok"` share a spelling and nothing else:
+// a string is UTF-8 bytes you can slice, concatenate and read from a file, an
+// atom is an opaque name that only supports equality. Comparing the two is a
+// type error, not `false` — a silent `false` here is exactly the bug this rule
+// prevents.
+
+use std::io;
+
+fn main() {
+    io::println(if :ok == "ok" { "same" } else { "different" });
+}

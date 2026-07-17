@@ -1,0 +1,20 @@
+// The escape hatch from ambiguity: name the protocol. `A::go(r)` has exactly
+// one candidate, so two protocols declaring the same method for the same type
+// coexist as long as every call says which it means. Only the UNQUALIFIED call
+// is an error (see ambiguous_call.neon).
+
+use std::io;
+
+protocol A for T { fn go(v: T) -> str }
+protocol B for T { fn go(v: T) -> str }
+
+record R { x: i64 }
+
+impl A for R { fn go(v: R) -> str { "a" } }
+impl B for R { fn go(v: R) -> str { "b" } }
+
+fn main() {
+    let r = R { x: 1 };
+    io::println(A::go(r));
+    io::println(B::go(r));
+}

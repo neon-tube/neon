@@ -1,0 +1,27 @@
+// `+` and `-` on i64 wrap on overflow — two's complement, no undefined
+// behaviour, no trap. i64::MAX + 1 is i64::MIN.
+//
+// Each case appears twice: once as a literal expression, which the constant
+// folder evaluates at compile time, and once through `id`, which the backend
+// evaluates at runtime. The two must agree, always.
+
+use std::io;
+use std::string;
+
+fn id(x: i64) -> i64 { x }
+fn show(v: i64) { io::println(string::int_to_str(v)); }
+
+fn main() {
+    show(9223372036854775807 + 1);
+    show(id(9223372036854775807) + 1);
+
+    show(-9223372036854775808 - 1);
+    show(id(-9223372036854775808) - 1);
+
+    show(9223372036854775807 + 2);
+    show(id(9223372036854775807) + 2);
+
+    // Wrapping is exact, not saturating: the result is the true sum mod 2^64.
+    show(9223372036854775807 + 9223372036854775807);
+    show(id(9223372036854775807) + id(9223372036854775807));
+}

@@ -1,0 +1,37 @@
+// An `is` test narrows the scrutinee inside the branch it guards: the value is
+// usable at the tested type in the true arm, and at the REMAINDER of the union
+// in the false arm. Narrowing composes with else-if chains until the union is
+// exhausted.
+
+use std::io;
+use std::string;
+
+record A { n: i64 }
+record B { s: str }
+record C { flag: bool }
+
+fn show(v: A | B | C) -> str {
+    if v is A {
+        let a = v as A;
+        string::int_to_str(a.n)
+    } else if v is B {
+        let b = v as B;
+        b.s
+    } else {
+        // Neither A nor B: the union residual here is exactly C.
+        let c = v as C;
+        if c.flag { "yes" } else { "no" }
+    }
+}
+
+fn negated(v: i64 | str) -> str {
+    if !(v is i64) { v as str } else { string::int_to_str(v as i64) }
+}
+
+fn main() {
+    io::println(show(A { n: 5 }));
+    io::println(show(B { s: "bee" }));
+    io::println(show(C { flag: true }));
+    io::println(negated(3));
+    io::println(negated("three"));
+}

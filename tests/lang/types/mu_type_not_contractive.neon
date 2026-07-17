@@ -1,0 +1,18 @@
+//@ compile-fail
+//@ error-contains: T
+//@ error-contains: guarded
+//
+// Contractivity: every recursive occurrence must sit UNDER a type constructor —
+// a List or Map argument, a record field, a tuple element. `mu type T = T | i64`
+// puts `T` bare in its own union, which defines nothing: unfolding it never
+// makes progress. It is an error at the declaration.
+
+use std::io;
+
+mu type T = T | i64
+
+fn f(v: T) -> i64 { 0 }
+
+fn main() {
+    io::println("unreachable");
+}

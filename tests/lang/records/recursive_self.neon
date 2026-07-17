@@ -1,0 +1,43 @@
+// A record may refer to itself through a field, which is how a linked structure
+// is written: `next: Node | null`. Construction is inside-out, traversal is a
+// recursive function that narrows the field at each step.
+
+use std::io;
+use std::string;
+
+record Node {
+    value: i64,
+    next: Node | null,
+}
+
+fn sum(n: Node | null) -> i64 {
+    if n is null {
+        0
+    } else {
+        let node = n as Node;
+        node.value + sum(node.next)
+    }
+}
+
+fn length(n: Node | null) -> i64 {
+    if n is null {
+        0
+    } else {
+        let node = n as Node;
+        1 + length(node.next)
+    }
+}
+
+fn main() {
+    let chain = Node {
+        value: 1,
+        next: Node {
+            value: 2,
+            next: Node { value: 3, next: null },
+        },
+    };
+
+    io::println(string::int_to_str(sum(chain)));
+    io::println(string::int_to_str(length(chain)));
+    io::println(string::int_to_str(sum(null)));
+}

@@ -1,0 +1,42 @@
+// `try expr` propagates: the error rethrows out of the enclosing function, which
+// must itself declare a compatible `throws`. Here it travels up two frames —
+// deep -> middle -> top -> caught in main.
+//
+// The prints on either side of each `try` pin where control actually stops: the
+// "after" lines must never appear.
+
+use std::io;
+use std::string;
+
+record Boom { msg: str }
+
+impl Error for Boom {
+    fn message(error: Boom) -> str { error.msg }
+}
+
+fn deep() throws Boom -> i64 {
+    io::println("deep entered");
+    throw Boom { msg: "from deep" }
+}
+
+fn middle() throws Boom -> i64 {
+    io::println("middle entered");
+    let v = try deep();
+    io::println("middle after");
+    v
+}
+
+fn top() throws Boom -> i64 {
+    io::println("top entered");
+    let v = try middle();
+    io::println("top after");
+    v
+}
+
+fn main() {
+    let result = try top() catch (e) {
+        io::println(string::concat("main caught: ", message(e)));
+        -1
+    };
+    io::println(string::int_to_str(result));
+}

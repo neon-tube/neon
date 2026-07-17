@@ -1,0 +1,34 @@
+// Closures are SEALED: a closure captures the VALUE of each free name at the
+// moment it is created. A later rebind of that name in the enclosing scope is
+// NOT visible inside the closure — rebinding is never observable at a distance,
+// which is what keeps immutability true everywhere. See tasks/601.
+
+use std::io;
+use std::string;
+
+fn main() {
+    let n = 1;
+    let show = () => string::int_to_str(n);
+
+    io::println(show());
+
+    // Rebind the captured name in the enclosing scope, AFTER creation.
+    n = 99;
+    // The enclosing scope sees the new value...
+    io::println(string::int_to_str(n));
+    // ...and the closure still sees the value it captured.
+    io::println(show());
+
+    // A closure created after the rebind captures the new value: creation time
+    // is what matters, not declaration order of the name.
+    let show2 = () => string::int_to_str(n);
+    io::println(show2());
+    io::println(show());
+
+    // Same rule for a captured str.
+    let name = "first";
+    let greet = () => string::concat("hi ", name);
+    name = "second";
+    io::println(greet());
+    io::println(name);
+}

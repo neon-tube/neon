@@ -1,0 +1,36 @@
+// A block is a scope. A `let` inside it is invisible after it, and a `let` that
+// shadows an outer name shadows it only until the block ends — the outer
+// binding is untouched.
+//
+// The contrast with `rebind_writes_through_scope.neon` is the point: `x = 2`
+// inside a block changes the outer `x`, `let x = 2` does not.
+
+use std::io;
+use std::string;
+
+fn show(v: i64) { io::println(string::int_to_str(v)); }
+
+fn main() {
+    let x = 1;
+    {
+        let x = 2;
+        show(x);
+    };
+    show(x);
+
+    // The shadow can even have a different type; the outer name still comes
+    // back unchanged when the block ends.
+    let v = 10;
+    {
+        let v = "ten";
+        io::println(v);
+    };
+    show(v);
+
+    // An `if` branch is a scope too.
+    if true {
+        let x = 99;
+        show(x);
+    }
+    show(x);
+}

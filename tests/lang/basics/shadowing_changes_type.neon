@@ -1,0 +1,23 @@
+// Shadowing is a new binding, so it may have a different type from the one it
+// shadows. This is the difference that matters between shadowing and rebinding:
+// a rebind must stay within the binding's type, a shadow need not.
+
+use std::io;
+use std::string;
+
+fn main() {
+    let v = 42;
+    let v = string::int_to_str(v);
+    io::println(v);
+    io::println(v + "!");
+
+    // Narrowing a nullable by shadowing it with the unwrapped value.
+    let maybe: i64 | null = 7;
+    let maybe = maybe orelse 0;
+    io::println(string::int_to_str(maybe + 1));
+
+    // And the other direction: str, then bool.
+    let flag = "yes";
+    let flag = flag == "yes";
+    io::println(if flag { "true" } else { "false" });
+}

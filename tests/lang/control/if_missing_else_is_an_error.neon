@@ -1,0 +1,16 @@
+//@ compile-fail
+//@ error-contains: needs an `else` branch
+
+// An `if` whose value is consumed must have an `else`. The old rule silently
+// substituted `null` for the missing branch, so this `let` bound an `i64| null`
+// that nobody wrote and nobody expected — nullability leaked in with no
+// annotation anywhere.
+
+use std::io;
+use std::string;
+
+fn main() {
+    let c = true;
+    let x = if c { 1 };
+    io::println(string::int_to_str(x));
+}

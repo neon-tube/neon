@@ -1,0 +1,16 @@
+//@ compile-fail
+//@ error-contains: mu
+//
+// The binder ASSERTS recursion: a `mu type` whose body never names itself is
+// just an alias wearing a keyword, and the keyword would be a lie about the
+// restrictions it carries. Write `type` instead.
+
+use std::io;
+
+mu type NotRecursive = i64 | str
+
+fn f(v: NotRecursive) -> i64 { 0 }
+
+fn main() {
+    io::println("unreachable");
+}

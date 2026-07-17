@@ -1,0 +1,46 @@
+// A protocol may require another: `protocol Ord for T where T: Eq`. Implementing
+// the sub-protocol obliges the type to implement the super one, and the super's
+// methods are callable from inside the sub's impl and from any generic bounded
+// on the sub alone.
+
+use std::io;
+use std::string;
+
+record Version { major: i64, minor: i64 }
+
+impl Eq for Version {
+    fn eq(left: Version, right: Version) -> bool {
+        left.major == right.major and left.minor == right.minor
+    }
+}
+
+impl Ord for Version {
+    fn cmp(left: Version, right: Version) -> Ordering {
+        if eq(left, right) {
+            :eq
+        } else if left.major < right.major {
+            :lt
+        } else if left.major > right.major {
+            :gt
+        } else if left.minor < right.minor {
+            :lt
+        } else {
+            :gt
+        }
+    }
+}
+
+// The bound is Ord alone; Eq comes with it.
+fn describe[T](a: T, b: T) -> str where T: Ord {
+    if eq(a, b) { "same" } else if cmp(a, b) is :lt { "less" } else { "greater" }
+}
+
+fn main() {
+    let v1 = Version { major: 1, minor: 0 };
+    let v2 = Version { major: 1, minor: 2 };
+
+    io::println(describe(v1, v1));
+    io::println(describe(v1, v2));
+    io::println(describe(v2, v1));
+    io::println(if eq(v1, v1) { "eq" } else { "ne" });
+}

@@ -1,0 +1,36 @@
+// A closure's type is `(P) -> R` — parameter types in parentheses, an arrow,
+// the return type. There is no `fn` in a type position. Zero-parameter closures
+// are `() -> R`; closure types nest, so a closure returning a closure is
+// `(A) -> (B) -> C`, and one taking a closure is `((A) -> B) -> C`.
+
+use std::io;
+use std::string;
+
+fn apply(f: (i64) -> i64, x: i64) -> i64 { f(x) }
+
+fn adder(n: i64) -> (i64) -> i64 { (x: i64) => x + n }
+
+fn call_with_ten(f: (i64) -> str) -> str { f(10) }
+
+fn main() {
+    // Annotated bindings at each shape.
+    let unary: (i64) -> i64 = (x) => x + 1;
+    let binary: (i64, str) -> str = (n, s) => string::concat(s, string::int_to_str(n));
+    let nullary: () -> i64 = () => 7;
+    let predicate: (i64) -> bool = (x) => x > 0;
+
+    io::println(string::int_to_str(unary(1)));
+    io::println(binary(2, "n="));
+    io::println(string::int_to_str(nullary()));
+    io::println(if predicate(1) { "pos" } else { "non-pos" });
+
+    // A closure returning a closure.
+    let curried: (i64) -> (i64) -> i64 = adder;
+    io::println(string::int_to_str(curried(3)(4)));
+
+    // A closure taking a closure.
+    let runner: ((i64) -> i64, i64) -> i64 = apply;
+    io::println(string::int_to_str(runner(unary, 10)));
+
+    io::println(call_with_ten((n: i64) => string::int_to_str(n * 2)));
+}

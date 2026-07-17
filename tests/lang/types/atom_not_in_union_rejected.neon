@@ -1,0 +1,23 @@
+//@ compile-fail
+//@ error-contains: purple
+//
+// Each atom is a DISTINCT singleton type, so a union of atoms is sealed exactly
+// like a union of records: `:purple` is not one of `Color`'s inhabitants and is
+// rejected. If atoms were one flat "atom" type this would compile — they are
+// not.
+
+use std::io;
+
+type Color = :red | :green | :blue
+
+fn name(c: Color) -> str {
+    match c {
+        :red => "red",
+        :green => "green",
+        :blue => "blue",
+    }
+}
+
+fn main() {
+    io::println(name(:purple));
+}

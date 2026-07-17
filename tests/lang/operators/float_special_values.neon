@@ -1,0 +1,28 @@
+// f64 follows IEEE-754, and none of its edge cases are errors: dividing a float
+// by zero yields an infinity rather than trapping the way `i64` division does,
+// and NaN compares unequal to everything including itself.
+//
+// The values are pinned by comparison rather than printed, because how an
+// infinity or a NaN is spelled is a formatting question, not this one.
+
+use std::io;
+
+fn shows(v: bool) { io::println(if v { "true" } else { "false" }); }
+
+fn main() {
+    let inf = 1.0 / 0.0;
+    let neg_inf = -1.0 / 0.0;
+    shows(inf > 1.0e308);
+    shows(neg_inf < -1.0e308);
+    shows(inf + 1.0 == inf);
+    shows(inf == neg_inf);
+
+    let nan = 0.0 / 0.0;
+    shows(nan == nan);
+    shows(nan != nan);
+    shows(nan < 1.0);
+    shows(nan > 1.0);
+
+    // Signed zero: the two zeroes are equal, as IEEE requires.
+    shows(0.0 == -0.0);
+}

@@ -1,0 +1,35 @@
+// String literal escapes and what they weigh. `str` is UTF-8 bytes, so `len` is
+// the byte count of the *decoded* escape, not of the source text: "\u{00e9}" is
+// eight source characters and two bytes.
+
+use std::io;
+use std::string;
+
+fn size(s: str) { io::println(string::int_to_str(string::len(s))); }
+
+fn main() {
+    io::println("plain");
+
+    // \n, \t, \\, \" — each is one byte.
+    io::println("tab:\tafter");
+    io::println("quote:\"q\"");
+    io::println("backslash:\\");
+    size("\n");
+    size("\t");
+    size("\\");
+    size("\"");
+
+    // \xHH is one raw byte; \u{...} is a codepoint encoded as UTF-8.
+    size("\x41");
+    io::println("\x41");
+    size("\u{00e9}");
+    io::println("\u{00e9}");
+    size("\u{1f600}");
+
+    // An empty literal is zero bytes.
+    size("");
+    io::println(if string::is_empty("") { "empty" } else { "not empty" });
+
+    // Embedded newline splits the output into two lines.
+    io::println("one\ntwo");
+}

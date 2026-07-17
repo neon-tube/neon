@@ -1,0 +1,36 @@
+// A catch body is an ordinary expression, so it may itself throw — translating
+// one error kind into another. `main` catches the translated error, proving both
+// catches ran and that the second saw the *new* error, not the original.
+
+use std::io;
+use std::string;
+
+record LowError { msg: str }
+record HighError { msg: str }
+
+impl Error for LowError {
+    fn message(error: LowError) -> str { error.msg }
+}
+
+impl Error for HighError {
+    fn message(error: HighError) -> str { error.msg }
+}
+
+fn low() throws LowError -> i64 {
+    throw LowError { msg: "cable unplugged" }
+}
+
+fn high() throws HighError -> i64 {
+    try low() catch (e) {
+        io::println("translating");
+        throw HighError { msg: string::concat("wrapped: ", message(e)) }
+    }
+}
+
+fn main() {
+    let v = try high() catch (e) {
+        io::println(message(e));
+        -1
+    };
+    io::println(string::int_to_str(v));
+}

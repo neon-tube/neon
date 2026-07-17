@@ -1,0 +1,17 @@
+//@ compile-fail
+//@ error-contains: mu type
+//
+// A plain `type` alias is NOT recursive. One that names itself is an error
+// pointing at the `mu type` binder — recursion is declared, not inferred, so an
+// accidental self-reference from a typo is a plain error rather than silently
+// becoming a recursive type.
+
+use std::io;
+
+type Tree = :leaf | List[Tree]
+
+fn f(v: Tree) -> i64 { 0 }
+
+fn main() {
+    io::println("unreachable");
+}

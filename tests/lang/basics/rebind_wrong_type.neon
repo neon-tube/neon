@@ -1,0 +1,15 @@
+//@ compile-fail
+
+// A rebind must produce a value of the binding's type. Rebinding is not
+// shadowing: `x = "text"` on an `i64` binding is an error, and the fix is a new
+// binding (`let x = "text"`), which is a different name-to-value mapping rather
+// than a change of what `x` means retroactively.
+
+use std::io;
+use std::string;
+
+fn main() {
+    let x: i64 = 1;
+    x = "text";
+    io::println(string::int_to_str(x));
+}

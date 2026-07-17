@@ -1,0 +1,20 @@
+//@ compile-fail
+//@ error-contains: name
+//
+// The other half of tasks/207: nominal records satisfy a structural parameter by
+// WIDTH, so a record that lacks the required field is still rejected. Structural
+// acceptance is a subtyping rule, not a hole in the type system.
+
+use std::io;
+
+record Anon {
+    age: i64,
+}
+
+fn name_only(item: { name: str }) -> str {
+    item.name
+}
+
+fn main() {
+    io::println(name_only(Anon { age: 30 }));
+}

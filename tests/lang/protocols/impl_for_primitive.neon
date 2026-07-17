@@ -1,0 +1,29 @@
+// A protocol may be implemented for a primitive, a newtype, or a stdlib type —
+// impls are not restricted to records. Dispatch picks the impl from the
+// receiver's static type, so a newtype gets its OWN impl rather than the one
+// for its representation.
+
+use std::io;
+use std::string;
+
+protocol Describe for T { fn describe(v: T) -> str }
+
+newtype Meter = i64
+
+impl Describe for i64 { fn describe(v: i64) -> str { string::int_to_str(v) } }
+impl Describe for bool { fn describe(v: bool) -> str { if v { "yes" } else { "no" } } }
+impl Describe for str { fn describe(v: str) -> str { v } }
+impl Describe for Meter {
+    fn describe(v: Meter) -> str { string::concat(string::int_to_str(v as i64), "m") }
+}
+
+fn show[T](v: T) -> str where T: Describe { describe(v) }
+
+fn main() {
+    io::println(describe(42));
+    io::println(describe(true));
+    io::println(describe("hi"));
+    io::println(describe(5 as Meter));
+    io::println(show(7));
+    io::println(show(5 as Meter));
+}

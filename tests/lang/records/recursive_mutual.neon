@@ -1,0 +1,51 @@
+// Two records that refer to each other, with the forward reference resolved
+// regardless of declaration order: `Branch` names `Tree` before `Tree` exists.
+
+use std::io;
+use std::string;
+
+record Branch {
+    left: Tree,
+    right: Tree,
+}
+
+record Leaf {
+    value: i64,
+}
+
+type Tree = Branch | Leaf
+
+fn total(t: Tree) -> i64 {
+    if t is Leaf {
+        let l = t as Leaf;
+        l.value
+    } else {
+        let b = t as Branch;
+        total(b.left) + total(b.right)
+    }
+}
+
+fn depth(t: Tree) -> i64 {
+    if t is Leaf {
+        1
+    } else {
+        let b = t as Branch;
+        let dl = depth(b.left);
+        let dr = depth(b.right);
+        if dl > dr { 1 + dl } else { 1 + dr }
+    }
+}
+
+fn main() {
+    let t = Branch {
+        left: Leaf { value: 1 },
+        right: Branch {
+            left: Leaf { value: 2 },
+            right: Leaf { value: 3 },
+        },
+    };
+
+    io::println(string::int_to_str(total(t)));
+    io::println(string::int_to_str(depth(t)));
+    io::println(string::int_to_str(total(Leaf { value: 9 })));
+}

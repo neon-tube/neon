@@ -1,0 +1,37 @@
+// A rebind writes through to the scope that *defined* the name. `x = 1` inside
+// a nested block is not a new binding shadowing the outer one — it repoints the
+// outer one, and the change outlives the block.
+//
+// This is what makes loop accumulators work (task 601), so it is pinned here on
+// plain blocks, where no loop machinery can be blamed for the result.
+
+use std::io;
+use std::string;
+
+fn show(v: i64) { io::println(string::int_to_str(v)); }
+
+fn main() {
+    let x = 1;
+    {
+        x = 2;
+        show(x);
+    };
+    show(x);
+
+    // Two levels down, still the same binding.
+    let acc = 0;
+    {
+        acc = acc + 10;
+        {
+            acc = acc + 100;
+        };
+    };
+    show(acc);
+
+    // An `if` branch is a block too.
+    let n = 0;
+    if true {
+        n = 5;
+    }
+    show(n);
+}

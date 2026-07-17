@@ -1,0 +1,30 @@
+// A closure captures the free names of its body from the enclosing scope. The
+// captured value is usable exactly like a local: read it, compute with it, of
+// any type.
+
+use std::io;
+use std::string;
+
+fn apply(x: i64, f: (i64) -> i64) -> i64 { f(x) }
+
+record Config { factor: i64, label: str }
+
+fn main() {
+    let factor: i64 = 3;
+    let scale = (x: i64) => x * factor;
+    io::println(string::int_to_str(scale(5)));
+    io::println(string::int_to_str(apply(7, scale)));
+
+    // Several captures, and a captured record.
+    let cfg = Config { factor: 10, label: "n=" };
+    let offset = 1;
+    let describe = (x: i64) => string::concat(cfg.label, string::int_to_str(x * cfg.factor + offset));
+    io::println(describe(2));
+
+    // A capture of a captured value: closures nest.
+    let outer = (x: i64) => {
+        let inner = (y: i64) => y + factor;
+        inner(x) * 2
+    };
+    io::println(string::int_to_str(outer(1)));
+}

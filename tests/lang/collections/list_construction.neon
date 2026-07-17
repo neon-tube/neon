@@ -1,0 +1,35 @@
+// The three ways to make a List[T] and their lengths: a literal, `list::new()`,
+// and pushes onto either. There is one list type — `List[T]` — and these all
+// produce it.
+//
+// The annotation on a literal is load-bearing: an unannotated `[1, 2, 3]` would
+// infer its element type as the literal union `1 | 2 | 3`. `list::new()` binds
+// its `T` from the annotation, since `T` appears only in its return type.
+
+use std::io;
+use std::string;
+use std::collections::list;
+
+fn main() {
+    let literal: List[i64] = [1, 2, 3];
+    io::println(string::int_to_str(list::len(literal)));
+
+    let empty: List[i64] = [];
+    io::println(string::int_to_str(list::len(empty)));
+
+    let made: List[i64] = list::new();
+    io::println(string::int_to_str(list::len(made)));
+
+    let built = list::push(list::push(made, 7), 8);
+    io::println(string::int_to_str(list::len(built)));
+    io::println(string::int_to_str(built[0]));
+    io::println(string::int_to_str(built[1]));
+
+    // Element type is not restricted to primitives.
+    let strs: List[str] = ["a", "b"];
+    io::println(strs[1]);
+
+    let joined = list::concat(literal, built);
+    io::println(string::int_to_str(list::len(joined)));
+    io::println(string::int_to_str(joined[3]));
+}

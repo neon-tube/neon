@@ -1,0 +1,38 @@
+// `break` and `continue` bind to the innermost enclosing loop. There are no
+// loop labels in Neon, so leaving an outer loop from inside an inner one is
+// done with a flag or a `return`.
+
+use std::io;
+use std::string;
+
+fn show(v: i64) { io::println(string::int_to_str(v)); }
+
+fn main() {
+    // The inner `break` ends the inner loop only; the outer one keeps going.
+    for i in [1, 2, 3] {
+        for j in [10, 20, 30] {
+            if j > 10 { break; }
+            show(i * 100 + j);
+        }
+    }
+
+    // The inner `continue` skips an inner iteration only.
+    let count = 0;
+    for i in [1, 2] {
+        for j in [1, 2, 3] {
+            if j == 2 { continue; }
+            count = count + 1;
+        }
+    }
+    show(count);
+
+    // Mixed nesting: a `while` inside a `for`.
+    for i in [2, 3] {
+        let k = 0;
+        while true {
+            k = k + 1;
+            if k == i { break; }
+        }
+        show(k);
+    }
+}

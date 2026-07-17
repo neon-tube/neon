@@ -1,0 +1,27 @@
+// `T | null` is the option type — a union like any other, with `null` as its own
+// singleton type. The payload is unreachable until the null half is ruled out,
+// and `null` is only assignable where the union admits it.
+
+use std::io;
+use std::string;
+
+fn describe(v: str | null) -> str {
+    if v is null { "none" } else { string::concat("some: ", v as str) }
+}
+
+fn add_one(v: i64 | null) -> i64 {
+    if v is null { -1 } else { (v as i64) + 1 }
+}
+
+fn main() {
+    io::println(describe("hi"));
+    io::println(describe(null));
+    io::println(string::int_to_str(add_one(41)));
+    io::println(string::int_to_str(add_one(null)));
+
+    // A nullable binding is rebindable across both halves.
+    let x: i64 | null = null;
+    io::println(string::int_to_str(add_one(x)));
+    x = 1;
+    io::println(string::int_to_str(add_one(x)));
+}

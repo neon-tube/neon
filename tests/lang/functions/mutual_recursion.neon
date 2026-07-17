@@ -1,0 +1,20 @@
+// Two functions calling each other. Names at module scope are visible to the
+// whole module regardless of declaration order, so `is_even` may call `is_odd`
+// before it is declared — no forward declaration.
+
+use std::io;
+
+fn is_even(n: i64) -> bool {
+    if n == 0 { true } else { is_odd(n - 1) }
+}
+
+fn is_odd(n: i64) -> bool {
+    if n == 0 { false } else { is_even(n - 1) }
+}
+
+fn main() {
+    io::println(if is_even(10) { "even" } else { "odd" });
+    io::println(if is_even(7) { "even" } else { "odd" });
+    io::println(if is_odd(7) { "odd" } else { "even" });
+    io::println(if is_even(0) { "even" } else { "odd" });
+}

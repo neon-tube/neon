@@ -1,0 +1,43 @@
+// `break` leaves a `while` immediately; `continue` jumps to the next condition
+// test. Neither re-runs anything the body already did — which is why the
+// increment must come before the `continue`, exactly as in the sugar `while`
+// expands to.
+
+use std::io;
+use std::string;
+
+fn show(v: i64) { io::println(string::int_to_str(v)); }
+
+fn main() {
+    // `break`: stop at the first multiple of 7.
+    let i = 1;
+    while i < 100 {
+        if i % 7 == 0 {
+            break;
+        }
+        i = i + 1;
+    }
+    show(i);
+
+    // `continue`: sum the odd numbers below 10, skipping the even ones. The
+    // increment precedes the `continue`, or the loop would never terminate.
+    let n = 0;
+    let sum = 0;
+    while n < 10 {
+        n = n + 1;
+        if n % 2 == 0 {
+            continue;
+        }
+        sum = sum + n;
+    }
+    show(sum);
+    show(n);
+
+    // `break` out of a `while true` — the condition is not the only way out.
+    let k = 0;
+    while true {
+        k = k + 1;
+        if k == 4 { break; }
+    }
+    show(k);
+}

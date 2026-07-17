@@ -1,0 +1,49 @@
+// `map::iter` returns a closure yielding `(K, V) | null`; `null` means
+// exhausted. Every entry is visited exactly once.
+//
+// Map iteration order is UNSPECIFIED — it follows the trie, not insertion. So
+// this golden asserts only order-independent facts: the number of entries, the
+// sum of the values, and a per-key lookup. A test that printed entries in
+// iteration order would be pinning an implementation detail, not the language.
+
+use std::io;
+use std::string;
+use std::collections::list;
+use std::collections::map;
+
+fn main() {
+    let m: Map[str, i64] = map::set(map::set(map::set(map::new(), "a", 1), "b", 2), "c", 3);
+
+    let next = map::iter(m);
+    let count = 0;
+    let sum = 0;
+    let key_bytes = 0;
+    loop {
+        match next() {
+            is null => break,
+            entry => {
+                let (k, v) = entry;
+                count = count + 1;
+                sum = sum + v;
+                key_bytes = key_bytes + string::len(k);
+                // Every key the iterator hands back is really in the map, with
+                // the value it handed back.
+                if (try? map::get(m, k) orelse -1) != v {
+                    io::println("MISMATCH");
+                }
+            },
+        };
+    };
+
+    io::println(string::concat("count: ", string::int_to_str(count)));
+    io::println(string::concat("sum: ", string::int_to_str(sum)));
+    io::println(string::concat("key bytes: ", string::int_to_str(key_bytes)));
+    io::println(string::concat("keys: ", string::int_to_str(list::len(map::keys(m)))));
+
+    let empty: Map[str, i64] = map::new();
+    let none = map::iter(empty);
+    match none() {
+        is null => io::println("empty: null immediately"),
+        entry => io::println("empty: yielded something"),
+    };
+}

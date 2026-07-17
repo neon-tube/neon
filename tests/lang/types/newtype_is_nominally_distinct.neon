@@ -1,0 +1,27 @@
+// A newtype is a fresh nominal type over an existing representation. `as`
+// converts in either direction; the two directions are the only bridge, and the
+// newtype is storable anywhere its representation is.
+
+use std::io;
+use std::string;
+
+newtype Meter = f64
+newtype Second = f64
+
+record Trip { label: str, distance: Meter, duration: Second }
+
+fn speed(t: Trip) -> f64 {
+    (t.distance as f64) / (t.duration as f64)
+}
+
+fn main() {
+    let d = 100.0 as Meter;
+    let s = 10.0 as Second;
+
+    io::println(string::float_to_str(d as f64));
+
+    let t = Trip { label: "sprint", distance: d, duration: s };
+    io::println(t.label);
+    io::println(string::float_to_str(speed(t)));
+    io::println(string::float_to_str(t.distance as f64));
+}

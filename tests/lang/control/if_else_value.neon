@@ -1,0 +1,35 @@
+// `if`/`else` is an expression: it yields the value of the branch it took, and
+// that value can initialize a binding, be an argument, or be a return value.
+// `else if` chains pick exactly one branch.
+
+use std::io;
+use std::string;
+
+fn grade(score: i64) -> str {
+    if score >= 90 { "A" } else if score >= 80 { "B" } else { "C" }
+}
+
+fn main() {
+    let n = 3;
+
+    // Let initializer.
+    let label = if n > 2 { "big" } else { "small" };
+    io::println(label);
+
+    // Argument position.
+    io::println(string::int_to_str(if n > 2 { 1 } else { 2 }));
+
+    // Return position, through a chain.
+    io::println(grade(95));
+    io::println(grade(85));
+    io::println(grade(10));
+
+    // The branches are blocks, so each may do work before its tail value.
+    let v = if n > 2 {
+        let doubled = n * 2;
+        doubled + 1
+    } else {
+        0
+    };
+    io::println(string::int_to_str(v));
+}

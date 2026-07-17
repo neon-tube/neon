@@ -1,0 +1,19 @@
+// i64::MIN is writable as a literal. `-9223372036854775808` is unary minus
+// applied to a magnitude that does not itself fit in an i64, so a lexer that
+// parses the magnitude alone rejects the file — and then the only way to name
+// the smallest i64 is the arithmetic dance on the second line.
+
+use std::io;
+use std::string;
+
+fn show(v: i64) { io::println(string::int_to_str(v)); }
+
+fn main() {
+    show(-9223372036854775808);
+    show(-9223372036854775807 - 1);
+
+    // It is an ordinary i64 once written: it compares and round-trips.
+    show(if -9223372036854775808 == -9223372036854775807 - 1 { 1 } else { 0 });
+    show(-9223372036854775808 + 1);
+    show(9223372036854775807);
+}

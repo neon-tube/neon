@@ -1,0 +1,17 @@
+//@ compile-fail
+//@ error-contains: timeout
+//
+// A record literal has each field exactly once. A repeated field is a compile
+// error, not a last-wins overwrite.
+//
+// This is a rule about record literals, not about calls — the literal below
+// would be just as wrong bound to a `let`. It is stated at a call site only
+// because that is where an options record usually appears.
+
+use std::io;
+
+fn connect(host: str, opts: { timeout: i64 | null }) -> str { host }
+
+fn main() {
+    io::println(connect("a", { timeout: 5, timeout: 10 }));
+}

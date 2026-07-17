@@ -1,0 +1,55 @@
+// Records are immutable values whatever their size. The compiler is free to
+// keep a small record by value on the stack and a large one behind a heap
+// pointer, but that choice is INVISIBLE: both pass to functions, come back as
+// returns, nest inside other records, and read their fields identically.
+//
+// `Small` is two words; `Big` is deliberately over any small-record threshold.
+
+use std::io;
+use std::string;
+
+record Small {
+    x: i64,
+    y: i64,
+}
+
+record Big {
+    a: i64,
+    b: i64,
+    c: i64,
+    d: i64,
+    e: str,
+    f: str,
+}
+
+record Holder {
+    small: Small,
+    big: Big,
+}
+
+fn shift_small(s: Small) -> Small {
+    Small { x: s.x + 1, y: s.y + 1 }
+}
+
+fn relabel(b: Big) -> Big {
+    Big { a: b.a, b: b.b, c: b.c, d: b.d, e: "new", f: b.f }
+}
+
+fn main() {
+    let s = Small { x: 1, y: 2 };
+    let s2 = shift_small(s);
+    // The original is untouched: a record is a value, and `shift_small`
+    // constructed a new one.
+    io::println(string::int_to_str(s.x + s.y));
+    io::println(string::int_to_str(s2.x + s2.y));
+
+    let b = Big { a: 1, b: 2, c: 3, d: 4, e: "old", f: "tail" };
+    let b2 = relabel(b);
+    io::println(b.e);
+    io::println(b2.e);
+    io::println(b2.f);
+
+    let h = Holder { small: s2, big: b2 };
+    io::println(string::int_to_str(h.small.x));
+    io::println(string::int_to_str(h.big.a + h.big.d));
+}

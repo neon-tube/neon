@@ -1,0 +1,6 @@
+outer: [1 2]
+outer2: [1 2] [1 2 3]
+2
+3
+outer: [1 2]
+replaced: [1 2 3]

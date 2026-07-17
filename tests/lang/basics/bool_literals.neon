@@ -1,0 +1,26 @@
+// `true` and `false` are the only two `bool` values. They are keywords, not
+// names, and there is no coercion in either direction: an i64 is never a bool
+// and a bool is never an i64.
+
+use std::io;
+
+fn show(v: bool) { io::println(if v { "true" } else { "false" }); }
+
+fn identity(b: bool) -> bool { b }
+
+fn main() {
+    show(true);
+    show(false);
+    show(!true);
+    show(!false);
+
+    let t: bool = true;
+    let f = false;
+    show(t);
+    show(f);
+    show(identity(true));
+
+    show(true == true);
+    show(true == false);
+    show(true != false);
+}

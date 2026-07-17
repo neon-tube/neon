@@ -1,0 +1,16 @@
+//@ compile-fail
+//@ error-contains: Display
+//
+// A `where` bound is checked at the CALL SITE against the type that pins the
+// parameter. `Plain` has no `Display` impl, so `show(Plain {})` is rejected —
+// the bound is a promise the caller makes, not a hint.
+
+use std::io;
+
+record Plain { n: i64 }
+
+fn show[T](v: T) -> str where T: Display { display(v) }
+
+fn main() {
+    io::println(show(Plain { n: 1 }));
+}

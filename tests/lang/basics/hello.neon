@@ -1,0 +1,8 @@
+// The smallest complete program: a `main`, an import, and one line of output.
+// If this fails, nothing else in the corpus means anything.
+
+use std::io;
+
+fn main() {
+    io::println("hello, world");
+}

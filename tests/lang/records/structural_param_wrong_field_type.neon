@@ -1,0 +1,19 @@
+//@ compile-fail
+//@ error-contains: name
+//
+// Width subtyping widens the FIELD SET, never a field's type. A record with a
+// `name` of the wrong type does not satisfy `{ name: str }`.
+
+use std::io;
+
+record Numbered {
+    name: i64,
+}
+
+fn name_only(item: { name: str }) -> str {
+    item.name
+}
+
+fn main() {
+    io::println(name_only(Numbered { name: 7 }));
+}

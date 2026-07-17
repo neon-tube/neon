@@ -1,0 +1,35 @@
+// A type alias introduces a NAME, not a type. Unlike a newtype, the alias and
+// its definition are the same type and interchange freely in both directions
+// with no cast. Aliases may name any type — a primitive, a union, a closure
+// type — and may chain.
+
+use std::io;
+use std::string;
+
+type Count = i64
+type Tally = Count
+type Mapper = (i64) -> i64
+type Maybe = i64 | null
+
+fn takes_count(c: Count) -> i64 { c }
+fn takes_i64(n: i64) -> i64 { n }
+fn apply(f: Mapper, n: Count) -> i64 { f(n) }
+fn unwrap(m: Maybe) -> i64 { if m is null { 0 } else { m as i64 } }
+
+fn main() {
+    let c: Count = 5;
+    // The alias flows in where the underlying type is expected...
+    io::println(string::int_to_str(takes_i64(c)));
+    // ...and a bare underlying value flows in where the alias is expected.
+    io::println(string::int_to_str(takes_count(7)));
+    // Chained aliases are the same type all the way down.
+    let t: Tally = c;
+    io::println(string::int_to_str(takes_i64(t)));
+    // An alias over a closure type is that closure type.
+    let double: Mapper = (x: i64) => x * 2;
+    io::println(string::int_to_str(apply(double, 4)));
+    io::println(string::int_to_str(apply((x: i64) => x + 1, 4)));
+    // An alias over a union is that union.
+    io::println(string::int_to_str(unwrap(3)));
+    io::println(string::int_to_str(unwrap(null)));
+}

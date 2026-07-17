@@ -1,0 +1,34 @@
+// `try? expr` softens: the result is `T | null`, the error becomes `null`, and
+// nothing propagates. The enclosing function needs no `throws` — `main` here
+// declares none.
+//
+// Both halves of the union are exercised, and the value half is matched out to
+// prove the success value survives the softening rather than being erased.
+
+use std::io;
+use std::string;
+
+record Boom { msg: str }
+
+impl Error for Boom {
+    fn message(error: Boom) -> str { error.msg }
+}
+
+fn maybe(fail: bool) throws Boom -> i64 {
+    if fail { throw Boom { msg: "no" } } else { 7 }
+}
+
+fn describe(v: i64 | null) -> str {
+    match v {
+        is null => "null",
+        n => string::int_to_str(n),
+    }
+}
+
+fn main() {
+    let ok: i64 | null = try? maybe(false);
+    io::println(describe(ok));
+
+    let bad: i64 | null = try? maybe(true);
+    io::println(describe(bad));
+}

@@ -1,0 +1,33 @@
+// A union of atom singletons is the closed enumeration: each atom is its own
+// type, so `:red | :green | :blue` is a union like any other. `is` narrows it,
+// and a match over every atom is exhaustive with no `_` arm — the union has no
+// other inhabitants.
+
+use std::io;
+
+type Color = :red | :green | :blue
+
+fn name(c: Color) -> str {
+    match c {
+        :red => "red",
+        :green => "green",
+        :blue => "blue",
+    }
+}
+
+fn is_warm(c: Color) -> bool {
+    if c is :red { true } else { false }
+}
+
+fn main() {
+    io::println(name(:red));
+    io::println(name(:green));
+    io::println(name(:blue));
+
+    io::println(if is_warm(:red) { "warm" } else { "cool" });
+    io::println(if is_warm(:blue) { "warm" } else { "cool" });
+
+    // A single atom is a subtype of any union that contains it.
+    let c: Color = :green;
+    io::println(name(c));
+}

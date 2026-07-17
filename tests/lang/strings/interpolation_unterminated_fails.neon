@@ -1,0 +1,13 @@
+//@ compile-fail
+//@ error-contains: unterminated
+//
+// An interpolation opened with `#{` and never closed is a lex error. This is the
+// ONLY way a brace can be an error now: a bare `{` needs no escape and cannot be
+// unterminated, because it is never an opener.
+
+use std::io;
+
+fn main() {
+    let n = 7;
+    io::println("value: #{n");
+}

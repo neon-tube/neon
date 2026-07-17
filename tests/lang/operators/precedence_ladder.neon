@@ -1,0 +1,33 @@
+// The cross-level rungs of the one precedence ladder, each pinned by a case
+// where the neighbouring grouping gives a different answer. Tightest last:
+//
+//     orelse  <  or  <  and  <  |>  <  == != < <= > >=  <  as  <  band bor bxor
+//             <  bsl bsr  <  + -  <  * / %  <  unary - ! bnot  <  call/index
+//
+// Neon deliberately puts the bitwise and shift operators ABOVE comparison —
+// C's famous mistake, not repeated: `a band b == c` is `(a band b) == c`.
+
+use std::io;
+use std::string;
+
+fn show(v: i64) { io::println(string::int_to_str(v)); }
+fn showb(v: bool) { io::println(if v { "true" } else { "false" }); }
+
+fn main() {
+    // `* / %` over `+ -`.
+    show(1 + 2 * 3);
+    // `+ -` over `bsl bsr`: 1 bsl (2 + 3) == 32, not (1 bsl 2) + 3 == 7.
+    show(1 bsl 2 + 3);
+    // `bsl bsr` over `band bor bxor`: (1 bsl 3) bor 1 == 9.
+    show(1 bsl 3 bor 1);
+    // `band bor bxor` over comparison: (12 band 10) == 8 is true.
+    showb(12 band 10 == 8);
+    // Comparison over `and`/`or`: (1 < 2) and (3 < 4).
+    showb(1 < 2 and 3 < 4);
+    // `and` over `or`.
+    showb(false and false or true);
+    // `or` over `orelse`: on the right of `orelse`, `false or true` groups first.
+    showb(nothing() orelse false or true);
+}
+
+fn nothing() -> bool | null { null }

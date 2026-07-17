@@ -1,0 +1,29 @@
+// Two records implementing one protocol. Each call dispatches on the receiver's
+// type — directly, through a generic function with a `where` bound, and through
+// a union where the receiver's type is only known after narrowing.
+
+use std::io;
+use std::string;
+
+protocol Shape for T { fn area(s: T) -> i64 }
+
+record Sq { side: i64 }
+record Rect { w: i64, h: i64 }
+
+impl Shape for Sq { fn area(s: Sq) -> i64 { s.side * s.side } }
+impl Shape for Rect { fn area(s: Rect) -> i64 { s.w * s.h } }
+
+fn describe[T](v: T) -> str where T: Shape { string::int_to_str(area(v)) }
+
+fn area_of(s: Sq | Rect) -> i64 {
+    if s is Sq { area(s as Sq) } else { area(s as Rect) }
+}
+
+fn main() {
+    io::println(string::int_to_str(area(Sq { side: 3 })));
+    io::println(string::int_to_str(area(Rect { w: 2, h: 5 })));
+    io::println(describe(Sq { side: 4 }));
+    io::println(describe(Rect { w: 3, h: 3 }));
+    io::println(string::int_to_str(area_of(Sq { side: 2 })));
+    io::println(string::int_to_str(area_of(Rect { w: 4, h: 5 })));
+}

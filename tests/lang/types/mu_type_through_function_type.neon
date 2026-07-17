@@ -1,0 +1,17 @@
+//@ compile-fail
+//@ error-contains: function
+//
+// Recursion through a function type is not supported (v1). A closure type is a
+// constructor, so `(i64) -> F` is contractive in the abstract, but the solver
+// does not handle recursive occurrences in parameter or return position — that
+// restriction is declared rather than discovered at the crash.
+
+use std::io;
+
+mu type F = null | (i64) -> F
+
+fn f(v: F) -> i64 { 0 }
+
+fn main() {
+    io::println("unreachable");
+}

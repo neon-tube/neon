@@ -1,0 +1,42 @@
+// `any` is a real, spellable type — the top type, and the ONLY place erasure is
+// legitimate (tasks/406). Anything is assignable to it; nothing is readable out
+// of it without an `is` test and an `as` cast. Erasure is a thing the user asks
+// for, never a fallback the compiler reaches for.
+
+use std::io;
+use std::string;
+
+record Point { x: i64, y: i64 }
+
+fn describe(v: any) -> str {
+    if v is i64 {
+        string::concat("i64 ", string::int_to_str(v as i64))
+    } else if v is str {
+        string::concat("str ", v as str)
+    } else if v is bool {
+        if v as bool { "bool true" } else { "bool false" }
+    } else if v is Point {
+        let p = v as Point;
+        string::concat("Point ", string::int_to_str(p.x + p.y))
+    } else if v is null {
+        "null"
+    } else {
+        "other"
+    }
+}
+
+fn identity(v: any) -> any { v }
+
+fn main() {
+    io::println(describe(42));
+    io::println(describe("hi"));
+    io::println(describe(true));
+    io::println(describe(Point { x: 1, y: 2 }));
+    io::println(describe(null));
+    io::println(describe(3.5));
+
+    // `any` round-trips through a binding and a function without losing the
+    // dynamic type.
+    let boxed: any = Point { x: 10, y: 20 };
+    io::println(describe(identity(boxed)));
+}

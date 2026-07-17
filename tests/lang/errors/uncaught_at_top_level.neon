@@ -1,0 +1,32 @@
+//@ exit: 101
+//
+// An error that reaches the top of `main` uncaught terminates the process: the
+// error's type and its `Error::message()` go to stderr and the exit code is
+// non-zero. Never exit 0.
+//
+// `main` declares no `throws` here and does not need to: it carries an implicit
+// `throws Error`, so the bare `try go()` below compiles with no ceremony and the
+// Boom propagates straight out. This is the one place an error may go unhandled
+// — `main` is the catch-all and the runtime is its `catch`.
+//
+// The print before the throw is what makes this non-vacuous — the golden proves
+// the program ran and then died, rather than failing at startup and printing
+// nothing.
+
+use std::io;
+
+record Boom { msg: str }
+
+impl Error for Boom {
+    fn message(error: Boom) -> str { error.msg }
+}
+
+fn go() throws Boom -> i64 {
+    throw Boom { msg: "unhandled" }
+}
+
+fn main() {
+    io::println("before");
+    let v = try go();
+    io::println("after");
+}

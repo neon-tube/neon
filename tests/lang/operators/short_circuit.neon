@@ -1,0 +1,32 @@
+// `and` and `or` short-circuit: the right operand is evaluated only when the
+// left one does not already decide the result. `note` prints when it runs, so
+// every "eval" line in the golden is an operand that had to run, and every one
+// missing is an operand that had to not.
+
+use std::io;
+
+fn note(label: str, v: bool) -> bool {
+    io::println("eval " + label);
+    v
+}
+
+fn show(label: str, v: bool) {
+    io::println(label + (if v { "t" } else { "f" }));
+}
+
+fn main() {
+    // Left does not decide: the right operand runs and supplies the result.
+    show("true and rhs: ", true and note("A", false));
+    show("false or rhs: ", false or note("B", true));
+
+    // Left decides: the right operand must not run. No "eval" line follows.
+    show("false and skipped: ", false and note("X", true));
+    show("true or skipped: ", true or note("Y", false));
+
+    // Chains stop at the first operand that decides.
+    show("chain and: ", note("C", true) and note("D", false) and note("E", true));
+    show("chain or: ", note("F", false) or note("G", true) or note("H", true));
+
+    // A skipped operand skips everything nested inside it.
+    show("nested skip: ", false and (note("I", true) or note("J", true)));
+}

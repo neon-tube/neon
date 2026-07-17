@@ -1,0 +1,19 @@
+//@ compile-fail
+//@ error-contains: main
+//@ error-contains: throws
+//
+// Even RESTATING `main`'s true clause is rejected. `fn main() throws Error` says
+// exactly what `main` already implicitly says, and it is still an error.
+//
+// That is the whole point of this file, and why it is separate from
+// main_throws_clause_is_fixed.neon: the rule is not "the clause must be
+// compatible with Error" — a compatibility rule would accept this line. The rule
+// is that `main` has no throws clause to write. Not narrowed, not widened, not
+// restated.
+
+use std::io;
+
+fn main() throws Error -> i64 {
+    io::println("unreachable");
+    0
+}

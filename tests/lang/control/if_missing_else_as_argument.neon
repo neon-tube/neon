@@ -1,0 +1,13 @@
+//@ compile-fail
+//@ error-contains: needs an `else` branch
+
+// Argument position consumes the `if`'s value, so the `else` is required there
+// too. Value position is not only `let`.
+
+use std::io;
+use std::string;
+
+fn main() {
+    let c = true;
+    io::println(string::int_to_str(if c { 1 }));
+}

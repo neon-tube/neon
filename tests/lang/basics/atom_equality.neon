@@ -1,0 +1,26 @@
+// Two atoms are equal when they are the same atom, and that is the whole of
+// their behaviour: `:ok == :ok` is true, `:ok == :err` is false. Equality is by
+// name, not by where the atom was written, so two `:ok`s from different places
+// are the same value.
+
+use std::io;
+
+fn show(v: bool) { io::println(if v { "true" } else { "false" }); }
+
+fn main() {
+    show(:ok == :ok);
+    show(:ok == :err);
+    show(:ok != :err);
+    show(:ok != :ok);
+
+    // Same atom, written in two places, reached through two bindings.
+    let a = :pending;
+    let b = :pending;
+    show(a == b);
+
+    let c = :done;
+    show(a == c);
+
+    // Equality is by name only: nothing about an atom varies.
+    show(:already_exists == :already_exists);
+}

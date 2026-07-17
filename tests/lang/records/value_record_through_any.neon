@@ -1,0 +1,39 @@
+// A small (value-tier) record survives a round trip through `any`. Whatever
+// representation a small record has on the stack, boxing it must preserve its
+// identity so `is` recognises it and `as` recovers every field — and the boxed
+// copy must outlive the frame that created it.
+
+use std::io;
+use std::string;
+
+record Point {
+    x: i64,
+    y: i64,
+}
+
+record Tag {
+    label: str,
+}
+
+fn box_it(x: i64, y: i64) -> any {
+    Point { x: x, y: y }
+}
+
+fn describe(v: any) -> str {
+    if v is Point {
+        let p = v as Point;
+        string::concat("point ", string::int_to_str(p.x + p.y))
+    } else if v is Tag {
+        let t = v as Tag;
+        string::concat("tag ", t.label)
+    } else {
+        "other"
+    }
+}
+
+fn main() {
+    io::println(describe(Point { x: 3, y: 4 }));
+    io::println(describe(Tag { label: "hi" }));
+    io::println(describe(box_it(10, 20)));
+    io::println(describe(42));
+}

@@ -1,0 +1,27 @@
+// A `where` clause constrains a type parameter to a protocol, which is what
+// makes the parameter usable for anything: inside the body, `T`'s protocol
+// methods are callable, and each call site dispatches to the impl for the type
+// that pinned `T`. Two parameters take two bounds, independently pinned.
+
+use std::io;
+use std::string;
+
+record X { n: i64 }
+record Y { n: i64 }
+
+impl Display for X { fn display(value: X) -> str { "X" } }
+impl Display for Y { fn display(value: Y) -> str { "Y" } }
+
+fn show[T](v: T) -> str where T: Display { display(v) }
+
+fn pair[A, B](a: A, b: B) -> str where A: Display, B: Display {
+    string::concat(display(a), string::concat("/", display(b)))
+}
+
+fn main() {
+    io::println(show(X { n: 1 }));
+    io::println(show(Y { n: 2 }));
+    io::println(pair(X { n: 1 }, Y { n: 2 }));
+    io::println(pair(Y { n: 1 }, X { n: 2 }));
+    io::println(pair(X { n: 1 }, X { n: 2 }));
+}

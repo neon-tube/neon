@@ -1,0 +1,36 @@
+// The optional-argument rule composes with tasks/207: a NOMINAL record
+// satisfies a structural opts type. The nullable-field rule and width
+// subtyping apply to it the same way — extra fields are ignored, and a field
+// the nominal record does not declare reads as null.
+
+use std::io;
+use std::string;
+
+type Opts = { timeout: i64 | null, retries: i64 | null }
+
+// A named preset: it declares only one of the two option fields, plus a field
+// the opts type never heard of.
+record Preset {
+    timeout: i64,
+    label: str,
+}
+
+record FullPreset {
+    timeout: i64 | null,
+    retries: i64 | null,
+}
+
+fn show(o: Opts) -> str {
+    let t = o.timeout orelse 30;
+    let r = o.retries orelse 1;
+    string::concat(string::int_to_str(t), string::concat("/", string::int_to_str(r)))
+}
+
+fn main() {
+    // `timeout: i64` is a subtype of `timeout: i64 | null`; `retries` is absent;
+    // `label` is extra. All three rules at once.
+    io::println(show(Preset { timeout: 5, label: "fast" }));
+
+    io::println(show(FullPreset { timeout: 5, retries: 3 }));
+    io::println(show(FullPreset { timeout: null, retries: null }));
+}

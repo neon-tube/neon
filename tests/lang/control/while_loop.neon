@@ -1,0 +1,28 @@
+// `while cond { ... }` runs its body while `cond` is true, re-testing before
+// each iteration. The condition is a bool — there is no truthiness — and the
+// counter is an ordinary rebindable `let`, since a rebind writes through to the
+// scope that defined the name.
+
+use std::io;
+use std::string;
+
+fn show(v: i64) { io::println(string::int_to_str(v)); }
+
+fn main() {
+    let i = 3;
+    while i > 0 {
+        show(i);
+        i = i - 1;
+    }
+    // The loop exits with the condition false, and `i` survives it.
+    show(i);
+
+    // Accumulating across iterations.
+    let n = 1;
+    let sum = 0;
+    while n <= 5 {
+        sum = sum + n;
+        n = n + 1;
+    }
+    show(sum);
+}

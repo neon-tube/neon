@@ -1,0 +1,27 @@
+// The most common union-typed field: `T | null`. Both inhabitants are storable,
+// and the field must be narrowed before the payload is readable.
+
+use std::io;
+use std::string;
+
+record Address { city: str }
+
+record Contact {
+    name: str,
+    address: Address | null,
+}
+
+fn city_of(c: Contact) -> str {
+    let a = c.address;
+    if a is null {
+        "unknown"
+    } else {
+        let addr = a as Address;
+        addr.city
+    }
+}
+
+fn main() {
+    io::println(city_of(Contact { name: "Alice", address: Address { city: "Oslo" } }));
+    io::println(city_of(Contact { name: "Bob", address: null }));
+}

@@ -1,0 +1,24 @@
+//@ compile-fail
+//@ error-contains: Blue
+//
+// A union is sealed at its declaration: a record that is not one of its members
+// is rejected, and no third party can extend it. Declaring `type Weird = Red |
+// Blue` elsewhere does not add `Blue` to `Color`. This is what makes a union of
+// records a usable sum type — tasks/610.
+
+use std::io;
+
+record Red {}
+record Green {}
+record Blue {}
+
+type Color = Red | Green
+type Weird = Red | Blue
+
+fn name(c: Color) -> str {
+    if c is Red { "red" } else { "green" }
+}
+
+fn main() {
+    io::println(name(Blue {}));
+}

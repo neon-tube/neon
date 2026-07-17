@@ -1,0 +1,17 @@
+//@ compile-fail
+//@ error-contains: negation
+//
+// A recursive occurrence may not appear under a negation. `!T` inside `T`'s own
+// definition has no least fixed point — the equation flips its own answer — so
+// the binder rejects it rather than handing the solver something it cannot
+// settle.
+
+use std::io;
+
+mu type T = i64 | List[!T]
+
+fn f(v: T) -> i64 { 0 }
+
+fn main() {
+    io::println("unreachable");
+}

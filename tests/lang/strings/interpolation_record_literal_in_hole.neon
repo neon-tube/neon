@@ -1,0 +1,51 @@
+// The reason interpolation is `#{` and not `{`: a record literal inside a hole.
+//
+// With `{expr}`, `"{Point { x: 1, y: 2 }}"` is genuinely ambiguous — the lexer
+// cannot tell the interpolation's closing brace from the record's, and `{{`/`}}`
+// escapes collide with both. With `#{`, the opener is unambiguous and the hole
+// is closed by BRACE MATCHING, so a record literal nests inside it like any
+// other expression.
+//
+// This file is the ambiguity, spelled out and made to work.
+
+use std::io;
+use std::string;
+
+record Point { x: i64, y: i64 }
+
+impl Display for Point {
+    fn display(value: Point) -> str {
+        string::concat("(", string::concat(string::int_to_str(value.x),
+            string::concat(", ", string::concat(string::int_to_str(value.y), ")"))))
+    }
+}
+
+record Box { at: Point, label: str }
+
+impl Display for Box {
+    fn display(value: Box) -> str {
+        string::concat(value.label, string::concat("@", display(value.at)))
+    }
+}
+
+fn main() {
+    // The motivating case: a record literal constructed inside the hole.
+    io::println("#{Point { x: 1, y: 2 }}");
+
+    // Braces nested two deep inside one hole. (`lbl` is a binding, not a nested
+    // string literal: whether a `"` may appear inside a hole is a separate
+    // question, and this file is about brace matching.)
+    let lbl = "b";
+    io::println("#{Box { at: Point { x: 3, y: 4 }, label: lbl }}");
+
+    // A hole holding braces, immediately followed by a LITERAL brace. Brace
+    // matching closes the hole at the right one; the trailing `}` is text.
+    io::println("#{Point { x: 5, y: 6 }}}");
+
+    // Literal braces on both sides of a hole that itself contains braces.
+    io::println("{#{Point { x: 7, y: 8 }}}");
+
+    // A record literal in a hole beside an ordinary interpolation.
+    let n = 9;
+    io::println("#{Point { x: n, y: n }} and #{n}");
+}

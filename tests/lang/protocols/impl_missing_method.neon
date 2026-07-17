@@ -1,0 +1,22 @@
+//@ compile-fail
+//@ error-contains: greeting
+//
+// An impl must supply every method the protocol declares. A partial impl is
+// rejected at the impl, not at the first call that reaches the hole.
+
+use std::io;
+
+protocol Named for T {
+    fn name(value: T) -> str
+    fn greeting(value: T) -> str
+}
+
+record Dog { tag: str }
+
+impl Named for Dog {
+    fn name(value: Dog) -> str { value.tag }
+}
+
+fn main() {
+    io::println(name(Dog { tag: "Rex" }));
+}

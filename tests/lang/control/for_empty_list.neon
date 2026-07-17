@@ -1,0 +1,23 @@
+// `for` over an empty list runs the body zero times and is not an error. The
+// source is evaluated once, whether or not it turns out to be empty.
+
+use std::io;
+use std::string;
+
+fn source() -> List[i64] {
+    io::println("source");
+    []
+}
+
+fn main() {
+    let empty: List[i64] = [];
+    for n in empty {
+        io::println("never");
+    }
+
+    for n in source() {
+        io::println("never");
+    }
+
+    io::println("done");
+}

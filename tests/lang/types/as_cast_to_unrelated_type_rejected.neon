@@ -1,0 +1,19 @@
+//@ compile-fail
+//@ error-contains: Cat
+//
+// `as` is not a reinterpretation. Casting to a type that is not reachable from
+// the source type — `Dog` is not a `Cat`, and their union is empty — is
+// rejected at compile time rather than deferred to a runtime check that could
+// never succeed.
+
+use std::io;
+use std::string;
+
+record Dog { legs: i64 }
+record Cat { lives: i64 }
+
+fn main() {
+    let d = Dog { legs: 4 };
+    let c = d as Cat;
+    io::println(string::int_to_str(c.lives));
+}

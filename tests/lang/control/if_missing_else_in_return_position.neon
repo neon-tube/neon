@@ -1,0 +1,14 @@
+//@ compile-fail
+//@ error-contains: needs an `else` branch
+
+// The tail expression of a value-returning function is consumed — it is the
+// return value — so an else-less `if` there is an error. The `-> null` case is
+// the exception, and it is `if_missing_else_null_return.neon`.
+
+fn pick(c: bool) -> i64 {
+    if c { 1 }
+}
+
+fn main() {
+    pick(true);
+}

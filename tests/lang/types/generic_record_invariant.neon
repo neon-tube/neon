@@ -1,0 +1,23 @@
+//@ compile-fail
+//@ error-contains: Box
+//
+// Invariance is not a List quirk: it holds for every generic nominal type. A
+// `Box[Circle]` is not a `Box[Shape]` even though `Circle <: Shape`. Widening a
+// value is not the same as widening a container of it.
+
+use std::io;
+
+record Circle { radius: i64 }
+record Square { side: i64 }
+type Shape = Circle | Square
+
+record Box[T] { item: T }
+
+fn name(b: Box[Shape]) -> str {
+    if b.item is Circle { "circle" } else { "square" }
+}
+
+fn main() {
+    let c: Box[Circle] = Box { item: Circle { radius: 1 } };
+    io::println(name(c));
+}

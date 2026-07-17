@@ -1,0 +1,26 @@
+// `x |> f(rest)` is call syntax, not method syntax: the receiver becomes the
+// FIRST argument of the named function, and the remaining arguments follow.
+// This is what Neon has instead of dot-calls, and it chains left to right.
+
+use std::io;
+use std::string;
+
+fn double(n: i64) -> i64 { n * 2 }
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn label(n: i64, prefix: str) -> str {
+    string::concat(prefix, string::int_to_str(n))
+}
+
+fn main() {
+    // Equivalent to double(5).
+    io::println(string::int_to_str(5 |> double()));
+
+    // The receiver is the first argument: add(5, 3).
+    io::println(string::int_to_str(5 |> add(3)));
+
+    // Chained: label(double(add(5, 3)), "n=").
+    io::println(5 |> add(3) |> double() |> label("n="));
+
+    // A pipe is an expression, usable as an argument.
+    io::println(string::int_to_str(add(1, 2 |> double())));
+}

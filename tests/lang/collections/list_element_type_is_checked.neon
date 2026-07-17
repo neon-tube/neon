@@ -1,0 +1,15 @@
+//@ compile-fail
+//@ error-contains: str
+//
+// `List[T]` is homogeneous: pushing a value that is not a `T` is a compile
+// error. The list's element type comes from its annotation and is not widened
+// to a union to accommodate the push.
+
+use std::io;
+use std::collections::list;
+
+fn main() {
+    let xs: List[i64] = [1, 2, 3];
+    let bad = list::push(xs, "four");
+    io::println("unreachable");
+}

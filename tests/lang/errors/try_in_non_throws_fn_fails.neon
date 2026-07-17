@@ -1,0 +1,30 @@
+//@ compile-fail
+//@ error-contains: throws
+//
+// `try expr` propagates, so the enclosing function must declare a compatible
+// `throws`. `caller` declares none, so the propagation has nowhere to go and
+// this must not compile. (`try?` or `try!` are the forms that need no `throws`.)
+//
+// The enclosing function is deliberately NOT `main`: `main` carries an implicit
+// `throws Error` and so can never fail this way. This rule only bites in
+// non-`main` functions — see main_implicitly_throws_error.neon for the contrast.
+
+use std::io;
+
+record Boom { msg: str }
+
+impl Error for Boom {
+    fn message(error: Boom) -> str { error.msg }
+}
+
+fn go() throws Boom -> i64 {
+    throw Boom { msg: "no" }
+}
+
+fn caller() -> i64 {
+    try go()
+}
+
+fn main() {
+    io::println("unreachable");
+}

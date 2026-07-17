@@ -1,0 +1,68 @@
+// THE reason `get` throws instead of returning `T | null`.
+//
+// Neon's unions flatten and are idempotent. For `List[i64 | null]`, a
+// null-returning `get` would have type
+//
+//     get(xs, i) : (i64 | null) | null  ==  i64 | null
+//
+// and "absent" would be the SAME VALUE as "present, holds null". The signature
+// could not express the difference, so no caller could recover it. Rust escapes
+// this by nesting (`Option<Option<T>>`); Neon's unions collapse, so there is no
+// nesting to escape into.
+//
+// `throws` puts absence on a separate channel — the error channel — which does
+// not participate in the union. Nothing collapses:
+//
+//     fn get[T](xs: List[T], i: i64) throws IndexError -> T
+//     get(xs, i) : i64 | null, plus a throw   <- two distinct outcomes
+//
+// This file proves the distinction survives on the exact type where `T | null`
+// loses it: a list whose elements are themselves nullable.
+
+use std::io;
+use std::string;
+use std::collections::list;
+
+// Three outcomes, not two. A `T | null` get could only ever produce two.
+fn probe(xs: List[i64 | null], i: i64) -> str {
+    try {
+        let v = list::get(xs, i);
+        // Reached only when the index really is in range. `v` is `i64 | null`,
+        // and THIS null means "the element is null", not "no element".
+        if v is null { "present: null" } else { string::concat("present: ", string::int_to_str(v as i64)) }
+    } catch (e) {
+        // Reached only when the index is out of range. Absence arrived here,
+        // on the error channel — it could not have arrived as a value.
+        "absent"
+    }
+}
+
+fn main() {
+    // Element 0 IS null. Element 1 is a real value. Index 2 does not exist.
+    let xs: List[i64 | null] = [null, 7];
+
+    io::println(probe(xs, 0));   // present, holds null
+    io::println(probe(xs, 1));   // present, holds 7
+    io::println(probe(xs, 2));   // absent
+    io::println(probe(xs, -1));  // absent
+
+    // The two lines that a `T | null` get would have made identical:
+    io::println(string::concat("elem 0 vs elem 2: ",
+        if probe(xs, 0) == probe(xs, 2) { "INDISTINGUISHABLE" } else { "distinct" }));
+
+    // `try?` deliberately collapses the distinction — and that is the point: the
+    // ambiguity reappears ONLY where the programmer opts into it. Asking for
+    // `T | null` on a nullable element type is asking for the two nulls to merge,
+    // and here they do: both index 0 (present, null) and index 2 (absent) give
+    // null, and `orelse` cannot tell them apart.
+    let a: i64 | null = try? list::get(xs, 0);
+    let b: i64 | null = try? list::get(xs, 2);
+    io::println(string::concat("softened 0: ", if a is null { "null" } else { "value" }));
+    io::println(string::concat("softened 2: ", if b is null { "null" } else { "value" }));
+    io::println(string::int_to_str((try? list::get(xs, 0)) orelse -1));
+    io::println(string::int_to_str((try? list::get(xs, 2)) orelse -1));
+
+    // An empty list of nullable elements: every index is absent, none is null.
+    let empty: List[i64 | null] = [];
+    io::println(probe(empty, 0));
+}

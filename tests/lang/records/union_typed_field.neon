@@ -1,0 +1,31 @@
+// A field whose type is a union of two records. The value stored keeps its own
+// identity: reading the field back and testing it with `is` must report the
+// record that was put in, for BOTH variants — not whichever variant the union
+// lists first.
+
+use std::io;
+use std::string;
+
+record Dog { legs: i64 }
+record Cat { lives: i64 }
+
+record Pet {
+    name: str,
+    animal: Dog | Cat,
+}
+
+fn describe(p: Pet) -> str {
+    let a = p.animal;
+    if a is Dog {
+        let d = a as Dog;
+        string::concat(p.name, string::concat(" has legs: ", string::int_to_str(d.legs)))
+    } else {
+        let c = a as Cat;
+        string::concat(p.name, string::concat(" has lives: ", string::int_to_str(c.lives)))
+    }
+}
+
+fn main() {
+    io::println(describe(Pet { name: "Rex", animal: Dog { legs: 4 } }));
+    io::println(describe(Pet { name: "Tom", animal: Cat { lives: 9 } }));
+}

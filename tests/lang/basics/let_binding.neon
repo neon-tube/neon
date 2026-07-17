@@ -1,0 +1,29 @@
+// `let` introduces a binding. The type annotation is optional — without one the
+// type is inferred from the initializer; with one the initializer must be a
+// subtype of it. A binding is in scope from its `let` to the end of the block.
+
+use std::io;
+use std::string;
+
+fn main() {
+    let inferred = 7;
+    let annotated: i64 = 7;
+    io::println(string::int_to_str(inferred + annotated));
+
+    let s = "text";
+    io::println(s);
+
+    // The annotation may be wider than the initializer.
+    let maybe: i64 | null = 3;
+    io::println(if maybe is null { "absent" } else { "present" });
+
+    // Later bindings can read earlier ones.
+    let a = 2;
+    let b = a * 3;
+    let c = a + b;
+    io::println(string::int_to_str(c));
+
+    // A binding is initialized once, from left to right: `b` above saw `a`'s
+    // value at that point, and nothing re-runs.
+    io::println(string::int_to_str(b));
+}

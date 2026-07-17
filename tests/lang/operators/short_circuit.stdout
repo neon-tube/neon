@@ -1,0 +1,13 @@
+eval A
+true and rhs: f
+eval B
+false or rhs: t
+false and skipped: f
+true or skipped: t
+eval C
+eval D
+chain and: f
+eval F
+eval G
+chain or: t
+nested skip: f

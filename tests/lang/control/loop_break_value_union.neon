@@ -1,0 +1,33 @@
+// A `loop`'s type is the union of its break values' types, and a valueless
+// `break` contributes `null`. So a loop that either finds something or gives up
+// has type `T | null` without anyone writing a sentinel.
+
+use std::io;
+use std::string;
+
+// Finds the first multiple of `d` below the limit, or gives up.
+fn find_multiple(d: i64, limit: i64) -> i64 | null {
+    let i = 1;
+    loop {
+        if i >= limit { break; }
+        if i % d == 0 { break i; }
+        i = i + 1;
+    }
+}
+
+fn show(label: str, v: i64 | null) {
+    io::println(label + (if v is null { "none" } else { string::int_to_str(v orelse 0) }));
+}
+
+fn main() {
+    show("found: ", find_multiple(7, 100));
+    show("gave up: ", find_multiple(101, 100));
+
+    // The same shape inline: `break 1` and a bare `break` make `i64 | null`.
+    let c = 0;
+    let v = loop {
+        c = c + 1;
+        if c == 2 { break; }
+    };
+    io::println(if v is null { "no value: null" } else { "no value: something" });
+}

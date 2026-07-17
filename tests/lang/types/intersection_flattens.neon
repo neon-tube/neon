@@ -1,0 +1,28 @@
+// `{ a: i64 } & { b: str }` is ONE record type with both fields — an
+// intersection of record types flattens rather than nesting. A value satisfies
+// it exactly when it satisfies every operand, and both fields are readable
+// through the intersection.
+
+use std::io;
+use std::string;
+
+type Both = { a: i64 } & { b: str }
+
+fn show(v: Both) -> str {
+    string::concat(v.b, string::int_to_str(v.a))
+}
+
+record Rec { a: i64, b: str, extra: bool }
+
+fn main() {
+    io::println(show({ a: 1, b: "x" }));
+
+    // Width subtyping still applies to the flattened result.
+    io::println(show({ a: 2, b: "y", extra: true }));
+
+    // And a nominal record with both fields satisfies it — tasks/207.
+    io::println(show(Rec { a: 3, b: "z", extra: false }));
+
+    let inline: { a: i64 } & { b: str } = { a: 4, b: "w" };
+    io::println(show(inline));
+}

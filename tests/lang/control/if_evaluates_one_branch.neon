@@ -1,0 +1,23 @@
+// Exactly one branch of an `if` runs. The condition is evaluated once, the
+// taken branch's effects happen, and the other branch's do not — so `if` is not
+// a function of two already-computed values.
+
+use std::io;
+
+fn note(label: str, v: i64) -> i64 {
+    io::println("eval " + label);
+    v
+}
+
+fn cond(v: bool) -> bool {
+    io::println("cond");
+    v
+}
+
+fn main() {
+    let a = if cond(true) { note("then", 1) } else { note("else", 2) };
+    io::println("a=" + (if a == 1 { "then" } else { "else" }));
+
+    let b = if cond(false) { note("then", 1) } else { note("else", 2) };
+    io::println("b=" + (if b == 1 { "then" } else { "else" }));
+}

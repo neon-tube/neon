@@ -1,0 +1,25 @@
+// The forms an `f64` literal can take. A float literal needs digits on both
+// sides of the `.`, and may carry an exponent and `_` separators.
+//
+// Only three values are printed, all exactly representable in binary so the
+// golden cannot depend on rounding; the exponent and separator forms are pinned
+// by comparison instead, because how a float is *rendered* is a stdlib question
+// and not what this file is about.
+
+use std::io;
+use std::string;
+
+fn show(v: f64) { io::println(string::float_to_str(v)); }
+fn shows(v: bool) { io::println(if v { "true" } else { "false" }); }
+
+fn main() {
+    show(1.5);
+    show(0.5);
+    show(-2.25);
+
+    shows(1_000.5 == 1000.5);
+    shows(1e3 == 1000.0);
+    shows(1.5e2 == 150.0);
+    shows(2.5e-1 == 0.25);
+    shows(0.0 == -0.0);
+}

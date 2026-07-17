@@ -1,0 +1,30 @@
+//@ exit: 101
+//
+// `try! expr` asserts: on success it is a plain `T`, on error it panics. The
+// panic message names the error's type and its `Error::message()`, goes to
+// stderr, and the process exits non-zero.
+//
+// The successful `try!` runs first and prints, so the golden proves the program
+// got past the assert that should hold before dying on the one that should not.
+// "unreachable" must never appear.
+
+use std::io;
+use std::string;
+
+record Boom { msg: str }
+
+impl Error for Boom {
+    fn message(error: Boom) -> str { error.msg }
+}
+
+fn maybe(fail: bool) throws Boom -> i64 {
+    if fail { throw Boom { msg: "detonated" } } else { 7 }
+}
+
+fn main() {
+    let ok: i64 = try! maybe(false);
+    io::println(string::int_to_str(ok));
+
+    let dead: i64 = try! maybe(true);
+    io::println("unreachable");
+}

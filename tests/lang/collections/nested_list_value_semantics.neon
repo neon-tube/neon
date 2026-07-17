@@ -1,0 +1,48 @@
+// Value semantics compose. A `List[List[i64]]` holds lists by value: pushing
+// onto an inner list produces a new inner list and leaves both the original
+// inner list and the outer list that contains it untouched.
+//
+// Replacing an element of the outer list with `list::set` likewise yields a new
+// outer list — the old outer list still refers to the old inner list. Sharing
+// the structure underneath is fine; observing the sharing is not.
+
+use std::io;
+use std::string;
+use std::collections::list;
+
+fn dump(label: str, rows: List[List[i64]]) {
+    let parts: List[str] = [];
+    let i = 0;
+    loop {
+        if i >= list::len(rows) { break; }
+        let row = rows[i];
+        let j = 0;
+        let cells: List[str] = [];
+        loop {
+            if j >= list::len(row) { break; }
+            cells = list::push(cells, string::int_to_str(row[j]));
+            j = j + 1;
+        };
+        parts = list::push(parts, string::concat("[", string::concat(string::join(cells, " "), "]")));
+        i = i + 1;
+    };
+    io::println(string::concat(label, string::join(parts, " ")));
+}
+
+fn main() {
+    let inner: List[i64] = [1, 2];
+    let outer: List[List[i64]] = [inner];
+
+    let grown = list::push(inner, 3);
+    dump("outer: ", outer);
+    dump("outer2: ", list::push(outer, grown));
+
+    // inner itself is unchanged by the push that produced `grown`.
+    io::println(string::int_to_str(list::len(inner)));
+    io::println(string::int_to_str(list::len(grown)));
+
+    // set on the outer list leaves the old outer list pointing at the old row.
+    let replaced = list::set(outer, 0, grown);
+    dump("outer: ", outer);
+    dump("replaced: ", replaced);
+}

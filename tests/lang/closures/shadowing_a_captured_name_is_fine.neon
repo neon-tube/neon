@@ -1,0 +1,35 @@
+// Shadowing is not rebinding. `let n = ...` inside a closure body introduces a
+// BRAND-NEW binding that happens to reuse the name; it does not write to the
+// captured one, so it is legal where a rebind is an error (tasks/601, rule 4).
+// The enclosing binding is untouched, and the capture keeps its value.
+
+use std::io;
+use std::string;
+
+fn main() {
+    let n = 1;
+
+    let f = () => {
+        // A new binding, shadowing the captured `n` from here on.
+        let n = 10;
+        n + 1
+    };
+
+    let g = () => {
+        // The shadow may even have a different type from the captured name.
+        let n = "shadowed";
+        n
+    };
+
+    io::println(string::int_to_str(f()));
+    io::println(g());
+    // Neither closure touched the outer binding.
+    io::println(string::int_to_str(n));
+
+    // Shadowing in the enclosing scope is likewise a new binding; the closure
+    // that captured the old one is unaffected.
+    let h = () => string::int_to_str(n);
+    let n = 42;
+    io::println(h());
+    io::println(string::int_to_str(n));
+}

@@ -1,0 +1,24 @@
+//@ compile-fail
+//@ error-contains: cannot rebind 'count'
+//@ error-contains: captured from the enclosing scope
+//
+// The other half of sealed captures (tasks/601): a captured name is immutable
+// INSIDE the closure. There is no shared cell, so a rebind in the body could
+// only ever write to the closure's private copy — silently invisible to
+// everyone else. Rather than pretend, it is a compile error.
+//
+// The counter-with-a-closure idiom is therefore not expressible; fold or
+// recursion is.
+
+use std::io;
+use std::string;
+
+fn main() {
+    let count = 0;
+    let bump = () => {
+        count = count + 1;
+        count
+    };
+    io::println(string::int_to_str(bump()));
+    io::println(string::int_to_str(count));
+}

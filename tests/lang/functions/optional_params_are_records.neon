@@ -1,0 +1,53 @@
+// Optional parameters are an ordinary anonymous record. There is no keyword-list
+// syntax, no trailing `key: value` sugar, and no `=` defaults — the callee
+// declares a plain structural parameter and the caller passes a plain record
+// literal.
+//
+// Three ordinary rules do all the work, and none of them is about calls:
+//
+//   1. a MISSING field satisfies a NULLABLE field, so a subset record typechecks;
+//   2. a record's fields are named, so key order is irrelevant;
+//   3. `orelse` over a nullable field supplies the default, in the CALLEE.
+//
+// The accepted cost is visible on the last line: the no-options case must still
+// pass `{}`. The record is a real argument, so it cannot be omitted — omitting
+// it would BE a default argument.
+
+use std::io;
+use std::string;
+
+fn connect(host: str, opts: { timeout: i64 | null, retries: i64 | null }) -> str {
+    // The defaults live here, in the callee, as `orelse` over nullable fields.
+    let t = opts.timeout orelse 30;
+    let r = opts.retries orelse 1;
+    string::concat(host, string::concat(
+        string::concat(" t=", string::int_to_str(t)),
+        string::concat(" r=", string::int_to_str(r))))
+}
+
+fn main() {
+    // Every option present.
+    io::println(connect("a", { timeout: 5, retries: 3 }));
+
+    // Key ORDER does not matter: a record's fields are named, not positional.
+    io::println(connect("b", { retries: 3, timeout: 5 }));
+
+    // A subset: the missing field satisfies the nullable field, and `orelse`
+    // supplies the default in the callee.
+    io::println(connect("c", { timeout: 5 }));
+    io::println(connect("d", { retries: 3 }));
+
+    // No options at all: the empty record satisfies an all-nullable opts type.
+    // `{}` is required — there is no way to drop the argument.
+    io::println(connect("e", {}));
+
+    // An explicit null is the same thing as an absent field: both mean "no
+    // value", and `orelse` cannot tell them apart.
+    io::println(connect("f", { timeout: null, retries: null }));
+
+    // The record is an ordinary value, not call syntax: it can be built first
+    // and passed by name. (Annotated, so this pins the argument-passing rule and
+    // not a question about inferring an unannotated record literal's type.)
+    let opts: { timeout: i64 | null, retries: i64 | null } = { timeout: 5 };
+    io::println(connect("g", opts));
+}

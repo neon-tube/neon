@@ -1,0 +1,24 @@
+// Protocol resolution starts with a LEXICAL lookup: a local binding, a module
+// function, or an import shadows a protocol method of the same name. A protocol
+// method is what an unqualified call means only when nothing nearer does.
+// Qualifying reaches the protocol regardless.
+
+use std::io;
+use std::string;
+
+protocol Shape for T { fn area(s: T) -> i64 }
+
+record Sq { side: i64 }
+
+impl Shape for Sq { fn area(s: Sq) -> i64 { s.side * s.side } }
+
+// A module function with the protocol method's name.
+fn area(s: Sq) -> i64 { 0 - 1 }
+
+fn main() {
+    let sq = Sq { side: 3 };
+    // The module function wins the unqualified call.
+    io::println(string::int_to_str(area(sq)));
+    // The protocol is still reachable by name.
+    io::println(string::int_to_str(Shape::area(sq)));
+}

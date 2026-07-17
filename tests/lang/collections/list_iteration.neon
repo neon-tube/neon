@@ -1,0 +1,48 @@
+// Iterating a list, two ways, in order.
+//
+//   1. index + `xs[i]` in a `loop` — the loop stops at `len`, so every index is
+//      in range and the trap is never reached. This is exactly what `[]` is for:
+//      the code has already established that the element is there, so asserting
+//      presence costs nothing and reads as nothing.
+//   2. `list::iter`, which returns a closure yielding `T | null`: each call
+//      advances, and `null` means exhausted. `is null` is the loop's exit test.
+//      Here `null` means "no more elements" — an iterator's exhaustion signal,
+//      not a lookup's absence.
+//
+// Both must visit every element exactly once, front to back.
+
+use std::io;
+use std::string;
+use std::collections::list;
+
+fn main() {
+    let xs: List[i64] = [3, 1, 4];
+
+    let i = 0;
+    loop {
+        if i >= list::len(xs) { break; }
+        io::println(string::concat("by index: ", string::int_to_str(xs[i])));
+        i = i + 1;
+    };
+
+    let next = list::iter(xs);
+    let total = 0;
+    loop {
+        match next() {
+            is null => break,
+            v => {
+                io::println(string::concat("by iter: ", string::int_to_str(v)));
+                total = total + v;
+            },
+        };
+    };
+    io::println(string::concat("total: ", string::int_to_str(total)));
+
+    // An empty list yields nothing at all.
+    let nothing: List[i64] = [];
+    let none = list::iter(nothing);
+    match none() {
+        is null => io::println("empty: null immediately"),
+        v => io::println("empty: yielded something"),
+    };
+}

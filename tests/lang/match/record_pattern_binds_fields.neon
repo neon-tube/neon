@@ -1,0 +1,48 @@
+// A record pattern in a match arm binds the record's fields. `Pt { x, y }` is
+// shorthand for `Pt { x: x, y: y }`; `Pt { x: a, y: b }` renames.
+//
+// Patterns nest: a record inside a record binds through, and a field pattern may
+// be a literal, which makes the arm refutable and selects only matching records.
+
+use std::io;
+use std::string;
+
+record Pt { x: i64, y: i64 }
+record Line { from: Pt, to: Pt }
+
+fn sum(p: Pt) -> i64 {
+    match p {
+        Pt { x: a, y: b } => a + b,
+    }
+}
+
+fn shorthand(p: Pt) -> i64 {
+    match p {
+        Pt { x, y } => x * y,
+    }
+}
+
+fn axis(p: Pt) -> str {
+    match p {
+        Pt { x: 0, y: 0 } => "origin",
+        Pt { x: 0, y: n } => string::concat("on y at ", string::int_to_str(n)),
+        Pt { x: n, y: 0 } => string::concat("on x at ", string::int_to_str(n)),
+        _ => "off axis",
+    }
+}
+
+fn width(l: Line) -> i64 {
+    match l {
+        Line { from: Pt { x: x1, y: y1 }, to: Pt { x: x2, y: y2 } } => x2 - x1,
+    }
+}
+
+fn main() {
+    io::println(string::int_to_str(sum(Pt { x: 1, y: 2 })));
+    io::println(string::int_to_str(shorthand(Pt { x: 3, y: 4 })));
+    io::println(axis(Pt { x: 0, y: 0 }));
+    io::println(axis(Pt { x: 0, y: 5 }));
+    io::println(axis(Pt { x: 5, y: 0 }));
+    io::println(axis(Pt { x: 1, y: 1 }));
+    io::println(string::int_to_str(width(Line { from: Pt { x: 2, y: 0 }, to: Pt { x: 9, y: 0 } })));
+}

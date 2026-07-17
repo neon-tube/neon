@@ -1,0 +1,32 @@
+// A second `let` on the same name is a brand-new binding that shadows the first
+// from that point on — not a rebind, and not an error. The initializer is
+// evaluated against the *old* binding, so `let x = f(x)` reads the previous
+// value.
+
+use std::io;
+use std::string;
+
+fn show(v: i64) { io::println(string::int_to_str(v)); }
+
+fn main() {
+    let x = 1;
+    show(x);
+    let x = x + 10;
+    show(x);
+    let x = x * 2;
+    show(x);
+
+    // Shadowing and rebinding compose: the rebind hits the newest binding.
+    let y = 1;
+    let y = y + 1;
+    y = y + 1;
+    show(y);
+
+    // Shadowing a parameter is fine too.
+    show(twice(5));
+}
+
+fn twice(n: i64) -> i64 {
+    let n = n * 2;
+    n
+}

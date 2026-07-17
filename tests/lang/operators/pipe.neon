@@ -1,0 +1,22 @@
+// `x |> f(y)` is `f(x, y)`: the piped value is always the FIRST argument, and
+// the remaining arguments stay where they are written. This is how a receiver
+// reaches a function — Neon has no dot-call syntax.
+
+use std::io;
+use std::string;
+
+fn double(x: i64) -> i64 { x * 2 }
+fn add(x: i64, n: i64) -> i64 { x + n }
+fn between(x: i64, lo: i64, hi: i64) -> bool { x >= lo and x <= hi }
+
+fn main() {
+    io::println(string::int_to_str(5 |> double()));
+    io::println(string::int_to_str(5 |> add(3)));
+    io::println(if 5 |> between(1, 10) { "in" } else { "out" });
+
+    // The left operand can be any expression, not just a name.
+    io::println(string::int_to_str(2 + 3 |> double()));
+
+    // A qualified callee works the same way.
+    "piped" |> io::println();
+}

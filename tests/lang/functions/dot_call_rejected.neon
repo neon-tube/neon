@@ -1,0 +1,18 @@
+//@ compile-fail
+//@ error-contains: |>
+//
+// There is no method-call syntax in Neon. `x.f()` is field access followed by a
+// call, and `Point` has no field `double`, so it is an error — with a
+// diagnostic that points at the pipe form.
+
+use std::io;
+use std::string;
+
+record Point { x: i64, y: i64 }
+
+fn double(p: Point) -> i64 { p.x * 2 }
+
+fn main() {
+    let p = Point { x: 3, y: 4 };
+    io::println(string::int_to_str(p.double()));
+}

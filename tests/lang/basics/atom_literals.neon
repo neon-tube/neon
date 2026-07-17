@@ -1,0 +1,31 @@
+// An atom is a name used as a value: `:ok`, written with a leading colon. It
+// stands only for itself — an atom has no payload, no definition anywhere, and
+// no declaration needed before use. Writing `:ok` is all there is to it.
+//
+// The name follows the identifier rules: a letter or `_`, then letters, digits
+// or `_`. Case is significant and carried through.
+
+use std::io;
+
+fn show(v: bool) { io::println(if v { "true" } else { "false" }); }
+
+fn main() {
+    let simple = :ok;
+    let underscored = :my_atom;
+    let capitalized = :Atom123;
+    let leading_underscore = :_private;
+    let single = :a;
+
+    show(simple == :ok);
+    show(underscored == :my_atom);
+    show(capitalized == :Atom123);
+    show(leading_underscore == :_private);
+    show(single == :a);
+
+    // Case is part of the name: `:ok` and `:OK` are different atoms.
+    show(:ok == :OK);
+
+    // An atom is an ordinary value: bind it, read it back.
+    let status = :ok;
+    show(status == :ok);
+}

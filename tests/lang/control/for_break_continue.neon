@@ -1,0 +1,35 @@
+// `break` and `continue` work in `for` as they do in `while`: `break` abandons
+// the iteration entirely, `continue` moves to the next element.
+
+use std::io;
+use std::string;
+
+fn show(v: i64) { io::println(string::int_to_str(v)); }
+
+fn main() {
+    // `break`: stop at the first element over 2, without visiting the rest.
+    for n in [1, 2, 3, 4] {
+        if n > 2 {
+            break;
+        }
+        show(n);
+    }
+
+    // `continue`: skip the even elements.
+    for n in [1, 2, 3, 4, 5] {
+        if n % 2 == 0 {
+            continue;
+        }
+        show(n);
+    }
+
+    // `break` on a found element, reported through a rebind.
+    let found = -1;
+    for n in [4, 7, 9] {
+        if n % 7 == 0 {
+            found = n;
+            break;
+        }
+    }
+    show(found);
+}

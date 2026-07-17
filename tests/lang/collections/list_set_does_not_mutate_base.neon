@@ -1,0 +1,31 @@
+// `list::set` returns a new list with one element replaced. The list it was
+// given is unchanged, and two sets off one base do not alias each other.
+//
+// Same value-semantics property as push, at the other end of the API: an
+// in-place write is observable here as `base` changing under us.
+
+use std::io;
+use std::string;
+use std::collections::list;
+
+// Every index below is in range, so `[]` is the right tool: presence is already
+// established and there is nothing to handle.
+fn at(xs: List[i64], i: i64) -> str {
+    string::int_to_str(xs[i])
+}
+
+fn main() {
+    let base: List[i64] = [10, 20, 30];
+
+    let a = list::set(base, 1, 99);
+    let b = list::set(base, 1, 77);
+
+    io::println(at(base, 1));
+    io::println(at(a, 1));
+    io::println(at(b, 1));
+
+    // The untouched elements are shared but equal, and lengths never change.
+    io::println(at(a, 0));
+    io::println(at(a, 2));
+    io::println(string::int_to_str(list::len(a)));
+}

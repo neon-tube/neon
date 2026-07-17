@@ -1,0 +1,22 @@
+//@ compile-fail
+//@ error-contains: go
+//@ error-contains: Ambiguous
+//
+// When a type implements two protocols that each declare a method of the same
+// name and arity, the unqualified call has two candidates and neither wins.
+// That is an error, not a coin toss: dispatch is never resolved by declaration
+// order.
+
+use std::io;
+
+protocol A for T { fn go(v: T) -> str }
+protocol B for T { fn go(v: T) -> str }
+
+record R { x: i64 }
+
+impl A for R { fn go(v: R) -> str { "a" } }
+impl B for R { fn go(v: R) -> str { "b" } }
+
+fn main() {
+    io::println(go(R { x: 1 }));
+}

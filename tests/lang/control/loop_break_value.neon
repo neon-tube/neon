@@ -1,0 +1,38 @@
+// `break <value>` gives a `loop` a value, so a search reads as an expression
+// rather than as a flag plus a rebind: `let x = loop { ... break v; }`.
+
+use std::io;
+use std::string;
+
+fn show(v: i64) { io::println(string::int_to_str(v)); }
+
+fn main() {
+    // The first power of two over 100.
+    let n = 1;
+    let found = loop {
+        n = n * 2;
+        if n > 100 { break n; }
+    };
+    show(found);
+
+    // The value can be computed at the break.
+    let i = 0;
+    let doubled = loop {
+        i = i + 1;
+        if i == 5 { break i * 2; }
+    };
+    show(doubled);
+
+    // Several breaks of the same type: the one that runs decides the value.
+    let k = 0;
+    let which = loop {
+        k = k + 1;
+        if k == 2 { break 20; }
+        if k == 3 { break 30; }
+    };
+    show(which);
+
+    // A `loop` is an expression, so its value can be used in place. It sits low
+    // on the precedence ladder, hence the parentheses.
+    show((loop { break 7; }) + 1);
+}

@@ -1,0 +1,30 @@
+// `fn f[T](x: T) -> T` — an unconstrained type parameter. `T` is pinned at each
+// call site from the argument type, and the return type follows it. An
+// unconstrained `T` supports exactly the operations every type supports, which
+// is to say: being passed along.
+
+use std::io;
+use std::string;
+
+record Point { x: i64, y: i64 }
+
+fn identity[T](val: T) -> T { val }
+
+fn constant[T, U](kept: T, dropped: U) -> T { kept }
+
+fn main() {
+    io::println(string::int_to_str(identity(42)));
+    io::println(identity("hi"));
+    io::println(if identity(true) { "yes" } else { "no" });
+
+    // A record through a generic comes back as itself, fields intact.
+    let p = identity(Point { x: 1, y: 2 });
+    io::println(string::int_to_str(p.x + p.y));
+
+    // T is pinned per call, independently of the other parameters.
+    io::println(string::int_to_str(constant(7, "ignored")));
+    io::println(constant("kept", 9));
+
+    // Generic composed with itself.
+    io::println(string::int_to_str(identity(identity(5))));
+}

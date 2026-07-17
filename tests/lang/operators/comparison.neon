@@ -1,0 +1,27 @@
+// The six comparison operators. They yield `bool`, and they are not chainable:
+// each one takes two operands.
+
+use std::io;
+
+fn show(v: bool) { io::println(if v { "true" } else { "false" }); }
+
+fn main() {
+    show(1 < 2);
+    show(2 < 2);
+    show(1 <= 1);
+    show(3 > 2);
+    show(2 >= 3);
+    show(1 == 1);
+    show(1 != 1);
+    show(-1 < 0);
+
+    // Comparison is not chained: `(1 < 2) == true` is the grouping, and it is
+    // the same level, so it associates left.
+    show(1 < 2 == true);
+
+    show("abc" == "abc");
+    show("abc" == "abd");
+    show("abc" != "abd");
+    show(1.5 < 2.0);
+    show(true == true);
+}

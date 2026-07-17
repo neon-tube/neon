@@ -1,0 +1,81 @@
+// How you take a sum type apart, now that `enum` is gone.
+//
+// `Shape::Circle(r) => r * r * 3` has no union equivalent — binding patterns on
+// variants are the thing unions cost us. The compensation is destructuring:
+// record patterns in match arms, and destructuring `let` inside them. Both work
+// on ANY record, not just sum-type members, which is why they were taken as the
+// trade.
+//
+// Three ways to read the same sum type, in ascending order of how much they give
+// you. All three must agree.
+
+use std::io;
+use std::string;
+
+record Circle { r: i64 }
+record Rect { w: i64, h: i64 }
+
+type Shape = Circle | Rect
+
+// 1. `is` + narrowing: `s` is a Circle inside the arm, so `s.r` reads directly.
+//    Fine for one field; the field access repeats for more.
+fn area_is(s: Shape) -> i64 {
+    match s {
+        is Circle => s.r * s.r * 3,
+        is Rect => s.w * s.h,
+    }
+}
+
+// 2. `is` + destructuring let: the arm narrows, then one `let` names every field
+//    at once. This is the closest reading to what a variant binding gave you.
+fn area_let(s: Shape) -> i64 {
+    match s {
+        is Circle => {
+            let Circle { r } = s;
+            r * r * 3
+        },
+        is Rect => {
+            let Rect { w, h } = s;
+            w * h
+        },
+    }
+}
+
+// 3. Record patterns in the arm itself: the pattern both selects the member and
+//    binds its fields, so no `is` and no `let`. This is the short form, and it
+//    is still exhaustive over the union without a `_`.
+fn area_pattern(s: Shape) -> i64 {
+    match s {
+        Circle { r } => r * r * 3,
+        Rect { w, h } => w * h,
+    }
+}
+
+// Field patterns may rename, and may nest a literal to select a special case —
+// which makes the arm refutable, so it needs the fallthrough below it.
+fn describe(s: Shape) -> str {
+    match s {
+        Circle { r: 0 } => "degenerate circle",
+        Circle { r: radius } => string::concat("circle of radius ", string::int_to_str(radius)),
+        Rect { w: side, h: side2 } if side == side2 => string::concat("square of side ", string::int_to_str(side)),
+        Rect { w, h } => string::concat("rect ", string::concat(string::int_to_str(w), string::concat("x", string::int_to_str(h)))),
+    }
+}
+
+fn main() {
+    let c = Circle { r: 2 };
+    let r = Rect { w: 3, h: 4 };
+
+    io::println(string::int_to_str(area_is(c)));
+    io::println(string::int_to_str(area_let(c)));
+    io::println(string::int_to_str(area_pattern(c)));
+
+    io::println(string::int_to_str(area_is(r)));
+    io::println(string::int_to_str(area_let(r)));
+    io::println(string::int_to_str(area_pattern(r)));
+
+    io::println(describe(Circle { r: 0 }));
+    io::println(describe(c));
+    io::println(describe(Rect { w: 5, h: 5 }));
+    io::println(describe(r));
+}

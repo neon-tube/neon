@@ -1,0 +1,48 @@
+// An index outside the list makes `list::get` THROW, like a missing map key:
+//
+//     fn get[T](xs: List[T], i: i64) throws IndexError -> T
+//
+// It does not return a sentinel and does not read past the end. Negative indices
+// are out of range too.
+//
+// `get` and `[]` are NOT the same operation and this file only covers `get` —
+// the deliberate-handling path, where the caller says what an absent index
+// means. `xs[i]` asserts presence and traps instead; see
+// list_index_out_of_bounds_traps.neon.
+
+use std::io;
+use std::string;
+use std::collections::list;
+
+// `try?` collapses the error to null right here, so `show` itself throws
+// nothing and needs no `throws` clause.
+fn show(xs: List[i64], i: i64) -> str {
+    match try? list::get(xs, i) {
+        is null => "null",
+        v => string::int_to_str(v),
+    }
+}
+
+fn main() {
+    let xs: List[i64] = [10, 20, 30];
+
+    io::println(show(xs, 0));
+    io::println(show(xs, 2));
+    io::println(show(xs, 3));
+    io::println(show(xs, -1));
+    io::println(show(xs, 9999));
+
+    let empty: List[i64] = [];
+    io::println(show(empty, 0));
+
+    // The error is a real, catchable IndexError, not a bare null. The TYPE is
+    // the language's promise here; the message text is the stdlib's business.
+    try {
+        io::println(string::int_to_str(list::get(xs, 7)));
+    } catch (e) {
+        io::println(if e is IndexError { "caught: IndexError" } else { "caught: other" });
+    };
+
+    // In range, `get` just returns the element.
+    io::println(string::int_to_str(try? list::get(xs, 1) orelse -1));
+}

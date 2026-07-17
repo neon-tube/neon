@@ -1,0 +1,43 @@
+// The permissive half of the else rule: an `if` whose value nobody consumes
+// needs no `else`. Only value position requires one — see
+// `if_missing_else_is_an_error.neon` for the other half.
+//
+// An else-less `if` in statement position does not manufacture a `null`; it
+// simply produces nothing, so nothing is nullable that was not written nullable.
+
+use std::io;
+use std::string;
+
+fn classify(n: i64) -> str {
+    if n > 0 {
+        io::println("positive");
+    }
+    if n < 0 {
+        io::println("negative");
+    }
+    if n > 0 { "pos" } else { "non-pos" }
+}
+
+fn main() {
+    io::println(classify(3));
+    io::println(classify(-3));
+
+    // Nested else-less `if`s, all in statement position.
+    let n = 5;
+    if n > 0 {
+        if n > 4 {
+            io::println("big");
+        }
+        io::println("still positive");
+    }
+
+    // Rebinding from an else-less `if` — the way to "produce a value" without
+    // consuming the `if` itself.
+    let label = "small";
+    if n > 4 {
+        label = "large";
+    }
+    io::println(label);
+
+    io::println(string::int_to_str(n));
+}

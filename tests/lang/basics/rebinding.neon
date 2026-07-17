@@ -1,0 +1,30 @@
+// `let` bindings are rebindable — there is no `mut` keyword in Neon, and there
+// is nothing to opt into. `x = e` points the name `x` at a new value; it does
+// not mutate the old one. Values stay immutable, names do not.
+
+use std::io;
+use std::string;
+
+fn main() {
+    let x: i64 = 10;
+    x = x + 1;
+    x = x * 2;
+    io::println(string::int_to_str(x));
+
+    // Inference works the same way: no annotation, still rebindable.
+    let s = "a";
+    s = s + "b";
+    s = s + "c";
+    io::println(s);
+
+    // A rebind is a statement, and reads after it see the new value.
+    let n = 1;
+    io::println(string::int_to_str(n));
+    n = 2;
+    io::println(string::int_to_str(n));
+
+    // The right-hand side is evaluated before the name is repointed.
+    let y = 3;
+    y = y + y;
+    io::println(string::int_to_str(y));
+}

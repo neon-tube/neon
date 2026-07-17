@@ -1,0 +1,27 @@
+// A protocol declares methods over a type parameter; an impl supplies them for
+// one concrete type. The method is then called as a plain function with the
+// receiver as its first argument — there is no dot-call — and the impl is
+// selected from the receiver's type.
+
+use std::io;
+use std::string;
+
+protocol Named for T {
+    fn name(value: T) -> str
+    fn greeting(value: T) -> str
+}
+
+record Dog { tag: str }
+
+impl Named for Dog {
+    fn name(value: Dog) -> str { value.tag }
+    fn greeting(value: Dog) -> str { string::concat("woof, ", name(value)) }
+}
+
+fn main() {
+    let d = Dog { tag: "Rex" };
+    io::println(name(d));
+    io::println(greeting(d));
+    // The pipe form is the same call.
+    io::println(d |> name());
+}

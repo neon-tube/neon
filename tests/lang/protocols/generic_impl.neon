@@ -1,0 +1,34 @@
+// A protocol over a type CONSTRUCTOR — `protocol P for C[_]` — is implemented
+// once for a generic record and applies at every instantiation. The impl's
+// methods carry their own type parameters, which are pinned per call.
+
+use std::io;
+use std::string;
+
+record Box[T] { item: T, count: i64 }
+
+protocol Container for C[_] {
+    fn size[T](c: C[T]) -> i64
+    fn unwrap[T](c: C[T]) -> T
+}
+
+impl Container for Box {
+    fn size[T](c: Box[T]) -> i64 { c.count }
+    fn unwrap[T](c: Box[T]) -> T { c.item }
+}
+
+fn main() {
+    let ints = Box { item: 7, count: 1 };
+    let strs = Box { item: "hi", count: 2 };
+
+    io::println(string::int_to_str(size(ints)));
+    io::println(string::int_to_str(size(strs)));
+
+    // One impl, two instantiations: the method's own T follows the receiver.
+    io::println(string::int_to_str(unwrap(ints)));
+    io::println(unwrap(strs));
+
+    // Nested instantiation.
+    let boxed = Box { item: Box { item: 9, count: 1 }, count: 1 };
+    io::println(string::int_to_str(unwrap(unwrap(boxed))));
+}

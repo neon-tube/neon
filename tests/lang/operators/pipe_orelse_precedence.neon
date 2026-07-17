@@ -1,0 +1,29 @@
+// `orelse` is LOOSER than `|>`, so `a |> f() orelse b` is `(a |> f()) orelse b`
+// — the pipeline runs first and `orelse` supplies the default for its result.
+// The other grouping, `a |> (f() orelse b)`, would pipe into a default rather
+// than defaulting a piped result.
+//
+// It is the one rung of the ladder that used to disagree between the parser and
+// the formatter, which meant formatting could change what the program meant.
+
+use std::io;
+use std::string;
+
+fn half(x: i64) -> i64 | null {
+    if x % 2 == 0 { x / 2 } else { null }
+}
+
+fn show(label: str, v: i64) {
+    io::println(label + string::int_to_str(v));
+}
+
+fn main() {
+    show("even: ", 10 |> half() orelse -1);
+    show("odd: ", 7 |> half() orelse -1);
+
+    // The pipeline can be several stages long; `orelse` still applies to all of
+    // it, not to the last stage's callee.
+    show("chained: ", 7 |> double() |> half() orelse -1);
+}
+
+fn double(x: i64) -> i64 { x * 2 }

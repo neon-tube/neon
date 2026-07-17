@@ -1,0 +1,16 @@
+//@ exit: 101
+
+// `a % 0` traps exactly like `a / 0` — same rule, same exit code. `%` is a
+// division, and the divisor being zero is no more defined for the remainder than
+// for the quotient.
+
+use std::io;
+use std::string;
+
+fn id(x: i64) -> i64 { x }
+
+fn main() {
+    io::println("before");
+    io::println(string::int_to_str(1 % id(0)));
+    io::println("unreachable");
+}

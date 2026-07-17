@@ -1,0 +1,38 @@
+// The rule that makes optional arguments work: a MISSING field satisfies a
+// NULLABLE field. `{ timeout: 5 }` satisfies `{ timeout: i64 | null, retries:
+// i64 | null }` — an absent field reads as `null`, because `null` is exactly
+// "no value" and the field's type admits it.
+//
+// This is a typing rule about records, not a call-site special case: it holds
+// for bindings, parameters, and returns alike. Width subtyping says extra
+// fields are fine; this says absent nullable fields are fine too.
+
+use std::io;
+use std::string;
+
+type Opts = { timeout: i64 | null, retries: i64 | null }
+
+fn show(o: Opts) -> str {
+    let t = o.timeout orelse 30;
+    let r = o.retries orelse 1;
+    string::concat(string::int_to_str(t), string::concat("/", string::int_to_str(r)))
+}
+
+fn main() {
+    // Every field present.
+    io::println(show({ timeout: 5, retries: 3 }));
+    // One field absent — it reads as null, and `orelse` supplies the default.
+    io::println(show({ timeout: 5 }));
+    io::println(show({ retries: 3 }));
+    // Every field absent: the empty record satisfies an all-nullable type.
+    io::println(show({}));
+    // An explicit null is the same thing as an absent field.
+    io::println(show({ timeout: null, retries: 3 }));
+
+    // The rule is about types, not call sites: it holds on a binding too.
+    let o: Opts = { retries: 9 };
+    io::println(show(o));
+
+    // Reading an absent field yields null.
+    io::println(if o.timeout is null { "absent" } else { "present" });
+}

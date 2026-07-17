@@ -1,0 +1,56 @@
+// The motivating recursive type: JSON. A `mu type` may recurse through several
+// constructors at once — a List's element type and a Map's value type — and the
+// recursion may sit alongside non-recursive members in the same union.
+
+use std::io;
+use std::string;
+use std::collections::list;
+use std::collections::map;
+
+mu type Json = null | bool | f64 | str | List[Json] | Map[str, Json]
+
+fn kind(j: Json) -> str {
+    if j is null {
+        "null"
+    } else if j is bool {
+        "bool"
+    } else if j is f64 {
+        "number"
+    } else if j is str {
+        "string"
+    } else if j is List[Json] {
+        "array"
+    } else {
+        "object"
+    }
+}
+
+// Every leaf reachable from a Json value, counted recursively.
+fn leaves(j: Json) -> i64 {
+    if j is List[Json] {
+        fold(j as List[Json], 0, (acc: i64, x: Json) => acc + leaves(x))
+    } else if j is Map[str, Json] {
+        fold(map::values(j as Map[str, Json]), 0, (acc: i64, x: Json) => acc + leaves(x))
+    } else {
+        1
+    }
+}
+
+fn main() {
+    io::println(kind(null));
+    io::println(kind(true));
+    io::println(kind(1.5));
+    io::println(kind("s"));
+
+    let arr: Json = [null, true, 1.5];
+    io::println(kind(arr));
+    io::println(string::int_to_str(leaves(arr)));
+
+    // An array of arrays: the element type is Json, which includes List[Json].
+    let nested: Json = [[1.0, 2.0], ["a"]];
+    io::println(string::int_to_str(leaves(nested)));
+
+    let obj: Json = map::set(map::set(map::new[str, Json](), "a", 1.0), "b", arr);
+    io::println(kind(obj));
+    io::println(string::int_to_str(leaves(obj)));
+}

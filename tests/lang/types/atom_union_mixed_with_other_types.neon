@@ -1,0 +1,37 @@
+// Atom types union with non-atom types freely: `:ok | :err | str` is a
+// well-formed union of two singletons and a primitive. This is the idiomatic
+// tagged result — the atoms are the tags, the rest is payload — and `is`
+// discriminates the atom from the payload type.
+
+use std::io;
+use std::string;
+
+type Status = :ok | :err | str
+
+fn describe(s: Status) -> str {
+    if s is :ok {
+        "ok"
+    } else if s is :err {
+        "err"
+    } else {
+        string::concat("message: ", s as str)
+    }
+}
+
+// An atom unioned with a record and with null.
+record Payload { n: i64 }
+type Maybe = :none | Payload | null
+
+fn amount(m: Maybe) -> i64 {
+    if m is :none { -1 } else if m is null { -2 } else { (m as Payload).n }
+}
+
+fn main() {
+    io::println(describe(:ok));
+    io::println(describe(:err));
+    io::println(describe("boom"));
+
+    io::println(string::int_to_str(amount(:none)));
+    io::println(string::int_to_str(amount(null)));
+    io::println(string::int_to_str(amount(Payload { n: 7 })));
+}

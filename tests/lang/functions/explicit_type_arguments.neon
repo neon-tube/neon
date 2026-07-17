@@ -1,0 +1,34 @@
+// When the arguments do not pin a type parameter, the caller supplies it:
+// `f[T](args)`. Explicit type arguments are also allowed where inference would
+// have succeeded anyway, and they must agree with the arguments when both say
+// something.
+
+use std::io;
+use std::string;
+
+fn nothing[T]() -> T | null { null }
+
+fn identity[T](val: T) -> T { val }
+
+fn describe[T](v: T | null) -> str where T: Display {
+    if v is null { "none" } else { display(v as T) }
+}
+
+record X { n: i64 }
+impl Display for X { fn display(value: X) -> str { "X" } }
+
+fn main() {
+    // Nothing in the call pins T; the turbofish does.
+    let a: i64 | null = nothing[i64]();
+    io::println(if a is null { "none" } else { "some" });
+
+    let b: str | null = nothing[str]();
+    io::println(if b is null { "none" } else { "some" });
+
+    // Redundant but legal: the argument and the turbofish agree.
+    io::println(string::int_to_str(identity[i64](5)));
+    io::println(identity[str]("hi"));
+
+    io::println(describe[X](X { n: 1 }));
+    io::println(describe[X](null));
+}

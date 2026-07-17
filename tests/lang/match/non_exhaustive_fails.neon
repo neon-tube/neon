@@ -1,0 +1,23 @@
+//@ compile-fail
+//@ error-contains: Rect
+//
+// Exhaustiveness is checked. `Shape` is `Circle | Rect`, so a match with only an
+// `is Circle` arm and no `_` leaves Rect uncovered and must not compile. The
+// diagnostic names the member that is missing.
+
+use std::io;
+
+record Circle { r: i64 }
+record Rect { w: i64, h: i64 }
+
+type Shape = Circle | Rect
+
+fn name(s: Shape) -> str {
+    match s {
+        is Circle => "circle",
+    }
+}
+
+fn main() {
+    io::println(name(Circle { r: 1 }));
+}

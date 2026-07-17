@@ -1,0 +1,20 @@
+//@ compile-fail
+//@ error-contains: mutual
+//
+// A `mu type` binds ITSELF: only self-recursion is supported. Two aliases that
+// name each other form a cycle the binder does not describe, and it is a clear
+// error rather than a resolver hang.
+//
+// Note the workaround is records, which mutually recurse fine — see
+// records/recursive_mutual.neon.
+
+use std::io;
+
+mu type Even = null | List[Odd]
+mu type Odd = null | List[Even]
+
+fn f(v: Even) -> i64 { 0 }
+
+fn main() {
+    io::println("unreachable");
+}

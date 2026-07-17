@@ -1,0 +1,29 @@
+// `bsl` and `bsr` shift left and right. Both sit at one precedence level and
+// associate left. Shift amounts here are all in range; the masking rule for
+// out-of-range amounts is `integers/shift_mask.neon`.
+
+use std::io;
+use std::string;
+
+fn show(v: i64) { io::println(string::int_to_str(v)); }
+
+fn main() {
+    show(1 bsl 0);
+    show(1 bsl 1);
+    show(1 bsl 8);
+    show(3 bsl 4);
+
+    show(256 bsr 4);
+    show(1 bsr 1);
+    show(0 bsr 3);
+
+    // Left-associative: (1 bsl 4) bsl 4 == 1 bsl 8.
+    show(1 bsl 4 bsl 4);
+    show(1024 bsr 4 bsr 4);
+
+    // `bsr` on a negative value keeps the sign — it is an arithmetic shift, so
+    // it rounds toward negative infinity rather than toward zero.
+    show(-8 bsr 1);
+    show(-1 bsr 63);
+    show(-7 bsr 1);
+}

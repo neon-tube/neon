@@ -1,0 +1,36 @@
+// `and` binds tighter than `or`: `a or b and c` is `a or (b and c)`, as in every
+// other language (task 603).
+//
+// The two used to share one left-associative level, which made
+// `true or false and false` mean `(true or false) and false` — and the formatter
+// already assumed the standard grouping, so `neon fmt` could re-associate a
+// boolean expression into a different program.
+//
+// Every operand is a constant: only the grouping is under test here.
+
+use std::io;
+
+fn show(label: str, v: bool) {
+    io::println(if v { label } else { "!" });
+}
+
+fn main() {
+    // The cases where the two groupings disagree. Each prints "!" under the
+    // non-standard one.
+    //   true or (false and false) == true
+    show("or-and", true or false and false);
+    //   true or (true and false) == true
+    show("or-and-2", true or true and false);
+    //   (true and false) or true == true, with `and` on the left this time.
+    show("and-or", true and false or true);
+
+    // Parentheses still mean what they say: this one really is false.
+    show("paren", (true or false) and false);
+
+    // Chains of one operator bind left.
+    show("and-chain", true and true and true);
+    show("or-chain", false or false or true);
+
+    // Mixed chain: (true and false) or (false and true) or true.
+    show("mixed", true and false or false and true or true);
+}

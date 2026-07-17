@@ -1,0 +1,33 @@
+// Unions are not limited to records: any two types can be unioned, and `is`
+// discriminates the primitives too. Order in the union is irrelevant — it is a
+// set.
+
+use std::io;
+use std::string;
+
+type Scalar = i64 | str | bool
+
+fn show(v: Scalar) -> str {
+    if v is i64 {
+        string::int_to_str(v as i64)
+    } else if v is bool {
+        if v as bool { "true" } else { "false" }
+    } else {
+        v as str
+    }
+}
+
+// A union-typed binding accepts any member, and rebinding to a different
+// member of the same union is fine — the binding's type is the union.
+fn main() {
+    io::println(show(7));
+    io::println(show("hello"));
+    io::println(show(true));
+
+    let v: Scalar = 1;
+    io::println(show(v));
+    v = "two";
+    io::println(show(v));
+    v = false;
+    io::println(show(v));
+}

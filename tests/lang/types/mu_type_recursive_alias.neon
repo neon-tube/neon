@@ -1,0 +1,52 @@
+// `mu type` is the recursive type binder: the alias may name ITSELF on the
+// right-hand side, and the binder is what says so. Recursion is declared, never
+// inferred — a plain `type` that turns out to be recursive is an error
+// (see type_alias_recursive_rejected.neon).
+//
+// The owner's example: a tree of atoms, where every node is either the atom
+// `:ok` or a list of nodes.
+
+use std::io;
+use std::string;
+use std::collections::list;
+
+mu type A = :ok | List[A]
+
+fn count(a: A) -> i64 {
+    if a is :ok {
+        1
+    } else {
+        fold(a as List[A], 0, (acc: i64, x: A) => acc + count(x))
+    }
+}
+
+fn depth(a: A) -> i64 {
+    if a is :ok {
+        0
+    } else {
+        1 + fold(a as List[A], 0, (acc: i64, x: A) => {
+            let d = depth(x);
+            if d > acc { d } else { acc }
+        })
+    }
+}
+
+fn main() {
+    // The atom arm.
+    io::println(string::int_to_str(count(:ok)));
+    io::println(string::int_to_str(depth(:ok)));
+
+    // The recursive arm: a list of A, each of which is an A.
+    let flat: A = [:ok, :ok, :ok];
+    io::println(string::int_to_str(count(flat)));
+    io::println(string::int_to_str(depth(flat)));
+
+    // Nested to a second level — the recursion has no fixed depth.
+    let nested: A = [:ok, [:ok, [:ok, :ok]]];
+    io::println(string::int_to_str(count(nested)));
+    io::println(string::int_to_str(depth(nested)));
+
+    // The empty list is an A too.
+    let empty: A = [];
+    io::println(string::int_to_str(count(empty)));
+}

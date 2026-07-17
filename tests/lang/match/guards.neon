@@ -1,0 +1,50 @@
+// A guard is `pattern if condition`. The arm matches only when the pattern
+// matches AND the guard holds; when the guard fails, matching continues with the
+// following arms rather than the whole match failing.
+//
+// The arms below overlap deliberately: every input matches every `_` pattern, so
+// only the guards can pick between them, and only top-to-bottom order decides
+// which. If guards were dropped, the first arm would answer everything.
+
+use std::io;
+use std::string;
+
+fn classify(n: i64) -> str {
+    match n {
+        _ if n < 0 => "neg",
+        _ if n == 0 => "zero",
+        _ if n < 10 => "small",
+        _ => "big",
+    }
+}
+
+// A guard over a bound variable: the binding is in scope in its own guard.
+fn describe(v: i64 | null) -> str {
+    match v {
+        is null => "none",
+        n if n % 2 == 0 => string::concat("even ", string::int_to_str(n)),
+        n => string::concat("odd ", string::int_to_str(n)),
+    }
+}
+
+// A guard on a literal pattern narrows it further; falling through a failed
+// guard reaches the catch-all.
+fn special(n: i64) -> str {
+    match n {
+        7 if false => "unreachable",
+        7 => "lucky",
+        _ => "ordinary",
+    }
+}
+
+fn main() {
+    io::println(classify(-5));
+    io::println(classify(0));
+    io::println(classify(5));
+    io::println(classify(50));
+    io::println(describe(null));
+    io::println(describe(4));
+    io::println(describe(5));
+    io::println(special(7));
+    io::println(special(8));
+}

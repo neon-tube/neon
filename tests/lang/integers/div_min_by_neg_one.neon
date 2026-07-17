@@ -1,0 +1,17 @@
+//@ exit: 101
+
+// `i64::MIN / -1` traps. The true quotient is 2^63, which is not an i64, and
+// this is the one overflow Neon does not wrap: on x86 the hardware raises
+// SIGFPE for it, so the check must happen before the divide instruction, not
+// after.
+
+use std::io;
+use std::string;
+
+fn id(x: i64) -> i64 { x }
+
+fn main() {
+    io::println("before");
+    io::println(string::int_to_str(id(-9223372036854775808) / id(-1)));
+    io::println("unreachable");
+}

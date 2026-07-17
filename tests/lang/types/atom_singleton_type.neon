@@ -1,0 +1,21 @@
+// An atom is both a value and a TYPE: `:ok` names the type inhabited by
+// exactly the atom `:ok`, and nothing else. So an atom is writable in any type
+// position — a parameter, a binding annotation, a return type, a record field
+// — and the only value that satisfies it is itself.
+
+use std::io;
+
+record Response { status: :ok, code: i64 }
+
+fn confirm(flag: :ok) -> :ok { flag }
+
+fn main() {
+    let a: :ok = :ok;
+    io::println(if a is :ok { "ok" } else { "impossible" });
+
+    // The singleton is closed: `confirm` accepts exactly one value.
+    io::println(if confirm(:ok) is :ok { "confirmed" } else { "impossible" });
+
+    let r = Response { status: :ok, code: 200 };
+    io::println(if r.status is :ok { "ok field" } else { "impossible" });
+}

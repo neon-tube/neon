@@ -1,0 +1,26 @@
+// A negative shift amount is masked like any other, not rejected and not a
+// reverse shift: the rule is `& 63` on the amount, and `-1 & 63` is 63.
+//
+// So `x bsl -1` is `x bsl 63`, and `x bsr -64` is `x bsr 0`, which is `x`.
+
+use std::io;
+use std::string;
+
+fn id(x: i64) -> i64 { x }
+fn show(v: i64) { io::println(string::int_to_str(v)); }
+
+fn main() {
+    // -1 & 63 == 63.
+    show(1 bsl -1);
+    show(id(1) bsl id(-1));
+
+    // -64 & 63 == 0.
+    show(7 bsl -64);
+    show(id(7) bsl id(-64));
+    show(7 bsr -64);
+    show(id(7) bsr id(-64));
+
+    // -63 & 63 == 1.
+    show(4 bsr -63);
+    show(id(4) bsr id(-63));
+}

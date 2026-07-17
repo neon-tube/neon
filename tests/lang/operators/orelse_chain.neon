@@ -1,0 +1,28 @@
+// `orelse` associates left and short-circuits: `a orelse b orelse c` is
+// `(a orelse b) orelse c`, and an operand to the right of the first non-null one
+// is never evaluated.
+
+use std::io;
+use std::string;
+
+fn note(label: str, v: i64 | null) -> i64 | null {
+    io::println("eval " + label);
+    v
+}
+
+fn show(label: str, v: i64) {
+    io::println(label + string::int_to_str(v));
+}
+
+fn main() {
+    let a: i64 | null = null;
+    let b: i64 | null = null;
+    let c: i64 = 3;
+
+    // Falls all the way through to the last operand.
+    show("all null: ", a orelse b orelse c);
+
+    // Stops at the first present value; the rest never run.
+    show("first wins: ", note("A", 1) orelse note("B", 2) orelse -1);
+    show("second wins: ", note("C", null) orelse note("D", 2) orelse -1);
+}

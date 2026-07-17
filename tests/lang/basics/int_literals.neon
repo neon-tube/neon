@@ -1,0 +1,23 @@
+// The forms an `i64` literal can take: decimal, hex, octal, binary, and `_`
+// digit separators in any of them. All four bases produce the same i64 — the
+// base is notation, not a type.
+
+use std::io;
+use std::string;
+
+fn show(v: i64) { io::println(string::int_to_str(v)); }
+
+fn main() {
+    show(0);
+    show(42);
+    show(1_000_000);
+
+    show(0xFF);
+    show(0xff);
+    show(0o17);
+    show(0b1010);
+    show(0b1010_1010);
+
+    // `-` is the unary operator applied to a literal, not part of the literal.
+    show(-7);
+}

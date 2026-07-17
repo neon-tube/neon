@@ -1,0 +1,25 @@
+// `*` on i64 wraps on overflow, folded and emitted alike.
+
+use std::io;
+use std::string;
+
+fn id(x: i64) -> i64 { x }
+fn show(v: i64) { io::println(string::int_to_str(v)); }
+
+fn main() {
+    show(9223372036854775807 * 2);
+    show(id(9223372036854775807) * 2);
+
+    show(4611686018427387904 * 2);
+    show(id(4611686018427387904) * 2);
+
+    // i64::MIN * -1 wraps back to i64::MIN. Note the asymmetry with division,
+    // which is the one place this value is not allowed to wrap:
+    // `i64::MIN / -1` traps (`div_min_by_neg_one.neon`).
+    show(-9223372036854775808 * -1);
+    show(id(-9223372036854775808) * id(-1));
+
+    // Squaring past the top: 2^32 * 2^32 == 2^64 == 0 mod 2^64.
+    show(4294967296 * 4294967296);
+    show(id(4294967296) * id(4294967296));
+}

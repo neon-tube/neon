@@ -1,0 +1,35 @@
+//@ exit: 101
+
+// `m[k]` traps on a missing key, the same way `xs[i]` traps on an out-of-bounds
+// index. Bracket indexing asserts that the entry is there; `map::get` is the
+// path that lets the caller handle its absence.
+//
+// A present key whose value is the zero of its type is NOT a miss — `m["zero"]`
+// below returns 0 and keeps going. Only a genuinely absent key traps.
+//
+// The successful lookups in the golden are what make this test mean something:
+// the program reached the missing key rather than failing before it.
+
+use std::io;
+use std::string;
+use std::collections::map;
+
+fn id(s: str) -> str { s }
+
+fn main() {
+    let m: Map[str, i64] = map::set(map::set(map::new(), "zero", 0), "one", 1);
+
+    io::println("before");
+
+    // Present: `[]` yields the value itself, type i64. No `orelse` needed.
+    let one: i64 = m[id("one")];
+    io::println(string::int_to_str(one));
+
+    // Present and zero — a value, not an absence.
+    io::println(string::int_to_str(m[id("zero")]));
+
+    // Absent: traps here.
+    io::println(string::int_to_str(m[id("nope")]));
+
+    io::println("unreachable");
+}

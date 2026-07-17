@@ -1,0 +1,17 @@
+//@ compile-fail
+//@ error-contains: Meter
+//
+// The point of a newtype: the representation does NOT flow in where the newtype
+// is expected. If a bare `f64` were accepted as a `Meter`, the type would be an
+// alias, not a newtype. The `as` cast is the only way in.
+
+use std::io;
+use std::string;
+
+newtype Meter = f64
+
+fn show(d: Meter) -> str { string::float_to_str(d as f64) }
+
+fn main() {
+    io::println(show(100.0));
+}

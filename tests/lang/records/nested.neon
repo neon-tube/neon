@@ -1,0 +1,27 @@
+// A record field may itself be a record. Construction nests, and access chains
+// through as many levels as the declaration has.
+
+use std::io;
+use std::string;
+
+record Point { x: i64, y: i64 }
+record Line { from: Point, to: Point }
+record Drawing { label: str, edge: Line }
+
+fn main() {
+    let d = Drawing {
+        label: "diagonal",
+        edge: Line {
+            from: Point { x: 0, y: 0 },
+            to: Point { x: 3, y: 4 },
+        },
+    };
+
+    io::println(d.label);
+    io::println(string::int_to_str(d.edge.from.x));
+    io::println(string::int_to_str(d.edge.to.y));
+
+    // An inner record is a value like any other: bind it, then keep reading.
+    let far = d.edge.to;
+    io::println(string::int_to_str(far.x + far.y));
+}

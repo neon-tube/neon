@@ -1,0 +1,29 @@
+// `as` is the projection out of a wider type into a narrower one: out of a
+// union, out of `any`, and across a newtype's representation boundary. It is a
+// static claim the checker admits only when the target is reachable from the
+// source type, and casts chain left to right.
+
+use std::io;
+use std::string;
+
+newtype Meter = f64
+record Wrapped { v: i64 }
+
+fn main() {
+    // Out of a union.
+    let u: i64 | str = 7;
+    io::println(string::int_to_str(u as i64));
+
+    // Out of `any`.
+    let a: any = Wrapped { v: 3 };
+    let w = a as Wrapped;
+    io::println(string::int_to_str(w.v));
+
+    // Across a newtype, both directions, chained.
+    let m = 2.5 as Meter;
+    io::println(string::float_to_str(m as f64));
+    io::println(string::float_to_str(5.0 as Meter as f64));
+
+    // A cast to a type the value already has is a no-op, not an error.
+    io::println(string::int_to_str(4 as i64));
+}

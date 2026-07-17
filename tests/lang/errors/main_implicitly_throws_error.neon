@@ -1,0 +1,70 @@
+// `main` carries an implicit `throws Error`, so a bare `try foo()` inside `main`
+// always compiles — there is no `throws` to declare and nothing to add to the
+// signature. Every error record implements `Error`, so any error propagates.
+//
+// The contrast is the point. In a non-`main` function, `try go()` without a
+// compatible `throws` is a compile error (try_in_non_throws_fn_fails.neon).
+// `main` needs no such clause, and `helper` below shows what `main` is excused
+// from writing.
+//
+// This file only covers the case where the errors are HANDLED, so it exits 0 and
+// prints on every path. uncaught_at_top_level.neon covers what happens when one
+// is not.
+
+use std::io;
+use std::string;
+
+record Boom { msg: str }
+record Fizz { msg: str }
+
+impl Error for Boom {
+    fn message(error: Boom) -> str { error.msg }
+}
+
+impl Error for Fizz {
+    fn message(error: Fizz) -> str { error.msg }
+}
+
+fn go(fail: bool) throws Boom -> i64 {
+    if fail { throw Boom { msg: "boom" } } else { 7 }
+}
+
+fn fizz() throws Fizz -> i64 {
+    throw Fizz { msg: "fizz" }
+}
+
+// A non-main function must say so. `main` never does.
+fn helper() throws Boom -> i64 {
+    try go(false)
+}
+
+fn main() {
+    // A bare `try` in main: no `throws` clause anywhere on `main`.
+    let a = try go(false);
+    io::println(string::int_to_str(a));
+
+    // Two unrelated error types both propagate to main's implicit `throws Error`
+    // — no union has to be spelled out.
+    try {
+        let b = go(true);
+        io::println("unreachable");
+    } catch (e) {
+        io::println(string::concat("caught: ", e.msg));
+    };
+
+    try {
+        let c = fizz();
+        io::println("unreachable");
+    } catch (e) {
+        io::println(string::concat("caught: ", e.msg));
+    };
+
+    // The helper's declared throws is caught here like any other.
+    let d = try helper();
+    io::println(string::int_to_str(d));
+
+    // try? and try! still work in main; the implicit clause changes nothing
+    // about them.
+    io::println(string::int_to_str(try? go(true) orelse -1));
+    io::println(string::int_to_str(try! go(false)));
+}

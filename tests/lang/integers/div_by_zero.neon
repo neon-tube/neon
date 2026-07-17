@@ -1,0 +1,20 @@
+//@ exit: 101
+
+// `a / 0` traps: it prints a message on stderr and exits 101. It never raises
+// SIGFPE, which the shell reports as exit 132 with no explanation of what
+// happened or where.
+//
+// "before" in the golden is what makes this test mean something: the program
+// really did run and really did reach the division, rather than failing to
+// start.
+
+use std::io;
+use std::string;
+
+fn id(x: i64) -> i64 { x }
+
+fn main() {
+    io::println("before");
+    io::println(string::int_to_str(1 / id(0)));
+    io::println("unreachable");
+}

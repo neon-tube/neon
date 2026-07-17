@@ -1,0 +1,18 @@
+//@ compile-fail
+//@ error-contains: Display
+//
+// The other side of the bound: inside the body, an UNCONSTRAINED `T` supports
+// nothing but being passed along. Calling `display(v)` without `where T:
+// Display` is rejected at the declaration, not deferred to a call site that
+// happens to pass a displayable type.
+
+use std::io;
+
+record X { n: i64 }
+impl Display for X { fn display(value: X) -> str { "X" } }
+
+fn show[T](v: T) -> str { display(v) }
+
+fn main() {
+    io::println(show(X { n: 1 }));
+}

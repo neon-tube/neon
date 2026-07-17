@@ -1,0 +1,44 @@
+// `map::set` returns a new map; the map it was given is unchanged. Two sets off
+// one base — one adding a key, one overwriting a key — do not alias.
+//
+// The same value semantics as List, and checked the same way: `base` is read
+// after both derived maps exist.
+
+use std::io;
+use std::string;
+use std::collections::list;
+use std::collections::map;
+
+// `at` is asked about keys that may be absent (that is half of what this file
+// checks), so it takes the deliberate path: `map::get` throws on a miss, `try?`
+// softens the throw to null, and `orelse` turns it into the -999 sentinel. `[]`
+// would be wrong here — it asserts presence, and a miss is an expected answer.
+fn at(m: Map[str, i64], k: str) -> str {
+    string::int_to_str(try? map::get(m, k) orelse -999)
+}
+
+fn size(m: Map[str, i64]) -> str {
+    string::int_to_str(list::len(map::keys(m)))
+}
+
+fn main() {
+    let base: Map[str, i64] = map::set(map::set(map::new(), "a", 1), "b", 2);
+
+    let added = map::set(base, "c", 3);
+    let overwritten = map::set(base, "a", 100);
+
+    // base is untouched by either.
+    io::println(at(base, "a"));
+    io::println(at(base, "c"));
+    io::println(size(base));
+
+    // the two derivations are independent of each other.
+    io::println(at(added, "a"));
+    io::println(at(added, "c"));
+    io::println(at(overwritten, "a"));
+    io::println(at(overwritten, "c"));
+
+    // overwriting an existing key does not grow the map.
+    io::println(size(added));
+    io::println(size(overwritten));
+}

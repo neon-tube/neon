@@ -1,0 +1,34 @@
+// `for x in xs { ... }` walks a list in order, binding each element to `x` for
+// one iteration. `x` is a fresh binding per iteration and is scoped to the body.
+
+use std::io;
+use std::string;
+
+fn show(v: i64) { io::println(string::int_to_str(v)); }
+
+fn main() {
+    for n in [1, 2, 3] {
+        show(n);
+    }
+
+    // Order is the list's order, and an accumulator outside the loop survives
+    // it: a rebind writes through to the defining scope.
+    let sum = 0;
+    for n in [10, 20, 30] {
+        sum = sum + n;
+    }
+    show(sum);
+
+    // Over a binding rather than a literal, and over another element type.
+    let words = ["a", "b"];
+    for w in words {
+        io::println(w);
+    }
+
+    // The loop variable is scoped to the body: this `n` is the outer one.
+    let n = 99;
+    for n in [1] {
+        show(n);
+    }
+    show(n);
+}

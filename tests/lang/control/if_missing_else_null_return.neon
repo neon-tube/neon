@@ -1,0 +1,32 @@
+// A `-> null` function is exempt from the else rule: its body's value is `null`
+// whatever happens, so an else-less `if` as the tail expression consumes
+// nothing and needs no `else`.
+//
+// This is the shape that made the else rule worth writing down — it looks like
+// value position (it is the last expression of the body) but nothing consumes
+// it, and requiring a pointless `else { null }` here would be noise.
+
+use std::io;
+
+fn announce(n: i64) -> null {
+    if n > 0 {
+        io::println("positive");
+    }
+}
+
+fn last_statement_is_an_if(n: i64) -> null {
+    io::println("checking");
+    if n > 0 {
+        io::println("positive");
+    } else if n < 0 {
+        io::println("negative");
+    }
+}
+
+fn main() {
+    announce(1);
+    announce(-1);
+    last_statement_is_an_if(1);
+    last_statement_is_an_if(0);
+    io::println("done");
+}

@@ -1,0 +1,41 @@
+// A NOMINAL record satisfies a STRUCTURAL parameter when its fields include the
+// required ones. `fn name_only(item: { name: str })` accepts a `User` — no cast,
+// no annotation. This is what makes structural params useful rather than
+// decorative, and it is the set-theoretic reading: `User` is a subset of
+// `{ name: str }`. Decided in tasks/207.
+//
+// Width subtyping for fields only: the extra fields are invisible through the
+// structural view, but the value keeps them.
+
+use std::io;
+use std::string;
+
+record User {
+    name: str,
+    age: i64,
+}
+
+record Product {
+    name: str,
+    price: i64,
+    sku: str,
+}
+
+fn name_only(item: { name: str }) -> str {
+    item.name
+}
+
+fn main() {
+    let alice = User { name: "Alice", age: 30 };
+    io::println(name_only(alice));
+
+    // A different nominal record with a disjoint field set satisfies the same
+    // structural parameter — structural means shape, not lineage.
+    io::println(name_only(Product { name: "Widget", price: 5, sku: "W-1" }));
+
+    // An anonymous record literal satisfies it too.
+    io::println(name_only({ name: "Carol", age: 41 }));
+
+    // The nominal value is unchanged by having been viewed structurally.
+    io::println(string::int_to_str(alice.age));
+}

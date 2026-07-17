@@ -1,0 +1,29 @@
+// The shift amount is masked to the operand's width — `& 63` for i64 — so an
+// out-of-range amount is defined rather than undefined: `1 bsl 200` is
+// `1 bsl (200 % 64)` == `1 bsl 8` == 256.
+//
+// Folded and emitted must agree, so every case runs both ways.
+
+use std::io;
+use std::string;
+
+fn id(x: i64) -> i64 { x }
+fn show(v: i64) { io::println(string::int_to_str(v)); }
+
+fn main() {
+    // 200 & 63 == 8.
+    show(1 bsl 200);
+    show(id(1) bsl id(200));
+    show(256 bsr 200);
+    show(id(256) bsr id(200));
+
+    // 64 & 63 == 0: a full-width shift is a no-op, not a zero.
+    show(1 bsl 64);
+    show(id(1) bsl id(64));
+    show(1 bsr 64);
+    show(id(1) bsr id(64));
+
+    // 63 is the largest unmasked amount, and shifts a bit into the sign.
+    show(1 bsl 63);
+    show(id(1) bsl id(63));
+}

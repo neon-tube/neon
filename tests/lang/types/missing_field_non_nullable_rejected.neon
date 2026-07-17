@@ -1,0 +1,16 @@
+//@ compile-fail
+//@ error-contains: host
+//
+// A missing field satisfies a NULLABLE field and nothing else. `host: str` does
+// not admit null, so an absent `host` is a type error — the rule that makes
+// options optional does not make required fields optional.
+
+use std::io;
+
+type Conf = { host: str, timeout: i64 | null }
+
+fn show(c: Conf) -> str { c.host }
+
+fn main() {
+    io::println(show({ timeout: 5 }));
+}

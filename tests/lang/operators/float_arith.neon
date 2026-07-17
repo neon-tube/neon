@@ -1,0 +1,22 @@
+// f64 arithmetic. Every value here has an exact binary representation, so the
+// golden does not depend on rounding.
+
+use std::io;
+use std::string;
+
+fn show(v: f64) { io::println(string::float_to_str(v)); }
+fn shows(v: bool) { io::println(if v { "true" } else { "false" }); }
+
+fn main() {
+    show(1.5 + 2.25);
+    show(1.5 - 2.25);
+    show(1.5 * 2.5);
+    show(7.5 / 2.0);
+    show(-3.5);
+    // Left-associative, like the integer operators.
+    shows(7.5 - 2.5 - 1.0 == 4.0);
+
+    // f64 is binary and Neon does not pretend otherwise: 0.1 + 0.2 is not 0.3.
+    shows(0.1 + 0.2 == 0.3);
+    shows(0.5 + 0.25 == 0.75);
+}

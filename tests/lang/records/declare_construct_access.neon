@@ -1,0 +1,21 @@
+// The shape of a record: declare it with named typed fields, construct it with
+// a field-named literal, read fields back with `.`. Field order in the literal
+// is free — fields are named, not positional.
+
+use std::io;
+use std::string;
+
+record User {
+    name: str,
+    age: i64,
+}
+
+fn main() {
+    let alice = User { name: "Alice", age: 30 };
+    io::println(alice.name);
+    io::println(string::int_to_str(alice.age));
+
+    let bob = User { age: 25, name: "Bob" };
+    io::println(bob.name);
+    io::println(string::int_to_str(bob.age));
+}

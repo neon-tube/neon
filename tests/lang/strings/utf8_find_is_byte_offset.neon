@@ -1,0 +1,38 @@
+// `find` returns a BYTE offset (task 609), or null when the needle is absent —
+// a miss, not a failure. The offset it returns is directly usable as a `slice`
+// bound, which is the point of byte offsets being the primitive: find and slice
+// speak the same units.
+//
+// "héllo" = h | é | l | l | o = bytes 0 | 1,2 | 3 | 4 | 5.
+// "llo" starts at character 2 but byte 3.
+
+use std::io;
+use std::string;
+
+fn at(needle: str) {
+    io::println(string::int_to_str(string::find("héllo", needle) orelse -1));
+}
+
+fn main() {
+    at("h");      // byte 0
+    at("é");      // byte 1
+    at("llo");    // character 2, byte 3
+    at("o");      // byte 5
+    at("héllo");  // byte 0
+    at("");       // byte 0 — the empty needle is at the start
+    at("z");      // absent -> null -> -1
+    at("HÉLLO");  // absent: matching is by bytes, not case or normalisation
+
+    // The offset round-trips through slice.
+    let s = "héllo";
+    let i = string::find(s, "llo") orelse -1;
+    io::println(string::slice(s, i, string::len(s)) orelse "?");
+    io::println(string::slice(s, 0, i) orelse "?");
+
+    // A multi-byte needle matches whole; its lead byte alone is not a match for
+    // the character, but find works on bytes so a 2-byte needle is found at the
+    // start of the 2-byte sequence.
+    io::println(if string::contains(s, "é") { "contains é" } else { "no é" });
+    io::println(if string::starts_with(s, "hé") { "starts hé" } else { "no" });
+    io::println(if string::ends_with(s, "llo") { "ends llo" } else { "no" });
+}

@@ -1,0 +1,28 @@
+// `orelse` unwraps a nullable union: `A orelse B` is A's value when A's tag says
+// it is not null, and B otherwise. The result type is A's type with `null`
+// removed, unioned with B's — so it is an i64 here, usable without a further
+// check.
+
+use std::io;
+use std::string;
+
+fn pick(which: i64) -> i64 | null {
+    if which == 0 { null } else { which * 10 }
+}
+
+fn show(label: str, v: i64) {
+    io::println(label + string::int_to_str(v));
+}
+
+fn main() {
+    show("null: ", pick(0) orelse -1);
+    show("value: ", pick(3) orelse -1);
+
+    // The result really is an i64: it does arithmetic without unwrapping again.
+    show("arith: ", (pick(0) orelse 5) + 1);
+
+    let absent: str | null = null;
+    let present: str | null = "here";
+    io::println(absent orelse "default");
+    io::println(present orelse "default");
+}

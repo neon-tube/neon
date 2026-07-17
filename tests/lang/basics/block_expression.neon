@@ -1,0 +1,35 @@
+// A block is an expression: it evaluates its statements in order and yields its
+// last expression — the one without a trailing `;`. So a block can initialize a
+// binding, be an argument, or be a function's return value.
+
+use std::io;
+use std::string;
+
+fn show(v: i64) { io::println(string::int_to_str(v)); }
+
+fn compute() -> i64 {
+    let a = 2;
+    let b = 3;
+    a * b
+}
+
+fn main() {
+    let x = {
+        let a = 10;
+        let b = 20;
+        a + b
+    };
+    show(x);
+
+    // As an argument.
+    show({ 1 + 1 });
+
+    // Nested: the inner block's value is the outer block's tail.
+    let y = {
+        let inner = { 4 + 5 };
+        inner * 2
+    };
+    show(y);
+
+    show(compute());
+}

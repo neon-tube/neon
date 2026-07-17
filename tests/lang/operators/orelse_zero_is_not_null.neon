@@ -1,0 +1,36 @@
+// `orelse` tests the nullable union's TAG. It is not "if truthy", and null is a
+// representation rather than a bit pattern — so a present `0` is a present
+// value and `orelse` yields it.
+//
+// This was a real bug: `orelse` lowered to `v != NULL`, i.e. `v != 0`, so a
+// present 0 silently took the default and `x orelse d` meant "x if nonzero".
+
+use std::io;
+use std::string;
+
+fn zero_or_null(which: i64) -> i64 | null {
+    if which == 0 { 0 } else { null }
+}
+
+fn show(label: str, v: i64) {
+    io::println(label + string::int_to_str(v));
+}
+
+fn main() {
+    // A present 0 in a union: the tag says present, so the default is not taken.
+    show("union zero: ", zero_or_null(0) orelse -1);
+    show("union null: ", zero_or_null(1) orelse -1);
+
+    // A bare i64 cannot contain null at all, so `A orelse B` is always A —
+    // including when A is 0.
+    let zero: i64 = 0;
+    let five: i64 = 5;
+    show("plain zero: ", zero orelse -1);
+    show("plain five: ", five orelse -1);
+    show("literal zero: ", 0 orelse -1);
+
+    // Same for the other types with a "falsy-looking" value.
+    io::println("empty str: " + ("" orelse "default"));
+    io::println(if false orelse true { "plain false: true" } else { "plain false: false" });
+    io::println(if (0.0 orelse -1.0) == 0.0 { "plain 0.0: kept" } else { "plain 0.0: replaced" });
+}

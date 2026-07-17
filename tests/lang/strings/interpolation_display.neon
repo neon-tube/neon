@@ -1,0 +1,41 @@
+// An interpolated expression whose type is not a primitive is rendered through
+// the `Display` protocol — `display` dispatch, the same function a user can call
+// by hand. A record with a Display impl interpolates as that impl says.
+//
+// Both lines below must agree: interpolation is not a second, parallel rendering
+// path with its own rules.
+
+use std::io;
+use std::string;
+
+record Point { x: i64, y: i64 }
+
+impl Display for Point {
+    fn display(value: Point) -> str {
+        string::concat("(", string::concat(string::int_to_str(value.x), string::concat(", ", string::concat(string::int_to_str(value.y), ")"))))
+    }
+}
+
+record Tag { name: str }
+
+impl Display for Tag {
+    fn display(value: Tag) -> str { string::concat("#", value.name) }
+}
+
+fn moved(p: Point, d: i64) -> Point { Point { x: p.x + d, y: p.y + d } }
+
+fn main() {
+    let p = Point { x: 1, y: 2 };
+
+    io::println(display(p));
+    io::println("p = #{p}");
+
+    // Two Display types in one literal, plus a primitive. The parentheses around
+    // the last hole are literal text — a bare `(` was never special, and now a
+    // bare `{` is not either.
+    let t = Tag { name: "origin" };
+    io::println("#{t} at #{p} (#{p.x})");
+
+    // The Display impl is used for a value produced by a call, too.
+    io::println("moved: #{moved(p, 10)}");
+}

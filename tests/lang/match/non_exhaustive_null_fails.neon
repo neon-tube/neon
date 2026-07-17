@@ -1,0 +1,20 @@
+//@ compile-fail
+//@ error-contains: null
+//
+// The null half of a `T | null` counts toward exhaustiveness like any other
+// union member. Covering only the value half is not exhaustive, and there is no
+// `_` here to absorb the rest — this is what stops a null from falling through a
+// match unnoticed.
+
+use std::io;
+use std::string;
+
+fn add_one(v: i64 | null) -> i64 {
+    match v {
+        is i64 => v + 1,
+    }
+}
+
+fn main() {
+    io::println(string::int_to_str(add_one(41)));
+}

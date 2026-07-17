@@ -1,0 +1,49 @@
+// Nullability is `T | null` — an ordinary union with an ordinary match. `is null`
+// tests the null half; a bare binding arm receives the scrutinee narrowed to the
+// non-null half, so it can be used as a plain `T` with no unwrapping step.
+//
+// Two arms exhaust `T | null`, so no `_` is needed.
+
+use std::io;
+use std::string;
+
+fn describe(v: str | null) -> str {
+    match v {
+        is null => "none",
+        inner => string::concat("some: ", inner),
+    }
+}
+
+fn add_one(v: i64 | null) -> i64 {
+    match v {
+        is null => -1,
+        n => n + 1,
+    }
+}
+
+// `is null` need not come first, and the non-null half can be narrowed further
+// by literal arms.
+fn grade(v: i64 | null) -> str {
+    match v {
+        0 => "zero",
+        is null => "missing",
+        n if n > 0 => "positive",
+        _ => "negative",
+    }
+}
+
+// `orelse` is the shorthand for the common shape: replace null with a default.
+fn or_zero(v: i64 | null) -> i64 { v orelse 0 }
+
+fn main() {
+    io::println(describe("hi"));
+    io::println(describe(null));
+    io::println(string::int_to_str(add_one(41)));
+    io::println(string::int_to_str(add_one(null)));
+    io::println(grade(0));
+    io::println(grade(null));
+    io::println(grade(5));
+    io::println(grade(-5));
+    io::println(string::int_to_str(or_zero(9)));
+    io::println(string::int_to_str(or_zero(null)));
+}

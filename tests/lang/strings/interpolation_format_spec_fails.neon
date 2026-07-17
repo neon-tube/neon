@@ -1,0 +1,19 @@
+//@ compile-fail
+//@ error-contains: format specs not yet supported
+//
+// The format-spec minilanguage (`#{x:8.2}`) is not in v1. The syntax space is
+// deliberately reserved, so a trailing `:spec` after an otherwise complete
+// expression gets a specific diagnostic rather than a confusing parse error —
+// this pins the space as reserved, not available.
+//
+// "Trailing" is load-bearing. A `:` is NOT special inside a hole in general: the
+// hole is delimited by brace matching, so `#{Point { x: 1, y: 2 }}` is a record
+// literal full of colons and is perfectly legal. Only a `:` left over after the
+// expression has been parsed is the reserved spec position.
+
+use std::io;
+
+fn main() {
+    let x = 1.5;
+    io::println("#{x:8.2}");
+}

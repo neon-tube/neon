@@ -1,0 +1,42 @@
+// Because interpolation opens with `#{`, a bare `{` or `}` in a string is ALWAYS
+// literal text. There is no `{{`/`}}` escape — there is nothing to escape from.
+// Braces pass through untouched, however they are nested or unbalanced.
+//
+// This is the payoff of `#{` over `{`: JSON-ish output, the case that forced the
+// escape before, is now simply what you typed.
+//
+// The one escape that does exist is `\#{`, which produces the literal text `#{`
+// and starts no interpolation.
+
+use std::io;
+use std::string;
+
+fn main() {
+    // Bare braces, alone and paired. No escaping.
+    io::println("{");
+    io::println("}");
+    io::println("{}");
+
+    let n = 7;
+
+    // Literal braces sitting directly against a real interpolation.
+    io::println("{#{n}}");
+    io::println("{ #{n} }");
+
+    // The motivating case, typed exactly as it reads.
+    io::println("{ \"json\": true }");
+    io::println("{\"n\": #{n}}");
+
+    // Unbalanced braces are fine too: nothing is scanning them for structure.
+    io::println("}{");
+
+    // `\#{` escapes an interpolation: this prints the source text, not 7.
+    io::println("\#{n}");
+
+    // Byte lengths: a literal brace is one source character and one byte, not
+    // two. `\#{n}` is four bytes — the backslash is the escape, not content.
+    io::println(string::int_to_str(string::len("{")));
+    io::println(string::int_to_str(string::len("{}")));
+    io::println(string::int_to_str(string::len("{ \"json\": true }")));
+    io::println(string::int_to_str(string::len("\#{n}")));
+}

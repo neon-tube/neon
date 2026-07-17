@@ -1,0 +1,30 @@
+// `null` is a value of its own type, `null`. It is not a pointer and not zero:
+// it only ever appears where the type says it can, so a binding that holds it
+// must be annotated with a union that includes `null`.
+
+use std::io;
+
+fn describe(v: i64 | null) -> str {
+    if v is null { "absent" } else { "present" }
+}
+
+fn main() {
+    let nothing: null = null;
+    io::println(if nothing is null { "null is null" } else { "impossible" });
+
+    let absent: i64 | null = null;
+    let present: i64 | null = 0;
+
+    io::println(describe(absent));
+    // 0 is a present value. Nullness is the union's tag, never a bit pattern.
+    io::println(describe(present));
+    io::println(describe(null));
+
+    let text: str | null = null;
+    io::println(describe_str(text));
+    io::println(describe_str(""));
+}
+
+fn describe_str(v: str | null) -> str {
+    if v is null { "absent" } else { "present" }
+}

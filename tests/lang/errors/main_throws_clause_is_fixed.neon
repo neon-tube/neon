@@ -1,0 +1,24 @@
+//@ compile-fail
+//@ error-contains: main
+//@ error-contains: throws
+//
+// `main` carries an implicit `throws Error` that is never written and cannot be
+// changed. Narrowing it is an error: `main` throws `Error`, and no program gets
+// to say it throws less.
+//
+// This is not a subtyping check that `IoError` happens to fail. The clause is
+// FIXED — writing one at all is the error, which is why the sibling test
+// main_throws_error_restated_fails.neon rejects even the true clause.
+
+use std::io;
+
+record IoError { msg: str }
+
+impl Error for IoError {
+    fn message(error: IoError) -> str { error.msg }
+}
+
+fn main() throws IoError -> i64 {
+    io::println("unreachable");
+    0
+}

@@ -1,0 +1,36 @@
+//@ compile-fail
+//@ error-contains: OtherError
+//
+// `try` requires a *compatible* `throws` on the enclosing function, not merely
+// some `throws`. `caller` declares it throws OtherError but propagates a Boom,
+// which OtherError does not cover.
+//
+// The enclosing function is deliberately NOT `main`. `main`'s implicit clause is
+// `throws Error`, which every error record satisfies, so no propagation out of
+// `main` can ever be incompatible — this rule is only observable in a non-`main`
+// function with a narrower declared clause.
+
+use std::io;
+
+record Boom { msg: str }
+record OtherError { msg: str }
+
+impl Error for Boom {
+    fn message(error: Boom) -> str { error.msg }
+}
+
+impl Error for OtherError {
+    fn message(error: OtherError) -> str { error.msg }
+}
+
+fn go() throws Boom -> i64 {
+    throw Boom { msg: "no" }
+}
+
+fn caller() throws OtherError -> i64 {
+    try go()
+}
+
+fn main() {
+    io::println("unreachable");
+}

@@ -1,0 +1,24 @@
+// The bitwise operators are words, not symbols: `band`, `bor`, `bxor` and
+// prefix `bnot`. They operate on i64 as a two's-complement bit pattern.
+
+use std::io;
+use std::string;
+
+fn show(v: i64) { io::println(string::int_to_str(v)); }
+
+fn main() {
+    show(0b1100 band 0b1010);
+    show(0b1100 bor 0b1010);
+    show(0b1100 bxor 0b1010);
+    show(bnot 0);
+    show(bnot 5);
+
+    // Two's complement: bnot x == -x - 1.
+    show(bnot 9223372036854775807);
+
+    // All three binary operators sit at one level and associate left.
+    show(0b1100 band 0b1010 bor 0b0001);
+
+    // `bnot` is a prefix operator and binds tighter than `band`.
+    show(bnot 0 band 0xFF);
+}

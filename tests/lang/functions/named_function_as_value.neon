@@ -1,0 +1,37 @@
+// A named function is a value: bind it, pass it, return it, put it in a
+// collection. Its type is the closure type `(P) -> R`, so a named function and
+// a lambda are interchangeable wherever either fits. Naming one without calling
+// it does not call it.
+
+use std::io;
+use std::string;
+
+fn double(n: i64) -> i64 { n * 2 }
+fn negate(n: i64) -> i64 { 0 - n }
+
+fn apply(x: i64, f: (i64) -> i64) -> i64 { f(x) }
+
+fn pick(want_double: bool) -> (i64) -> i64 {
+    if want_double { double } else { negate }
+}
+
+fn main() {
+    // Bound to a name, then called through the binding.
+    let f = double;
+    io::println(string::int_to_str(f(4)));
+
+    // With an explicit closure type annotation.
+    let g: (i64) -> i64 = negate;
+    io::println(string::int_to_str(g(4)));
+
+    // Passed as an argument.
+    io::println(string::int_to_str(apply(5, double)));
+
+    // Returned from a function, in both branches.
+    io::println(string::int_to_str(pick(true)(6)));
+    io::println(string::int_to_str(pick(false)(6)));
+
+    // Rebound to a different function of the same type.
+    f = negate;
+    io::println(string::int_to_str(f(4)));
+}

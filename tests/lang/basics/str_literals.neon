@@ -1,0 +1,18 @@
+// String literals and their escapes. `str` is UTF-8 bytes, so a literal holds
+// exactly the bytes it spells — a multibyte character and its `\u{...}` escape
+// are the same string.
+
+use std::io;
+
+fn main() {
+    io::println("hello");
+    io::println("");
+    io::println("a\tb");
+    io::println("one\ntwo");
+    io::println("say \"hi\"");
+    io::println("back\\slash");
+    io::println("\u{41}\u{42}");
+    io::println("\x41\x42");
+    io::println("héllo");
+    io::println(if "\u{e9}" == "é" { "same" } else { "different" });
+}

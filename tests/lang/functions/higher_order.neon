@@ -1,0 +1,28 @@
+// A function that takes a function. The parameter's type is a closure type
+// `(P) -> R` — note there is no `fn` keyword in a type position. Both a lambda
+// and a named function are accepted, because they are the same kind of value.
+
+use std::io;
+use std::string;
+
+fn apply(x: i64, f: (i64) -> i64) -> i64 { f(x) }
+
+fn twice(x: i64, f: (i64) -> i64) -> i64 { f(f(x)) }
+
+fn compose(f: (i64) -> i64, g: (i64) -> i64) -> (i64) -> i64 {
+    (x: i64) => g(f(x))
+}
+
+fn combine(a: i64, b: i64, op: (i64, i64) -> i64) -> i64 { op(a, b) }
+
+fn double(n: i64) -> i64 { n * 2 }
+
+fn main() {
+    io::println(string::int_to_str(apply(5, (x: i64) => x + 1)));
+    io::println(string::int_to_str(apply(5, double)));
+    io::println(string::int_to_str(twice(3, double)));
+    io::println(string::int_to_str(combine(2, 3, (a: i64, b: i64) => a * b)));
+
+    let add_then_double = compose((x: i64) => x + 1, double);
+    io::println(string::int_to_str(add_then_double(4)));
+}

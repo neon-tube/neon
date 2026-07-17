@@ -1,0 +1,23 @@
+// A record with no fields. It parses, it constructs, it is a first-class value,
+// and it stays NOMINAL: `Red {}` and `Green {}` have identical (empty) shapes
+// yet are different types, distinguishable by `is`. This is what makes
+// `type Color = Red | Green` a sum type — see tasks/610.
+
+use std::io;
+
+record Red {}
+record Green {}
+
+fn name(c: Red | Green) -> str {
+    if c is Red { "red" } else { "green" }
+}
+
+fn main() {
+    io::println(name(Red {}));
+    io::println(name(Green {}));
+
+    let r = Red {};
+    // A unit record binds and passes like any other value.
+    io::println(name(r));
+    io::println(if r is Green { "confused" } else { "still red" });
+}

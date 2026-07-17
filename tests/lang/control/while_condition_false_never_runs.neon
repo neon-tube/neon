@@ -1,0 +1,30 @@
+// `while` tests before the first iteration, so a condition that starts false
+// runs the body zero times. There is no do-while in Neon.
+
+use std::io;
+use std::string;
+
+fn main() {
+    while false {
+        io::println("never");
+    }
+
+    let i = 0;
+    while i > 0 {
+        io::println("never");
+        i = i - 1;
+    }
+    io::println(string::int_to_str(i));
+
+    // The condition is evaluated at least once, even when it is false.
+    let checks = 0;
+    while count(checks) < 0 {
+        io::println("never");
+    }
+    io::println("done");
+}
+
+fn count(n: i64) -> i64 {
+    io::println("checked");
+    n
+}

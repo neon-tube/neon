@@ -1,0 +1,22 @@
+//@ exit: 101
+
+// A negative index traps exactly like an index past the end. There is no
+// wrap-around: `xs[-1]` is not the last element, it is a bug.
+//
+// Separate from list_index_out_of_bounds_traps.neon because "too big" and
+// "negative" are two different ways to be out of range, and a bounds check that
+// only compares against the length would pass one and fail the other.
+
+use std::io;
+use std::string;
+
+fn id(x: i64) -> i64 { x }
+
+fn main() {
+    let xs: List[i64] = [10, 20, 30];
+
+    io::println("before");
+    io::println(string::int_to_str(xs[id(2)]));
+    io::println(string::int_to_str(xs[id(-1)]));
+    io::println("unreachable");
+}

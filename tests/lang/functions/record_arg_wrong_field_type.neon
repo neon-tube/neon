@@ -1,0 +1,17 @@
+//@ compile-fail
+//@ error-contains: timeout
+//
+// An options record is typechecked like any other record: a value of the wrong
+// type for a declared field is rejected. `i64 | null` admits an i64 and null —
+// not a str.
+//
+// The point is that optionality buys no laxity. `timeout` may be omitted
+// entirely, but if it is supplied it must be an i64.
+
+use std::io;
+
+fn connect(host: str, opts: { timeout: i64 | null }) -> str { host }
+
+fn main() {
+    io::println(connect("a", { timeout: "soon" }));
+}

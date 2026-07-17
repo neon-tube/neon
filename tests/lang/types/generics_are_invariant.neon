@@ -1,0 +1,17 @@
+//@ compile-fail
+//@ error-contains: List
+//
+// Generic arguments are INVARIANT: `List[i32]` is not a subtype of `List[i64]`,
+// nor the reverse, even though every `i32` value fits in an `i64`. Two
+// instantiations of a generic are related only when their arguments are
+// mutually equal. See AGENTS.md §2 in the old tree.
+
+use std::io;
+use std::string;
+
+fn first_or_zero(xs: List[i64]) -> i64 { 0 }
+
+fn main() {
+    let narrow: List[i32] = [];
+    io::println(string::int_to_str(first_or_zero(narrow)));
+}

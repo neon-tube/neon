@@ -1,0 +1,20 @@
+//@ exit: 101
+
+// `i64::MIN % -1` traps, with the same rule as `i64::MIN / -1`.
+//
+// The mathematical remainder here is 0, so this case could have been defined
+// rather than trapped. It is not: `/` and `%` trap on the same two inputs
+// — divisor 0, and i64::MIN with divisor -1 — because they are one operation
+// on the hardware (the same instruction computes both, and it faults), and
+// because one rule for both is a rule you can remember.
+
+use std::io;
+use std::string;
+
+fn id(x: i64) -> i64 { x }
+
+fn main() {
+    io::println("before");
+    io::println(string::int_to_str(id(-9223372036854775808) % id(-1)));
+    io::println("unreachable");
+}

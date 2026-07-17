@@ -1,0 +1,31 @@
+// The anatomy of a function: `fn name(params) -> ret { body }`. The body is an
+// expression — its last expression is the return value, with no `return`
+// keyword needed. A function with no `-> T` returns unit and is called for its
+// effect. Parameters are immutable bindings of the declared type.
+
+use std::io;
+use std::string;
+
+fn add(a: i64, b: i64) -> i64 { a + b }
+
+fn zero() -> i64 { 0 }
+
+fn greet(name: str) {
+    io::println(string::concat("hello, ", name));
+}
+
+// The trailing expression of a block is the value, including through an
+// if/else, which is an expression too.
+fn sign(n: i64) -> str {
+    let magnitude = if n < 0 { 0 - n } else { n };
+    if magnitude == 0 { "zero" } else if n < 0 { "negative" } else { "positive" }
+}
+
+fn main() {
+    io::println(string::int_to_str(add(2, 3)));
+    io::println(string::int_to_str(zero()));
+    greet("world");
+    io::println(sign(-4));
+    io::println(sign(0));
+    io::println(sign(4));
+}

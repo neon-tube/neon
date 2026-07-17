@@ -1,0 +1,27 @@
+// `and`, `or` and prefix `!` on bool. They are keywords, not `&&`/`||`, and
+// they take bools only — there is no truthiness in Neon, so `1 and true` does
+// not typecheck.
+
+use std::io;
+
+fn show(v: bool) { io::println(if v { "true" } else { "false" }); }
+
+fn main() {
+    show(true and true);
+    show(true and false);
+    show(false and true);
+    show(false and false);
+
+    show(true or true);
+    show(true or false);
+    show(false or true);
+    show(false or false);
+
+    show(!true);
+    show(!false);
+    show(!(1 == 2));
+
+    // `!` binds tighter than `and`/`or`: `!false and false` is `(!false) and false`.
+    show(!false and false);
+    show(!(false and false));
+}

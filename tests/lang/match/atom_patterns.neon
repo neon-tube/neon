@@ -1,0 +1,51 @@
+// Atoms (`:name`) are singleton types that are their own value, and a union of
+// them is matched by atom pattern. `Ordering` in the prelude is exactly this:
+// `type Ordering = :lt | :eq | :gt`.
+//
+// Atoms need no record declaration, so a union of atoms is the lightest sum type
+// available — use it when the members carry no data. As with any union, the arms
+// exhaust it without a `_`.
+
+use std::io;
+use std::string;
+
+type Colour = :red | :green | :blue
+
+fn name(c: Colour) -> str {
+    match c {
+        :red => "red",
+        :green => "green",
+        :blue => "blue",
+    }
+}
+
+fn compare(a: i64, b: i64) -> Ordering {
+    if a < b { :lt } else if a == b { :eq } else { :gt }
+}
+
+fn sign(o: Ordering) -> str {
+    match o {
+        :lt => "<",
+        :eq => "=",
+        :gt => ">",
+    }
+}
+
+fn main() {
+    io::println(name(:red));
+    io::println(name(:green));
+    io::println(name(:blue));
+
+    io::println(sign(compare(1, 2)));
+    io::println(sign(compare(2, 2)));
+    io::println(sign(compare(3, 2)));
+
+    // An atom is a value: it binds, and it compares by identity of the atom.
+    let c: Colour = :green;
+    io::println(name(c));
+    io::println(if c == :green { "green" } else { "not green" });
+
+    // A partial union is a subtype of the wider one: :red alone is a Colour.
+    let just_red: :red = :red;
+    io::println(name(just_red));
+}

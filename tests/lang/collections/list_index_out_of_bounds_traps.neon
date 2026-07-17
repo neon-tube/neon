@@ -1,0 +1,39 @@
+//@ exit: 101
+
+// `xs[i]` TRAPS on an out-of-bounds index: it prints a message on stderr and
+// exits 101. It does not throw and does not return null, so it needs no `try` and
+// no `orelse` — `[]` asserts that the element is there.
+//
+// This is the same answer the language already gives for `/` by zero, and for
+// the same reason: a bounds violation is a bug, not a recoverable condition. A
+// checked throw here would force `try xs[i]` on every element access.
+//
+// `list::get` is the other path — see list_get_out_of_range_throws.neon. Same
+// index, same list, deliberately different contracts.
+//
+// "before" and the in-range read are what make this test mean something: the
+// program really did run and really did reach the bad index, rather than
+// failing to start. `id` keeps the index opaque so a constant-folder cannot
+// turn the trap into a compile error.
+
+use std::io;
+use std::string;
+
+fn id(x: i64) -> i64 { x }
+
+fn main() {
+    let xs: List[i64] = [10, 20, 30];
+
+    io::println("before");
+
+    // In range: `[]` yields the element itself, type i64 — not `i64 | null`.
+    // No `orelse` appears anywhere in this line.
+    let first: i64 = xs[id(0)];
+    io::println(string::int_to_str(first));
+    io::println(string::int_to_str(xs[id(2)]));
+
+    // Out of range: traps here.
+    io::println(string::int_to_str(xs[id(3)]));
+
+    io::println("unreachable");
+}

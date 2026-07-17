@@ -1,0 +1,24 @@
+// An anonymous record type is structural: membership is decided by shape. A
+// literal with MORE fields is accepted where fewer are required (width
+// subtyping), and the extra fields remain readable through the original binding
+// — the widening is a view, not a truncation.
+
+use std::io;
+use std::string;
+
+fn name_only(item: { name: str }) -> str { item.name }
+
+fn describe(item: { name: str, age: i64 }) -> str {
+    string::concat(item.name, string::concat(" ", string::int_to_str(item.age)))
+}
+
+fn main() {
+    let bob = { name: "Bob", age: 25 };
+    io::println(name_only(bob));
+    io::println(describe(bob));
+
+    let wider = { name: "Carol", age: 31, admin: true };
+    io::println(name_only(wider));
+    io::println(describe(wider));
+    io::println(if wider.admin { "admin" } else { "user" });
+}

@@ -1,0 +1,26 @@
+//@ compile-fail
+//@ error-contains: null
+//
+// `try?` types as `T | null`, not `T`. Using the softened result where a plain
+// `i64` is required — without `orelse`, a match, or any other null handling — is
+// a compile error. The null half cannot be silently dropped.
+
+use std::io;
+use std::string;
+
+record Boom { msg: str }
+
+impl Error for Boom {
+    fn message(error: Boom) -> str { error.msg }
+}
+
+fn go() throws Boom -> i64 {
+    throw Boom { msg: "no" }
+}
+
+fn double(n: i64) -> i64 { n * 2 }
+
+fn main() {
+    let v = try? go();
+    io::println(string::int_to_str(double(v)));
+}

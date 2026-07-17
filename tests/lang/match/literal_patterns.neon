@@ -1,0 +1,42 @@
+// Literal patterns on i64, str and bool, with `_` as the catch-all. A bool match
+// needs no `_`: `true` and `false` exhaust it.
+//
+// Literal patterns compare by value, so the str arms match content, not
+// identity, and `""` is an ordinary pattern rather than a special case.
+
+use std::io;
+
+fn number(x: i64) -> str {
+    match x {
+        1 => "one",
+        2 => "two",
+        _ => "many",
+    }
+}
+
+fn word(s: str) -> str {
+    match s {
+        "a" => "letter-a",
+        "" => "empty",
+        _ => "other",
+    }
+}
+
+fn flag(b: bool) -> str {
+    match b {
+        true => "on",
+        false => "off",
+    }
+}
+
+fn main() {
+    io::println(number(1));
+    io::println(number(2));
+    io::println(number(42));
+    io::println(number(-1));
+    io::println(word("a"));
+    io::println(word(""));
+    io::println(word("z"));
+    io::println(flag(true));
+    io::println(flag(false));
+}

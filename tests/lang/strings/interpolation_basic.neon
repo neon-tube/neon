@@ -1,0 +1,52 @@
+// String interpolation: `#{expr}` inside a string literal splices the
+// expression's rendering into the string. i64, f64, bool and str have direct
+// paths.
+//
+// The hole holds an expression, not just a name — arithmetic, comparison, field
+// access and calls all work, and interpolations may sit adjacent to each other
+// or at either end of the literal.
+
+use std::io;
+use std::string;
+
+record User { name: str, age: i64 }
+
+fn double(n: i64) -> i64 { n * 2 }
+
+fn main() {
+    let n = 7;
+    let s = "world";
+    let f = 1.5;
+    let b = true;
+
+    io::println("hello #{s}");
+    io::println("n = #{n}");
+    io::println("f = #{f}");
+    io::println("b = #{b}");
+
+    // Whole expressions, not just names.
+    io::println("n + 1 = #{n + 1}");
+    io::println("n > 3 is #{n > 3}");
+    io::println("double(n) = #{double(n)}");
+
+    // Field access.
+    let u = User { name: "ada", age: 36 };
+    io::println("#{u.name} is #{u.age}");
+
+    // Adjacent interpolations with nothing between them, and one at each end.
+    io::println("#{n}#{n}");
+    io::println("#{n} in the middle #{n}");
+
+    // A literal that is nothing but an interpolation.
+    io::println("#{s}");
+
+    // Nested string literals inside the hole.
+    io::println("upper: #{string::to_upper(s)}");
+
+    // Only `#{` is special. A `#` not followed by `{` is an ordinary byte.
+    io::println("#1 pick: #{s}");
+
+    // The result is an ordinary str.
+    let msg = "n=#{n}";
+    io::println(string::int_to_str(string::len(msg)));
+}

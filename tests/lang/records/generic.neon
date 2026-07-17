@@ -1,0 +1,30 @@
+// A record parameterised by a type. The parameter is inferred from the field
+// initialisers at the primitive level (`Pair { a: 1, b: 2 }` is `Pair[i64]`, not
+// a pair of the singleton literal types), and an annotation pins it explicitly.
+
+use std::io;
+use std::string;
+
+record Pair[T] {
+    a: T,
+    b: T,
+}
+
+fn first[T](p: Pair[T]) -> T { p.a }
+fn second[T](p: Pair[T]) -> T { p.b }
+
+fn swap[T](p: Pair[T]) -> Pair[T] { Pair { a: p.b, b: p.a } }
+
+fn main() {
+    let nums = Pair { a: 1, b: 2 };
+    io::println(string::int_to_str(first(nums)));
+    io::println(string::int_to_str(second(nums)));
+
+    let strs: Pair[str] = Pair { a: "x", b: "y" };
+    io::println(first(strs));
+    io::println(first(swap(strs)));
+
+    // Nesting a generic record inside itself.
+    let nested = Pair { a: Pair { a: 1, b: 2 }, b: Pair { a: 3, b: 4 } };
+    io::println(string::int_to_str(second(first(nested))));
+}

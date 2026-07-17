@@ -1,0 +1,56 @@
+// `slice` and `char_at` take BYTE offsets (task 609, Go-style). A slice boundary
+// that falls inside a multi-byte sequence is NOT an error: it splits the
+// sequence and hands back the raw bytes. Validation happens at IO boundaries and
+// is opt-in — the string operations themselves never validate.
+//
+// "héllo" is h | é | l | l | o = bytes 0 | 1,2 | 3 | 4 | 5.
+// Byte 2 is the middle of é, so slice(s, 0, 2) keeps é's lead byte and drops its
+// continuation byte.
+//
+// The goldens avoid printing the split bytes — an invalid sequence's rendering
+// is the terminal's business, not the language's. What is pinned is the byte
+// arithmetic and, crucially, that the two halves of a split still concatenate
+// back to exactly the original: no byte is lost, replaced, or repaired.
+
+use std::io;
+use std::string;
+
+fn size(s: str) { io::println(string::int_to_str(string::len(s))); }
+fn yesno(b: bool) { io::println(if b { "yes" } else { "no" }); }
+
+fn main() {
+    let s = "héllo";
+    size(s);
+
+    // Slices on a character boundary keep characters whole.
+    io::println(string::slice(s, 0, 1) orelse "?");
+    io::println(string::slice(s, 0, 3) orelse "?");
+    io::println(string::slice(s, 1, 3) orelse "?");
+    io::println(string::slice(s, 3, 6) orelse "?");
+
+    // A boundary inside é: 2 bytes out, not 2 characters, and not an error.
+    size(string::slice(s, 0, 2) orelse "");
+    size(string::slice(s, 2, 6) orelse "");
+
+    // The split loses nothing: the halves rejoin to the original, byte for byte.
+    let left = string::slice(s, 0, 2) orelse "";
+    let right = string::slice(s, 2, 6) orelse "";
+    size(string::concat(left, right));
+    yesno(string::concat(left, right) == s);
+
+    // char_at is a byte index too, so index 1 yields é's lead byte alone: one
+    // byte, an incomplete sequence — not the character é, which is 2 bytes.
+    size(string::char_at(s, 0) orelse "");
+    size(string::char_at(s, 1) orelse "");
+    io::println(string::char_at(s, 0) orelse "?");
+    io::println(string::char_at(s, 3) orelse "?");
+
+    // Out of range is the one thing that IS null — an absence, not a failure.
+    // A non-boundary is in range, so it is never null.
+    io::println(string::slice(s, 0, 99) orelse "OUT OF RANGE");
+    io::println(string::slice(s, -1, 2) orelse "OUT OF RANGE");
+    io::println(string::char_at(s, 6) orelse "OUT OF RANGE");
+
+    // An empty slice at any in-range offset, boundary or not, is zero bytes.
+    size(string::slice(s, 2, 2) orelse "?");
+}

@@ -1,0 +1,13 @@
+//@ compile-fail
+//@ error-contains: null
+//
+// `null` inhabits only the types whose union includes it. `str` alone does not,
+// so there is no implicit null in any non-nullable position.
+
+use std::io;
+
+fn shout(s: str) -> str { s }
+
+fn main() {
+    io::println(shout(null));
+}

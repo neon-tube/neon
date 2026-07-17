@@ -1,0 +1,26 @@
+// `str` is UTF-8 bytes (task 609). `string::len` counts BYTES, not characters
+// and not codepoints. This is the primitive, and it is documented as such.
+//
+// Each string below is chosen so the byte count and the character count differ,
+// across all four UTF-8 sequence lengths.
+
+use std::io;
+use std::string;
+
+fn size(s: str) { io::println(string::int_to_str(string::len(s))); }
+
+fn main() {
+    size("hello");        // 5 chars, 5 bytes — ASCII is 1 byte each
+    size("héllo");        // 5 chars, 6 bytes — é is 2 bytes
+    size("é");            // 1 char,  2 bytes
+    size("€");            // 1 char,  3 bytes
+    size("😀");           // 1 char,  4 bytes
+    size("aé€😀");        // 4 chars, 10 bytes
+
+    // Concatenation adds byte lengths.
+    size(string::concat("é", "é"));
+    size(string::concat("a", "😀"));
+
+    // Repeat multiplies them.
+    size(string::repeat("é", 3));
+}

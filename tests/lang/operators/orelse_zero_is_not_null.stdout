@@ -1,0 +1,8 @@
+union zero: 0
+union null: -1
+plain zero: 0
+plain five: 5
+literal zero: 0
+empty str: 
+plain false: false
+plain 0.0: kept

@@ -1,0 +1,22 @@
+// Unary `-` wraps too, and there is exactly one value where that is visible:
+// i64::MIN has no positive counterpart, so `-i64::MIN` is i64::MIN.
+
+use std::io;
+use std::string;
+
+fn id(x: i64) -> i64 { x }
+fn show(v: i64) { io::println(string::int_to_str(v)); }
+
+fn main() {
+    show(-(-9223372036854775808));
+    show(-id(-9223372036854775808));
+
+    // Everywhere else negation is its own inverse.
+    show(-(-5));
+    show(-id(5));
+    show(-(9223372036854775807));
+
+    // `0 - x` wraps identically, being the same operation.
+    show(0 - -9223372036854775808);
+    show(0 - id(-9223372036854775808));
+}

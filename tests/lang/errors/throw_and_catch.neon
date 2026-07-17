@@ -1,0 +1,33 @@
+// `try expr catch (e) { ... }` handles the error one frame above the throw. The
+// catch body is an ordinary expression and yields the value of the whole `try`.
+//
+// The golden proves the catch body actually ran: it prints from inside the catch
+// and reads the thrown record's field. A test that only checked the exit code
+// would pass even if the throw never happened.
+
+use std::io;
+use std::string;
+
+record Boom { msg: str }
+
+impl Error for Boom {
+    fn message(error: Boom) -> str { error.msg }
+}
+
+fn maybe(fail: bool) throws Boom -> i64 {
+    if fail { throw Boom { msg: "detonated" } } else { 1 }
+}
+
+fn main() {
+    let ok = try maybe(false) catch (e) {
+        io::println("catch ran for the ok call");
+        -1
+    };
+    io::println(string::int_to_str(ok));
+
+    let bad = try maybe(true) catch (e) {
+        io::println(string::concat("caught: ", message(e)));
+        -1
+    };
+    io::println(string::int_to_str(bad));
+}

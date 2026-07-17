@@ -1,0 +1,29 @@
+// `Red <: Red | Green`, so a bare variant is accepted wherever the union is
+// expected — no wrapping, no constructor call. The consequence, accepted in
+// tasks/610: a union seals the variant SET, not a namespace, and "a Color and
+// nothing narrower" is not expressible. A function taking `Color` cannot refuse
+// a value whose static type is only `Red`.
+
+use std::io;
+
+record Red {}
+record Green {}
+
+type Color = Red | Green
+
+fn name(c: Color) -> str {
+    if c is Red { "red" } else { "green" }
+}
+
+fn main() {
+    // Static type Red, passed where Color is expected.
+    let r = Red {};
+    io::println(name(r));
+
+    // Widening on binding is the same rule spelled out.
+    let c: Color = Green {};
+    io::println(name(c));
+
+    // And a union-typed value flows back into a union-typed parameter unchanged.
+    io::println(name(c));
+}

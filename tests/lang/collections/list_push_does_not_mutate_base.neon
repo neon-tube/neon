@@ -1,0 +1,43 @@
+// Lists are immutable with value semantics. `list::push` returns a NEW list; the
+// list it was given is unchanged, and two pushes off one base do not alias.
+//
+// This is the load-bearing property of List[T] and it is checked three ways:
+//   1. `base` still has its original length and contents after two pushes.
+//   2. `a` and `b`, both pushed from `base`, differ in their last element —
+//      they are separate lists, not two views of one.
+//   3. pushing again onto `a` leaves `a` alone.
+// `base` is read AFTER the pushes, so a mutation in push cannot hide.
+
+use std::io;
+use std::string;
+use std::collections::list;
+
+fn show(label: str, xs: List[i64]) {
+    let parts: List[str] = [];
+    let i = 0;
+    loop {
+        if i >= list::len(xs) { break; }
+        parts = list::push(parts, string::int_to_str(xs[i]));
+        i = i + 1;
+    };
+    io::println(string::concat(label, string::join(parts, ",")));
+}
+
+fn main() {
+    let base: List[i64] = [1, 2, 3];
+
+    let a = list::push(base, 4);
+    let b = list::push(base, 5);
+
+    show("base: ", base);
+    show("a: ", a);
+    show("b: ", b);
+
+    io::println(string::int_to_str(list::len(base)));
+    io::println(string::int_to_str(list::len(a)));
+    io::println(string::int_to_str(list::len(b)));
+
+    let c = list::push(a, 6);
+    show("a: ", a);
+    show("c: ", c);
+}

@@ -1,0 +1,25 @@
+// The five arithmetic operators on i64, plus unary minus, on values small
+// enough that nothing wraps and no division traps. Overflow and the trapping
+// cases live in `integers/`.
+
+use std::io;
+use std::string;
+
+fn show(v: i64) { io::println(string::int_to_str(v)); }
+
+fn main() {
+    show(2 + 3);
+    show(2 - 3);
+    show(2 * 3);
+    show(7 / 2);
+    show(7 % 2);
+    show(-(2 + 3));
+
+    // Division truncates toward zero, and `%` takes the sign of the dividend,
+    // so `(a / b) * b + (a % b) == a` holds for negative operands too.
+    show(-7 / 2);
+    show(-7 % 2);
+    show(7 / -2);
+    show(7 % -2);
+    show((-7 / 2) * 2 + (-7 % 2));
+}

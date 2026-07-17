@@ -1,0 +1,10 @@
+present: null
+present: 7
+absent
+absent
+elem 0 vs elem 2: distinct
+softened 0: null
+softened 2: null
+-1
+-1
+absent

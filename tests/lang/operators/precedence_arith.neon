@@ -1,0 +1,27 @@
+// Arithmetic precedence and associativity: `*` `/` `%` bind tighter than
+// `+` `-`, unary `-` binds tighter than both, and every binary operator in Neon
+// associates left.
+
+use std::io;
+use std::string;
+
+fn show(v: i64) { io::println(string::int_to_str(v)); }
+
+fn main() {
+    show(2 + 3 * 4);
+    show(2 * 3 + 4);
+    show((2 + 3) * 4);
+    show(10 - 2 * 3);
+    show(10 + 8 / 4);
+    show(10 + 7 % 4);
+
+    // Left-associative: subtraction and division are not the same the other way.
+    show(10 - 3 - 2);
+    show(100 / 5 / 2);
+    show(20 % 7 % 3);
+
+    // Unary minus binds tighter than the binary operators.
+    show(-2 * 3);
+    show(-2 + 3);
+    show(- 2 - -3);
+}

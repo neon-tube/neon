@@ -1,0 +1,6 @@
+cond
+eval then
+a=then
+cond
+eval else
+b=else

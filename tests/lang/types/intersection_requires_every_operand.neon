@@ -1,0 +1,13 @@
+//@ compile-fail
+//@ error-contains: b
+//
+// An intersection means AND. A value that satisfies only the first operand is
+// not a member: `{ a: 1 }` lacks `b` and is rejected.
+
+use std::io;
+
+fn show(v: { a: i64 } & { b: str }) -> str { v.b }
+
+fn main() {
+    io::println(show({ a: 1 }));
+}
