@@ -645,8 +645,10 @@ fn an_orphan_may_not_steal_covered_values() {
          impl Area for Circle {{ fn area(v: Circle) -> i64 {{ 1 }} }}
          orphan impl Area for Circle {{ fn area(v: Circle) -> i64 {{ 2 }} }}"
     ));
-    assert_eq!(kinds(&e), vec![TypeErrorKind::OrphanOverlaps("Area".into())]);
+    assert!(matches!(kinds(&e).as_slice(), [TypeErrorKind::OrphanOverlaps { .. }]));
     assert!(errors(&e)[0].contains("gap"));
+    // The intersection IS the diagnostic: it names the values, not just the protocol.
+    assert!(errors(&e)[0].contains("Circle"), "{}", errors(&e)[0]);
 }
 
 #[test]
@@ -660,7 +662,8 @@ fn an_orphan_may_not_specialize_a_wider_impl() {
          impl Area for Shape {{ fn area(v: Shape) -> i64 {{ 1 }} }}
          orphan impl Area for Circle {{ fn area(v: Circle) -> i64 {{ 2 }} }}"
     ));
-    assert_eq!(kinds(&e), vec![TypeErrorKind::OrphanOverlaps("Area".into())]);
+    assert!(matches!(kinds(&e).as_slice(), [TypeErrorKind::OrphanOverlaps { .. }]));
+    assert!(errors(&e)[0].contains("Circle"), "the stolen values are named: {}", errors(&e)[0]);
 }
 
 #[test]
@@ -710,4 +713,30 @@ fn a_plain_impl_is_not_subject_to_the_gap_rule() {
          impl Area for Circle {{ fn area(v: Circle) -> i64 {{ 2 }} }}"
     ));
     assert_eq!(kinds(&e), vec![]);
+}
+
+// ---- names reach the printer ----
+
+#[test]
+fn a_mu_type_prints_by_name_rather_than_as_a_binder() {
+    // `mu A0 = ...` is not syntax anyone can write, so a recursive type with a name
+    // must reach for it. `defs` is what carries the name from env to the printer,
+    // and nothing populated it until now.
+    let mut e = env("record Wrap { v: Json | null }\nmu type Json = Wrap");
+    let json = ty(&mut e, "Json");
+    let shown = super::print::print(&mut e.solver.t, json);
+    assert_eq!(shown, "Json");
+}
+
+#[test]
+fn a_generic_alias_is_not_recorded_under_its_bare_name() {
+    // `Pair[i64]` and `Pair[str]` would collide on `Pair`, and printing one as the
+    // other is worse than printing the expansion.
+    let mut e = env("type Pair[T] = (T, T)");
+    let pi = ty(&mut e, "Pair[i64]");
+    let ps = ty(&mut e, "Pair[str]");
+    let a = super::print::print(&mut e.solver.t, pi);
+    let b = super::print::print(&mut e.solver.t, ps);
+    assert_ne!(a, b, "two instantiations must not print alike: {a} vs {b}");
+    assert!(!a.contains("Pair"), "no name is better than the wrong name: {a}");
 }

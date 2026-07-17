@@ -58,8 +58,9 @@ pub enum TypeErrorKind {
     MuInParameter(String),
     /// `orphan impl` in something another program may depend on.
     OrphanInLibrary(String),
-    /// An orphan that does not fill a gap: something already covers those values.
-    OrphanOverlaps(String),
+    /// An orphan that does not fill a gap. `overlap` is the values already covered
+    /// — the intersection itself, which is what the representation is for.
+    OrphanOverlaps { protocol: String, overlap: String },
     TooDeep(String),
 }
 
@@ -111,14 +112,11 @@ impl fmt::Display for TypeError {
                 "`orphan impl {n}` may only appear in the root application: a library \
                  carrying one imposes its choice on every program that depends on it"
             ),
-            // Naming the overlapping values would be better, and is what the
-            // set-theoretic representation is for -- the intersection IS the
-            // diagnostic. It needs a TyId printer, which does not exist yet.
-            TypeErrorKind::OrphanOverlaps(n) => write!(
+            TypeErrorKind::OrphanOverlaps { protocol, overlap } => write!(
                 f,
-                "this orphan impl of `{n}` does not fill a gap: another impl of `{n}` \
-                 already covers some of those values. An orphan may only add; it \
-                 cannot specialize, override or steal what an existing impl answers for"
+                "this orphan impl of `{protocol}` does not fill a gap: `{overlap}` is \
+                 already covered by another impl. An orphan may only add; it cannot \
+                 specialize, override or steal what an existing impl answers for"
             ),
             TypeErrorKind::MuInParameter(n) => write!(
                 f,
@@ -324,7 +322,8 @@ impl Env {
             let covered = self.solver.t.union_all(&others);
             let overlap = self.solver.t.intersect(target, covered);
             if !self.solver.is_empty(overlap) {
-                self.error(span, TypeErrorKind::OrphanOverlaps(protocol));
+                let overlap = super::print::print(&mut self.solver.t, overlap);
+                self.error(span, TypeErrorKind::OrphanOverlaps { protocol, overlap });
             }
         }
     }
@@ -663,6 +662,23 @@ impl Env {
 
     // ---- instantiation ----
 
+    /// Let a diagnostic say `Json` rather than the expansion.
+    ///
+    /// `defs` is keyed by name alone, so a generic instantiation cannot be recorded:
+    /// `Pair[i64]` and `Pair[str]` would collide on `Pair` and one would print as
+    /// the other, which is worse than printing the expansion. Only the un-generic
+    /// case is recorded until `defs` is keyed by name AND arguments.
+    ///
+    /// It matters most for `mu`: a recursive type with no name to reach for prints
+    /// as `mu A0 = ...`, which is not syntax anyone can write.
+    fn record_name(&mut self, name: &str, args: &[TyId], ty: TyId) {
+        if !args.is_empty() || self.is_error(ty) {
+            return;
+        }
+        let n = self.solver.t.name(name);
+        self.solver.t.defs.entry(n).or_insert(ty);
+    }
+
     pub fn instantiate(&mut self, key: &str, args: Vec<TyId>, span: &Span) -> TyId {
         let Some(decl) = self.decls.get(key) else {
             self.error(span.clone(), TypeErrorKind::Unknown(key.to_string()));
@@ -722,12 +738,14 @@ impl Env {
                 let body = self.resolve(&scope, &a.value);
                 let d = self.solver.t.data(body);
                 self.solver.t.define(id, d);
+                self.record_name(decl.name(), &args, id);
                 id
             }
             Sort::Alias(a) => {
                 self.active.push(ik.clone());
                 let t = self.resolve(&scope, &a.value);
                 self.active.pop();
+                self.record_name(decl.name(), &args, t);
                 t
             }
             Sort::Newtype(a) => {

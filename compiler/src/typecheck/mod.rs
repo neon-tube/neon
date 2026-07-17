@@ -8,6 +8,7 @@ pub mod dispatch;
 pub mod empty;
 pub mod env;
 pub mod narrow;
+pub mod print;
 pub mod resolve;
 pub mod types;
 
