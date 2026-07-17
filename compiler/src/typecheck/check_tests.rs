@@ -457,3 +457,28 @@ fn a_lambda_of_the_wrong_arity_is_rejected() {
          fn f() -> i64 { apply_it((a, b) => a, 5) }",
     );
 }
+
+#[test]
+fn a_protocol_method_dispatches_without_importing_the_protocol() {
+    // No `use` of Sized: dispatch searches every protocol, not only imported ones.
+    // This is the property that must not regress into Rust-style trait-in-scope.
+    clean(
+        "record Buf { n: i64 }
+         protocol Sized for T { fn len(v: T) -> i64 }
+         impl Sized for Buf { fn len(v: Buf) -> i64 { v.n } }
+         fn f(b: Buf) -> i64 { len(b) }",
+    );
+}
+
+#[test]
+fn a_module_fn_wins_over_a_protocol_method_of_the_same_name() {
+    // Lexical first: the str-returning module `len` shadows the i64 protocol method,
+    // so this returns str. If the method had won it would be a mismatch.
+    clean(
+        "record Buf { n: i64 }
+         protocol Sized for T { fn len(v: T) -> i64 }
+         impl Sized for Buf { fn len(v: Buf) -> i64 { v.n } }
+         fn len(b: Buf) -> str { \"n\" }
+         fn f(b: Buf) -> str { len(b) }",
+    );
+}
