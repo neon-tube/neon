@@ -116,10 +116,29 @@ made covariance sound.
 
 ## Open
 
-- **Iteration.** `for x in xs` needs something, and `list::iter`/`map::iter` appear in
-  the corpus with no protocol behind them. An `Iterator` protocol is the obvious answer
-  and it is not designed. HKT (`protocol Container for C[_]`) is pinned by the corpus
-  but unimplemented in dispatch.
+- **Iteration.** Settled in shape, open in surface.
+
+  `for x in xs` is a built-in index loop over `List`, not a protocol — it is most of the
+  iteration in most programs and it must be a C loop over a contiguous buffer. It is not
+  extensible to user containers in v1, and that is fine.
+
+  Transformation is **eager, HKT `Mappable`**: `protocol Mappable for C[_]` with
+  `map`/`filter`/`fold` returning a new `C`. `Map[K,V]` does not fit `C[_]` (wrong
+  arity) and iterates via `map::values`/`map::entries` first — a two-parameter type is
+  not a functor over one. No `Iterator` type, no closure streams, no associated types:
+  an arrow-typed `Iter[T] = () -> (T, Iter[T])` boxes a closure per element, which is
+  strictly worse than eager + `rc == 1` reuse on both allocations and indirect calls.
+
+  Pipeline effect order is interleaved by definition (see `decisions.md`), which
+  reserves fusion for later with no purity tracking and no signature change. v1 lowers
+  eager per stage.
+
+  Still open: the exact `Mappable` method set; whether `fold` is a method or a free
+  function; infinite sources (`iterate(0, f)`), which cannot be a `List` and are the one
+  genuine case a lazy type would serve — deferred until something needs it. **HKT
+  dispatch is designed in `dispatch.md` but unbuilt**, and `Mappable` cannot be called
+  until it exists — that, and first-class calls (`g(1)` on an arrow-typed local, which
+  the checker currently rejects), are the two real blockers.
 - **`Error` vs `Display`.** `Error` declares `message(e) -> str`; `Display` declares
   `to_string(v) -> str`. For an error those are the same string, and Neon has no
   protocol inheritance to say so. Either `Error: Display` needs designing, or `message`

@@ -464,6 +464,33 @@ correction on every division.
 Never "if truthy". If the left type cannot contain `null` — a bare `i64` — then
 `A orelse B` is always `A`, **including when A is `0`**.
 
+### Combinator pipelines interleave effects, element by element
+
+`map`, `filter`, `fold` and their kin (the `Mappable` family) run **one element
+through the whole pipeline before the next**, left to right. `filter(map(xs, f), p)`
+evaluates `f(x₀), p(f(x₀)), f(x₁), p(f(x₁))…`, not every `f` and then every `p`. This
+is the iterator ordering Rust defines, and it is the *definition* here, not an
+observable consequence of some implementation.
+
+The point is what it licenses. A pipeline is otherwise N traversals of one buffer —
+`rc == 1` reuse means no per-stage allocation, so the cost is passes, not heap — and
+the compiler is free to **fuse a statically visible chain into a single loop**. Fusing
+reorders cross-stage effects, and normally that would need proving the stages pure to
+license it. Making the interleaved order the *specification* removes the question:
+there is no other order to preserve, so nothing has to be proven and no purity is
+tracked. (A dynamic `Mappable` value the compiler cannot see through falls back to
+eager per-stage; same result, more passes.)
+
+This is reserved now and unused now. v1 lowers eagerly, per stage — Elixir's `Enum`,
+which is fine because the passes are cheap. The stdlib signatures do not depend on the
+choice, so fusion can arrive later against an IR with zero change to any program. What
+could *not* arrive later is the permission: code that relied on "every `f`, then every
+`p`" would break under fusion, so the ordering is fixed here before anyone can write
+that code.
+
+If you need one stage's effects fully sequenced before the next, that is a `for` loop,
+not a pipeline. Pipelines are for transforming values, not for ordering effects.
+
 ---
 
 ## Implementation
