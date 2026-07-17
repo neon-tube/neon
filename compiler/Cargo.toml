@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+ariadne = "0.6.0"
 chumsky = { version = "0.13.0" }
 unicode-ident = "1.0.24"
 unicode-normalization = "0.1.25"

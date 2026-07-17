@@ -1,5 +1,6 @@
 use crate::source;
 use color_eyre::eyre::Result;
+use neon_compiler::diagnostic::Renderer;
 use neon_compiler::lexer;
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -22,8 +23,9 @@ pub fn run(file: &OsString, spans: bool) -> Result<()> {
         Err(errors) => {
             // Every error, not just the first: the lexer accumulates so a
             // diagnostics pass can show them all.
+            let mut r = Renderer::for_stderr(&path, &src);
             for e in &errors {
-                eprint!("{}", source::render(&path, &src, e.span.clone(), &e.to_string()));
+                r.eprint(e.span.clone(), &e.to_string());
             }
             std::process::exit(1);
         }

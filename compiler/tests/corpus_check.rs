@@ -22,6 +22,7 @@
 //! against that stronger meaning. A green run of this test is not evidence that
 //! any Neon program produces the right answer.
 
+use neon_compiler::diagnostic::Renderer;
 use neon_compiler::typecheck::env::Unit;
 use neon_compiler::typecheck::Env;
 use neon_compiler::{lexer, parser};
@@ -137,8 +138,9 @@ impl Failure {
         errs: impl Iterator<Item = (std::ops::Range<usize>, String)> + 'a,
     ) -> Failure {
         let (mut messages, mut rendered) = (Vec::new(), String::new());
+        let mut r = Renderer::plain(path, src);
         for (span, msg) in errs {
-            rendered.push_str(&render(path, src, span, &msg));
+            rendered.push_str(&r.render(span, &msg));
             messages.push(msg);
         }
         Failure { messages, rendered }
@@ -171,30 +173,6 @@ fn check(path: &Path, src: &str) -> Result<(), Failure> {
     }
     let it = env.errors().iter().map(|e| (e.span.clone(), e.to_string()));
     Err(Failure::of(path, src, it))
-}
-
-/// Mirrors `cli::source::render`. The CLI is a binary, not a library, so the
-/// rendering it does cannot be called from here; if these drift, an
-/// `error-contains` substring can match text no user ever sees.
-fn render(path: &Path, src: &str, span: std::ops::Range<usize>, msg: &str) -> String {
-    let offset = span.start.min(src.len());
-    let start = src[..offset].rfind('\n').map_or(0, |i| i + 1);
-    let end_of_line = src[offset..].find('\n').map_or(src.len(), |i| offset + i);
-    let line = src[..start].bytes().filter(|b| *b == b'\n').count() + 1;
-    let col = src[start..offset].chars().count() + 1;
-
-    let gutter = line.to_string();
-    let pad = " ".repeat(gutter.len());
-    let end = span.end.min(end_of_line);
-    let width = src[span.start..end.max(span.start)].chars().count().max(1);
-
-    format!(
-        "error: {msg}\n{pad} --> {}:{line}:{col}\n{pad}  |\n{gutter} | {}\n{pad}  | {}{}\n",
-        path.display(),
-        src[start..end_of_line].trim_end_matches('\r'),
-        " ".repeat(col - 1),
-        "^".repeat(width),
-    )
 }
 
 /// The README's directive contract promises `error-contains` matches "the plain

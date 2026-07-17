@@ -1,5 +1,6 @@
 use crate::source;
 use color_eyre::eyre::{Context, Result};
+use neon_compiler::diagnostic::Renderer;
 use neon_compiler::format::{self, FormatError};
 use std::ffi::OsString;
 use std::io::Write;
@@ -46,7 +47,8 @@ fn report(path: &Path, src: &str, e: FormatError) {
         FormatError::Lex(es) => es.iter().map(|e| (e.span.clone(), e.to_string())).collect(),
         FormatError::Parse(es) => es.iter().map(|e| (e.span.clone(), e.to_string())).collect(),
     };
+    let mut r = Renderer::for_stderr(path, src);
     for (span, msg) in errors {
-        eprint!("{}", source::render(path, src, span, &msg));
+        r.eprint(span, &msg);
     }
 }
