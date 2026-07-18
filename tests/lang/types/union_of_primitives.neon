@@ -9,7 +9,7 @@ type Scalar = i64 | str | bool
 
 fn show(v: Scalar) -> str {
     if v is i64 {
-        string::int_to_str(v as i64)
+        to_string(v as i64)
     } else if v is bool {
         if v as bool { "true" } else { "false" }
     } else {

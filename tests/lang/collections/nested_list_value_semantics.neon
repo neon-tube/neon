@@ -20,7 +20,7 @@ fn dump(label: str, rows: List[List[i64]]) {
         let cells: List[str] = [];
         loop {
             if j >= list::len(row) { break; }
-            cells = list::push(cells, string::int_to_str(row[j]));
+            cells = list::push(cells, to_string(row[j]));
             j = j + 1;
         };
         parts = list::push(parts, string::concat("[", string::concat(string::join(cells, " "), "]")));
@@ -38,8 +38,8 @@ fn main() {
     dump("outer2: ", list::push(outer, grown));
 
     // inner itself is unchanged by the push that produced `grown`.
-    io::println(string::int_to_str(list::len(inner)));
-    io::println(string::int_to_str(list::len(grown)));
+    io::println(to_string(list::len(inner)));
+    io::println(to_string(list::len(grown)));
 
     // set on the outer list leaves the old outer list pointing at the old row.
     let replaced = list::set(outer, 0, grown);

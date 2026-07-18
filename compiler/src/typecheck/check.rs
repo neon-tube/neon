@@ -55,6 +55,16 @@ impl Checker<'_> {
         self.env.error_ty()
     }
 
+    /// Union of two branch types, absorbing poison. A branch that already produced
+    /// a diagnostic must not make the whole `if`/`match` a `T | #error` that then
+    /// fails to match its expected type -- one mistake, one error.
+    fn union_branches(&mut self, a: TyId, b: TyId) -> TyId {
+        if self.env.is_error(a) || self.env.is_error(b) {
+            return self.poison();
+        }
+        self.env.solver.t.union(a, b)
+    }
+
     /// `actual <: expected`, unless either is already poison — a checked
     /// expression that already produced a diagnostic must not produce a second.
     fn assignable(&mut self, actual: TyId, expected: TyId) -> bool {
@@ -472,25 +482,23 @@ impl Checker<'_> {
                 self.expr(module, rhs, Some(b));
                 b
             }
-            BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
+            // Equality is total: any two values may be compared, disjoint ones are
+            // simply not equal. `:ok == :err` is false, not an error, and that is
+            // what makes an atom union behave like a sum type.
+            BinOp::Eq | BinOp::Ne => {
+                self.expr(module, lhs, None);
+                self.expr(module, rhs, None);
+                self.env.solver.t.bool()
+            }
+            // Ordering needs an order. `1 < 2` and `"a" < "b"` are fine; `1 < "s"`
+            // has no common ordered type, and atoms have no order at all.
+            BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
                 let l = self.expr(module, lhs, None);
                 let r = self.expr(module, rhs, None);
-                // `x == null` / `!= null` is a nullable tag test, not `Eq`.
-                let is_null = |e: &Expr| matches!(e.kind, ExprKind::Null);
-                let null_cmp = matches!(op, BinOp::Eq | BinOp::Ne) && (is_null(lhs) || is_null(rhs));
-                // Otherwise the operands must be comparable: one a subtype of the
-                // other. `1 == "s"` is neither, and is a mistake rather than false.
-                if !null_cmp
-                    && !self.env.is_error(l)
-                    && !self.env.is_error(r)
-                    && !self.assignable(l, r)
-                    && !self.assignable(r, l)
-                {
+                let meet = self.env.solver.t.intersect(l, r);
+                if !self.env.is_error(l) && !self.env.is_error(r) && self.env.solver.is_empty(meet) {
                     let (a, b) = (self.show(l), self.show(r));
-                    self.error(
-                        e.span.clone(),
-                        TypeErrorKind::Incomparable { left: a, right: b },
-                    );
+                    self.error(e.span.clone(), TypeErrorKind::Incomparable { left: a, right: b });
                 }
                 self.env.solver.t.bool()
             }
@@ -547,7 +555,7 @@ impl Checker<'_> {
 
         let a = self.block(module, then, expected);
         let c = self.expr(module, other, expected);
-        self.env.solver.t.union(a, c)
+        self.union_branches(a, c)
     }
 
     fn match_expr(
@@ -576,7 +584,7 @@ impl Checker<'_> {
             }
             let t = self.expr(module, &arm.body, expected);
             self.locals.pop();
-            result = self.env.solver.t.union(result, t);
+            result = self.union_branches(result, t);
 
             if let Some(mut test) = test {
                 if arm.guard.is_some() {

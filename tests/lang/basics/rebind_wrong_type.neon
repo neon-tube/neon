@@ -11,5 +11,5 @@ use std::string;
 fn main() {
     let x: i64 = 1;
     x = "text";
-    io::println(string::int_to_str(x));
+    io::println(to_string(x));
 }

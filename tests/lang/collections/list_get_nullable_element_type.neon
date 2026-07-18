@@ -29,7 +29,7 @@ fn probe(xs: List[i64 | null], i: i64) -> str {
         let v = list::get(xs, i);
         // Reached only when the index really is in range. `v` is `i64 | null`,
         // and THIS null means "the element is null", not "no element".
-        if v is null { "present: null" } else { string::concat("present: ", string::int_to_str(v as i64)) }
+        if v is null { "present: null" } else { string::concat("present: ", to_string(v as i64)) }
     } catch (e) {
         // Reached only when the index is out of range. Absence arrived here,
         // on the error channel — it could not have arrived as a value.
@@ -59,8 +59,8 @@ fn main() {
     let b: i64 | null = try? list::get(xs, 2);
     io::println(string::concat("softened 0: ", if a is null { "null" } else { "value" }));
     io::println(string::concat("softened 2: ", if b is null { "null" } else { "value" }));
-    io::println(string::int_to_str((try? list::get(xs, 0)) orelse -1));
-    io::println(string::int_to_str((try? list::get(xs, 2)) orelse -1));
+    io::println(to_string((try? list::get(xs, 0)) orelse -1));
+    io::println(to_string((try? list::get(xs, 2)) orelse -1));
 
     // An empty list of nullable elements: every index is absent, none is null.
     let empty: List[i64 | null] = [];

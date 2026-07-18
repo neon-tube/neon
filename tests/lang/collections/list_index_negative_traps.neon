@@ -16,7 +16,7 @@ fn main() {
     let xs: List[i64] = [10, 20, 30];
 
     io::println("before");
-    io::println(string::int_to_str(xs[id(2)]));
-    io::println(string::int_to_str(xs[id(-1)]));
+    io::println(to_string(xs[id(2)]));
+    io::println(to_string(xs[id(-1)]));
     io::println("unreachable");
 }

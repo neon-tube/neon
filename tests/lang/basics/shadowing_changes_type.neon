@@ -7,14 +7,14 @@ use std::string;
 
 fn main() {
     let v = 42;
-    let v = string::int_to_str(v);
+    let v = to_string(v);
     io::println(v);
     io::println(v + "!");
 
     // Narrowing a nullable by shadowing it with the unwrapped value.
     let maybe: i64 | null = 7;
     let maybe = maybe orelse 0;
-    io::println(string::int_to_str(maybe + 1));
+    io::println(to_string(maybe + 1));
 
     // And the other direction: str, then bool.
     let flag = "yes";

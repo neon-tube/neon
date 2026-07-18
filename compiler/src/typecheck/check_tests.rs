@@ -575,15 +575,20 @@ fn an_interpolated_value_must_be_display() {
 // ---- comparison ----
 
 #[test]
-fn comparable_operands_compare_to_bool() {
+fn equality_is_total() {
+    // Any two values may be compared for equality; disjoint ones are just not equal.
     clean("fn f() -> bool { 1 == 2 }");
-    clean("fn f() -> bool { \"a\" < \"b\" }");
+    clean("fn f() -> bool { 1 == \"s\" }");
+    clean("fn f() -> bool { :ok == :err }");
     clean("fn f(x: i64 | str, y: i64) -> bool { x == y }");
 }
 
 #[test]
-fn incomparable_operands_are_rejected() {
-    let e = check("fn f() -> bool { 1 == \"s\" }");
+fn ordering_needs_a_common_ordered_type() {
+    clean("fn f() -> bool { \"a\" < \"b\" }");
+    clean("fn f() -> bool { 1 < 2 }");
+    // No common type to order.
+    let e = check("fn f() -> bool { 1 < \"s\" }");
     assert!(e.iter().any(|k| matches!(k, TypeErrorKind::Incomparable { .. })), "{e:?}");
 }
 

@@ -14,7 +14,7 @@ fn main() {
         io::println("never");
         i = i - 1;
     }
-    io::println(string::int_to_str(i));
+    io::println(to_string(i));
 
     // The condition is evaluated at least once, even when it is false.
     let checks = 0;

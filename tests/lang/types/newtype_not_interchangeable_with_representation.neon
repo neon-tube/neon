@@ -10,7 +10,7 @@ use std::string;
 
 newtype Meter = f64
 
-fn show(d: Meter) -> str { string::float_to_str(d as f64) }
+fn show(d: Meter) -> str { to_string(d as f64) }
 
 fn main() {
     io::println(show(100.0));

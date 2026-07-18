@@ -9,5 +9,5 @@ use std::string;
 
 fn main() {
     let c = true;
-    io::println(string::int_to_str(if c { 1 }));
+    io::println(to_string(if c { 1 }));
 }

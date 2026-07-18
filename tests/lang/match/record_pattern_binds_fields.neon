@@ -25,8 +25,8 @@ fn shorthand(p: Pt) -> i64 {
 fn axis(p: Pt) -> str {
     match p {
         Pt { x: 0, y: 0 } => "origin",
-        Pt { x: 0, y: n } => string::concat("on y at ", string::int_to_str(n)),
-        Pt { x: n, y: 0 } => string::concat("on x at ", string::int_to_str(n)),
+        Pt { x: 0, y: n } => string::concat("on y at ", to_string(n)),
+        Pt { x: n, y: 0 } => string::concat("on x at ", to_string(n)),
         _ => "off axis",
     }
 }
@@ -38,11 +38,11 @@ fn width(l: Line) -> i64 {
 }
 
 fn main() {
-    io::println(string::int_to_str(sum(Pt { x: 1, y: 2 })));
-    io::println(string::int_to_str(shorthand(Pt { x: 3, y: 4 })));
+    io::println(to_string(sum(Pt { x: 1, y: 2 })));
+    io::println(to_string(shorthand(Pt { x: 3, y: 4 })));
     io::println(axis(Pt { x: 0, y: 0 }));
     io::println(axis(Pt { x: 0, y: 5 }));
     io::println(axis(Pt { x: 5, y: 0 }));
     io::println(axis(Pt { x: 1, y: 1 }));
-    io::println(string::int_to_str(width(Line { from: Pt { x: 2, y: 0 }, to: Pt { x: 9, y: 0 } })));
+    io::println(to_string(width(Line { from: Pt { x: 2, y: 0 }, to: Pt { x: 9, y: 0 } })));
 }

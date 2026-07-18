@@ -15,6 +15,6 @@ fn id(x: i64) -> i64 { x }
 
 fn main() {
     io::println("before");
-    io::println(string::int_to_str(id(-9223372036854775808) % id(-1)));
+    io::println(to_string(id(-9223372036854775808) % id(-1)));
     io::println("unreachable");
 }

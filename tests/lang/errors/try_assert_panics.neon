@@ -23,7 +23,7 @@ fn maybe(fail: bool) throws Boom -> i64 {
 
 fn main() {
     let ok: i64 = try! maybe(false);
-    io::println(string::int_to_str(ok));
+    io::println(to_string(ok));
 
     let dead: i64 = try! maybe(true);
     io::println("unreachable");

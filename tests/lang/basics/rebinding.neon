@@ -9,7 +9,7 @@ fn main() {
     let x: i64 = 10;
     x = x + 1;
     x = x * 2;
-    io::println(string::int_to_str(x));
+    io::println(to_string(x));
 
     // Inference works the same way: no annotation, still rebindable.
     let s = "a";
@@ -19,12 +19,12 @@ fn main() {
 
     // A rebind is a statement, and reads after it see the new value.
     let n = 1;
-    io::println(string::int_to_str(n));
+    io::println(to_string(n));
     n = 2;
-    io::println(string::int_to_str(n));
+    io::println(to_string(n));
 
     // The right-hand side is evaluated before the name is repointed.
     let y = 3;
     y = y + y;
-    io::println(string::int_to_str(y));
+    io::println(to_string(y));
 }

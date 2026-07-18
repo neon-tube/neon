@@ -11,7 +11,7 @@ use std::collections::list;
 // Every index below is in range, so `[]` is the right tool: presence is already
 // established and there is nothing to handle.
 fn at(xs: List[i64], i: i64) -> str {
-    string::int_to_str(xs[i])
+    to_string(xs[i])
 }
 
 fn main() {
@@ -27,5 +27,5 @@ fn main() {
     // The untouched elements are shared but equal, and lengths never change.
     io::println(at(a, 0));
     io::println(at(a, 2));
-    io::println(string::int_to_str(list::len(a)));
+    io::println(to_string(list::len(a)));
 }

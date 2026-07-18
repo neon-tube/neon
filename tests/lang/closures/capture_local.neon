@@ -12,13 +12,13 @@ record Config { factor: i64, label: str }
 fn main() {
     let factor: i64 = 3;
     let scale = (x: i64) => x * factor;
-    io::println(string::int_to_str(scale(5)));
-    io::println(string::int_to_str(apply(7, scale)));
+    io::println(to_string(scale(5)));
+    io::println(to_string(apply(7, scale)));
 
     // Several captures, and a captured record.
     let cfg = Config { factor: 10, label: "n=" };
     let offset = 1;
-    let describe = (x: i64) => string::concat(cfg.label, string::int_to_str(x * cfg.factor + offset));
+    let describe = (x: i64) => string::concat(cfg.label, to_string(x * cfg.factor + offset));
     io::println(describe(2));
 
     // A capture of a captured value: closures nest.
@@ -26,5 +26,5 @@ fn main() {
         let inner = (y: i64) => y + factor;
         inner(x) * 2
     };
-    io::println(string::int_to_str(outer(1)));
+    io::println(to_string(outer(1)));
 }

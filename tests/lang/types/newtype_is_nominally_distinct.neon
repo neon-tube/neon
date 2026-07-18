@@ -18,10 +18,10 @@ fn main() {
     let d = 100.0 as Meter;
     let s = 10.0 as Second;
 
-    io::println(string::float_to_str(d as f64));
+    io::println(to_string(d as f64));
 
     let t = Trip { label: "sprint", distance: d, duration: s };
     io::println(t.label);
-    io::println(string::float_to_str(speed(t)));
-    io::println(string::float_to_str(t.distance as f64));
+    io::println(to_string(speed(t)));
+    io::println(to_string(t.distance as f64));
 }

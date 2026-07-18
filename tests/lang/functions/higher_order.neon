@@ -18,11 +18,11 @@ fn combine(a: i64, b: i64, op: (i64, i64) -> i64) -> i64 { op(a, b) }
 fn double(n: i64) -> i64 { n * 2 }
 
 fn main() {
-    io::println(string::int_to_str(apply(5, (x: i64) => x + 1)));
-    io::println(string::int_to_str(apply(5, double)));
-    io::println(string::int_to_str(twice(3, double)));
-    io::println(string::int_to_str(combine(2, 3, (a: i64, b: i64) => a * b)));
+    io::println(to_string(apply(5, (x: i64) => x + 1)));
+    io::println(to_string(apply(5, double)));
+    io::println(to_string(twice(3, double)));
+    io::println(to_string(combine(2, 3, (a: i64, b: i64) => a * b)));
 
     let add_then_double = compose((x: i64) => x + 1, double);
-    io::println(string::int_to_str(add_then_double(4)));
+    io::println(to_string(add_then_double(4)));
 }

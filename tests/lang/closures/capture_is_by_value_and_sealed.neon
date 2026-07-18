@@ -8,20 +8,20 @@ use std::string;
 
 fn main() {
     let n = 1;
-    let show = () => string::int_to_str(n);
+    let show = () => to_string(n);
 
     io::println(show());
 
     // Rebind the captured name in the enclosing scope, AFTER creation.
     n = 99;
     // The enclosing scope sees the new value...
-    io::println(string::int_to_str(n));
+    io::println(to_string(n));
     // ...and the closure still sees the value it captured.
     io::println(show());
 
     // A closure created after the rebind captures the new value: creation time
     // is what matters, not declaration order of the name.
-    let show2 = () => string::int_to_str(n);
+    let show2 = () => to_string(n);
     io::println(show2());
     io::println(show());
 

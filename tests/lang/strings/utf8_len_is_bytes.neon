@@ -7,7 +7,7 @@
 use std::io;
 use std::string;
 
-fn size(s: str) { io::println(string::int_to_str(string::len(s))); }
+fn size(s: str) { io::println(to_string(string::len(s))); }
 
 fn main() {
     size("hello");        // 5 chars, 5 bytes — ASCII is 1 byte each

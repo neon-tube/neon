@@ -22,8 +22,8 @@ fn classify(n: i64) -> str {
 fn describe(v: i64 | null) -> str {
     match v {
         is null => "none",
-        n if n % 2 == 0 => string::concat("even ", string::int_to_str(n)),
-        n => string::concat("odd ", string::int_to_str(n)),
+        n if n % 2 == 0 => string::concat("even ", to_string(n)),
+        n => string::concat("odd ", to_string(n)),
     }
 }
 

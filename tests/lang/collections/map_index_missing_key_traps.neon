@@ -23,13 +23,13 @@ fn main() {
 
     // Present: `[]` yields the value itself, type i64. No `orelse` needed.
     let one: i64 = m[id("one")];
-    io::println(string::int_to_str(one));
+    io::println(to_string(one));
 
     // Present and zero — a value, not an absence.
-    io::println(string::int_to_str(m[id("zero")]));
+    io::println(to_string(m[id("zero")]));
 
     // Absent: traps here.
-    io::println(string::int_to_str(m[id("nope")]));
+    io::println(to_string(m[id("nope")]));
 
     io::println("unreachable");
 }

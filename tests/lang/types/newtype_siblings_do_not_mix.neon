@@ -11,7 +11,7 @@ use std::string;
 newtype Meter = f64
 newtype Second = f64
 
-fn show(d: Meter) -> str { string::float_to_str(d as f64) }
+fn show(d: Meter) -> str { to_string(d as f64) }
 
 fn main() {
     let s = 10.0 as Second;

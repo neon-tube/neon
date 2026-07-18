@@ -45,7 +45,7 @@ fn main() {
         },
     };
 
-    io::println(string::int_to_str(total(t)));
-    io::println(string::int_to_str(depth(t)));
-    io::println(string::int_to_str(total(Leaf { value: 9 })));
+    io::println(to_string(total(t)));
+    io::println(to_string(depth(t)));
+    io::println(to_string(total(Leaf { value: 9 })));
 }

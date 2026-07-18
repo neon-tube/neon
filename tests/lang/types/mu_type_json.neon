@@ -44,13 +44,13 @@ fn main() {
 
     let arr: Json = [null, true, 1.5];
     io::println(kind(arr));
-    io::println(string::int_to_str(leaves(arr)));
+    io::println(to_string(leaves(arr)));
 
     // An array of arrays: the element type is Json, which includes List[Json].
     let nested: Json = [[1.0, 2.0], ["a"]];
-    io::println(string::int_to_str(leaves(nested)));
+    io::println(to_string(leaves(nested)));
 
     let obj: Json = map::set(map::set(map::new[str, Json](), "a", 1.0), "b", arr);
     io::println(kind(obj));
-    io::println(string::int_to_str(leaves(obj)));
+    io::println(to_string(leaves(obj)));
 }

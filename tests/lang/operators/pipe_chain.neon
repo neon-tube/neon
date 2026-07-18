@@ -16,8 +16,8 @@ fn add(x: i64, n: i64) -> i64 {
 
 fn main() {
     // g(f(x)), not f(g(x)): 1 doubled is 2, plus 3 is 5, doubled is 10.
-    io::println(string::int_to_str(1 |> double() |> add(3) |> double()));
+    io::println(to_string(1 |> double() |> add(3) |> double()));
 
     // A pipeline changing type as it goes.
-    io::println(21 |> double() |> string::int_to_str());
+    io::println(21 |> double() |> to_string());
 }

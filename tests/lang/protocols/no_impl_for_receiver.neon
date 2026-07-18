@@ -16,5 +16,5 @@ record Tri { base: i64, height: i64 }
 impl Shape for Sq { fn area(s: Sq) -> i64 { s.side * s.side } }
 
 fn main() {
-    io::println(string::int_to_str(area(Tri { base: 2, height: 3 })));
+    io::println(to_string(area(Tri { base: 2, height: 3 })));
 }

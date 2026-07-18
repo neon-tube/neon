@@ -18,10 +18,10 @@ fn describe(p: Pet) -> str {
     let a = p.animal;
     if a is Dog {
         let d = a as Dog;
-        string::concat(p.name, string::concat(" has legs: ", string::int_to_str(d.legs)))
+        string::concat(p.name, string::concat(" has legs: ", to_string(d.legs)))
     } else {
         let c = a as Cat;
-        string::concat(p.name, string::concat(" has lives: ", string::int_to_str(c.lives)))
+        string::concat(p.name, string::concat(" has lives: ", to_string(c.lives)))
     }
 }
 

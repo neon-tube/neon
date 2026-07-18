@@ -11,17 +11,17 @@ fn adder(n: i64) -> (i64) -> i64 {
 }
 
 fn prefixer(p: str) -> (i64) -> str {
-    (x: i64) => string::concat(p, string::int_to_str(x))
+    (x: i64) => string::concat(p, to_string(x))
 }
 
 fn main() {
     let add2 = adder(2);
     let add10 = adder(10);
 
-    io::println(string::int_to_str(add2(1)));
-    io::println(string::int_to_str(add10(1)));
+    io::println(to_string(add2(1)));
+    io::println(to_string(add10(1)));
     // The first closure is unaffected by the second's existence.
-    io::println(string::int_to_str(add2(1)));
+    io::println(to_string(add2(1)));
 
     let tag = prefixer("v=");
     io::println(tag(5));
@@ -29,5 +29,5 @@ fn main() {
     // A closure captured by another closure, escaping together.
     let twice = (f: (i64) -> i64) => (x: i64) => f(f(x));
     let add4 = twice(add2);
-    io::println(string::int_to_str(add4(0)));
+    io::println(to_string(add4(0)));
 }

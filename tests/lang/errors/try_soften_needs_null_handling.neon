@@ -22,5 +22,5 @@ fn double(n: i64) -> i64 { n * 2 }
 
 fn main() {
     let v = try? go();
-    io::println(string::int_to_str(double(v)));
+    io::println(to_string(double(v)));
 }

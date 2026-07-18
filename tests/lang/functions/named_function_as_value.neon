@@ -18,20 +18,20 @@ fn pick(want_double: bool) -> (i64) -> i64 {
 fn main() {
     // Bound to a name, then called through the binding.
     let f = double;
-    io::println(string::int_to_str(f(4)));
+    io::println(to_string(f(4)));
 
     // With an explicit closure type annotation.
     let g: (i64) -> i64 = negate;
-    io::println(string::int_to_str(g(4)));
+    io::println(to_string(g(4)));
 
     // Passed as an argument.
-    io::println(string::int_to_str(apply(5, double)));
+    io::println(to_string(apply(5, double)));
 
     // Returned from a function, in both branches.
-    io::println(string::int_to_str(pick(true)(6)));
-    io::println(string::int_to_str(pick(false)(6)));
+    io::println(to_string(pick(true)(6)));
+    io::println(to_string(pick(false)(6)));
 
     // Rebound to a different function of the same type.
     f = negate;
-    io::println(string::int_to_str(f(4)));
+    io::println(to_string(f(4)));
 }

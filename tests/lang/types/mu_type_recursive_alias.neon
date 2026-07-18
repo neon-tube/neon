@@ -33,20 +33,20 @@ fn depth(a: A) -> i64 {
 
 fn main() {
     // The atom arm.
-    io::println(string::int_to_str(count(:ok)));
-    io::println(string::int_to_str(depth(:ok)));
+    io::println(to_string(count(:ok)));
+    io::println(to_string(depth(:ok)));
 
     // The recursive arm: a list of A, each of which is an A.
     let flat: A = [:ok, :ok, :ok];
-    io::println(string::int_to_str(count(flat)));
-    io::println(string::int_to_str(depth(flat)));
+    io::println(to_string(count(flat)));
+    io::println(to_string(depth(flat)));
 
     // Nested to a second level — the recursion has no fixed depth.
     let nested: A = [:ok, [:ok, [:ok, :ok]]];
-    io::println(string::int_to_str(count(nested)));
-    io::println(string::int_to_str(depth(nested)));
+    io::println(to_string(count(nested)));
+    io::println(to_string(depth(nested)));
 
     // The empty list is an A too.
     let empty: A = [];
-    io::println(string::int_to_str(count(empty)));
+    io::println(to_string(count(empty)));
 }

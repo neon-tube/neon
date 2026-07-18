@@ -9,7 +9,7 @@ use std::string;
 type Both = { a: i64 } & { b: str }
 
 fn show(v: Both) -> str {
-    string::concat(v.b, string::int_to_str(v.a))
+    string::concat(v.b, to_string(v.a))
 }
 
 record Rec { a: i64, b: str, extra: bool }

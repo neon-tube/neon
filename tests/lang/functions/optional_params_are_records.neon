@@ -21,8 +21,8 @@ fn connect(host: str, opts: { timeout: i64 | null, retries: i64 | null }) -> str
     let t = opts.timeout orelse 30;
     let r = opts.retries orelse 1;
     string::concat(host, string::concat(
-        string::concat(" t=", string::int_to_str(t)),
-        string::concat(" r=", string::int_to_str(r))))
+        string::concat(" t=", to_string(t)),
+        string::concat(" r=", to_string(r))))
 }
 
 fn main() {

@@ -9,7 +9,7 @@ use std::string;
 fn name_only(item: { name: str }) -> str { item.name }
 
 fn describe(item: { name: str, age: i64 }) -> str {
-    string::concat(item.name, string::concat(" ", string::int_to_str(item.age)))
+    string::concat(item.name, string::concat(" ", to_string(item.age)))
 }
 
 fn main() {

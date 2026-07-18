@@ -32,5 +32,5 @@ fn main() {
         io::println(message(e));
         -1
     };
-    io::println(string::int_to_str(v));
+    io::println(to_string(v));
 }

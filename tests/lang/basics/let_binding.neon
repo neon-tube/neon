@@ -8,7 +8,7 @@ use std::string;
 fn main() {
     let inferred = 7;
     let annotated: i64 = 7;
-    io::println(string::int_to_str(inferred + annotated));
+    io::println(to_string(inferred + annotated));
 
     let s = "text";
     io::println(s);
@@ -21,9 +21,9 @@ fn main() {
     let a = 2;
     let b = a * 3;
     let c = a + b;
-    io::println(string::int_to_str(c));
+    io::println(to_string(c));
 
     // A binding is initialized once, from left to right: `b` above saw `a`'s
     // value at that point, and nothing re-runs.
-    io::println(string::int_to_str(b));
+    io::println(to_string(b));
 }

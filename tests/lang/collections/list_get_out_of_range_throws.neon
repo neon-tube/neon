@@ -19,7 +19,7 @@ use std::collections::list;
 fn show(xs: List[i64], i: i64) -> str {
     match try? list::get(xs, i) {
         is null => "null",
-        v => string::int_to_str(v),
+        v => to_string(v),
     }
 }
 
@@ -38,11 +38,11 @@ fn main() {
     // The error is a real, catchable IndexError, not a bare null. The TYPE is
     // the language's promise here; the message text is the stdlib's business.
     try {
-        io::println(string::int_to_str(list::get(xs, 7)));
+        io::println(to_string(list::get(xs, 7)));
     } catch (e) {
         io::println(if e is IndexError { "caught: IndexError" } else { "caught: other" });
     };
 
     // In range, `get` just returns the element.
-    io::println(string::int_to_str(try? list::get(xs, 1) orelse -1));
+    io::println(to_string(try? list::get(xs, 1) orelse -1));
 }

@@ -166,13 +166,45 @@ fn check(path: &Path, src: &str) -> Result<(), Failure> {
         return Err(Failure::of(path, src, it));
     };
 
-    // Every corpus file is a whole program with an `fn main`.
-    let env = Env::build_as(&module, Unit::RootApplication);
+    // The stdlib is declared alongside every corpus program, so `use std::io` and
+    // the prelude resolve. Every corpus file is a whole program with an `fn main`.
+    let std_modules = stdlib_modules();
+    let mut modules: Vec<(Vec<String>, &_)> =
+        std_modules.iter().map(|(p, m)| (p.clone(), m)).collect();
+    modules.push((Vec::new(), &module));
+
+    let mut env = Env::build_with(&modules, Unit::RootApplication);
+    // Declarations first: a body checked against a signature that did not resolve
+    // reports the same mistake twice.
+    if env.errors().is_empty() {
+        let (_r, errs) = neon_compiler::typecheck::check::check_module(&mut env, &module);
+        env.extend_errors(errs);
+    }
     if env.errors().is_empty() {
         return Ok(());
     }
     let it = env.errors().iter().map(|e| (e.span.clone(), e.to_string()));
     Err(Failure::of(path, src, it))
+}
+
+/// The parsed stdlib, read from the repo. Cheap enough to reparse per file.
+fn stdlib_modules() -> Vec<(Vec<String>, neon_compiler::ast::Module)> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../stdlib");
+    let mut sources = Vec::new();
+    collect_neon(&root, &root, &mut sources);
+    neon_compiler::stdlib::parse(&sources).expect("the stdlib parses")
+}
+
+fn collect_neon(root: &Path, dir: &Path, out: &mut Vec<(String, String)>) {
+    for entry in std::fs::read_dir(dir).expect("stdlib is readable") {
+        let path = entry.expect("entry").path();
+        if path.is_dir() {
+            collect_neon(root, &path, out);
+        } else if path.extension().is_some_and(|e| e == "neon") {
+            let rel = path.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
+            out.push((rel, std::fs::read_to_string(&path).expect("readable")));
+        }
+    }
 }
 
 /// The README's directive contract promises `error-contains` matches "the plain

@@ -23,11 +23,11 @@ fn main() {
         io::println("catch ran for the ok call");
         -1
     };
-    io::println(string::int_to_str(ok));
+    io::println(to_string(ok));
 
     let bad = try maybe(true) catch (e) {
         io::println(string::concat("caught: ", message(e)));
         -1
     };
-    io::println(string::int_to_str(bad));
+    io::println(to_string(bad));
 }

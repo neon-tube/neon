@@ -14,5 +14,5 @@ fn double(p: Point) -> i64 { p.x * 2 }
 
 fn main() {
     let p = Point { x: 3, y: 4 };
-    io::println(string::int_to_str(p.double()));
+    io::println(to_string(p.double()));
 }

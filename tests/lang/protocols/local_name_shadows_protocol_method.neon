@@ -18,7 +18,7 @@ fn area(s: Sq) -> i64 { 0 - 1 }
 fn main() {
     let sq = Sq { side: 3 };
     // The module function wins the unqualified call.
-    io::println(string::int_to_str(area(sq)));
+    io::println(to_string(area(sq)));
     // The protocol is still reachable by name.
-    io::println(string::int_to_str(Shape::area(sq)));
+    io::println(to_string(Shape::area(sq)));
 }

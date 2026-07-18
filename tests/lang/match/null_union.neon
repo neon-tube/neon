@@ -38,12 +38,12 @@ fn or_zero(v: i64 | null) -> i64 { v orelse 0 }
 fn main() {
     io::println(describe("hi"));
     io::println(describe(null));
-    io::println(string::int_to_str(add_one(41)));
-    io::println(string::int_to_str(add_one(null)));
+    io::println(to_string(add_one(41)));
+    io::println(to_string(add_one(null)));
     io::println(grade(0));
     io::println(grade(null));
     io::println(grade(5));
     io::println(grade(-5));
-    io::println(string::int_to_str(or_zero(9)));
-    io::println(string::int_to_str(or_zero(null)));
+    io::println(to_string(or_zero(9)));
+    io::println(to_string(or_zero(null)));
 }

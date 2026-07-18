@@ -13,9 +13,9 @@ record User {
 fn main() {
     let alice = User { name: "Alice", age: 30 };
     io::println(alice.name);
-    io::println(string::int_to_str(alice.age));
+    io::println(to_string(alice.age));
 
     let bob = User { age: 25, name: "Bob" };
     io::println(bob.name);
-    io::println(string::int_to_str(bob.age));
+    io::println(to_string(bob.age));
 }

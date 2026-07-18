@@ -10,13 +10,13 @@ use std::string;
 
 fn main() {
     let good = try? string::to_int("42") orelse 0;
-    io::println(string::int_to_str(good));
+    io::println(to_string(good));
 
     let bad = try? string::to_int("not a number") orelse 0;
-    io::println(string::int_to_str(bad));
+    io::println(to_string(bad));
 
     // `orelse` is lazy on the left's success: the fallback is a whole
     // expression, not a constant, and is not evaluated when there is a value.
     let sum = (try? string::to_int("10") orelse 0) + (try? string::to_int("x") orelse -1);
-    io::println(string::int_to_str(sum));
+    io::println(to_string(sum));
 }

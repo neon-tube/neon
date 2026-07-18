@@ -16,5 +16,5 @@ fn add_one(v: i64 | null) -> i64 {
 }
 
 fn main() {
-    io::println(string::int_to_str(add_one(41)));
+    io::println(to_string(add_one(41)));
 }

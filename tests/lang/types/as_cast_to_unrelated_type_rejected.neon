@@ -15,5 +15,5 @@ record Cat { lives: i64 }
 fn main() {
     let d = Dog { legs: 4 };
     let c = d as Cat;
-    io::println(string::int_to_str(c.lives));
+    io::println(to_string(c.lives));
 }

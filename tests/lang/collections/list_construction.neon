@@ -12,24 +12,24 @@ use std::collections::list;
 
 fn main() {
     let literal: List[i64] = [1, 2, 3];
-    io::println(string::int_to_str(list::len(literal)));
+    io::println(to_string(list::len(literal)));
 
     let empty: List[i64] = [];
-    io::println(string::int_to_str(list::len(empty)));
+    io::println(to_string(list::len(empty)));
 
     let made: List[i64] = list::new();
-    io::println(string::int_to_str(list::len(made)));
+    io::println(to_string(list::len(made)));
 
     let built = list::push(list::push(made, 7), 8);
-    io::println(string::int_to_str(list::len(built)));
-    io::println(string::int_to_str(built[0]));
-    io::println(string::int_to_str(built[1]));
+    io::println(to_string(list::len(built)));
+    io::println(to_string(built[0]));
+    io::println(to_string(built[1]));
 
     // Element type is not restricted to primitives.
     let strs: List[str] = ["a", "b"];
     io::println(strs[1]);
 
     let joined = list::concat(literal, built);
-    io::println(string::int_to_str(list::len(joined)));
-    io::println(string::int_to_str(joined[3]));
+    io::println(to_string(list::len(joined)));
+    io::println(to_string(joined[3]));
 }

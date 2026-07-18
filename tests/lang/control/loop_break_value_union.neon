@@ -16,7 +16,7 @@ fn find_multiple(d: i64, limit: i64) -> i64 | null {
 }
 
 fn show(label: str, v: i64 | null) {
-    io::println(label + (if v is null { "none" } else { string::int_to_str(v orelse 0) }));
+    io::println(label + (if v is null { "none" } else { to_string(v orelse 0) }));
 }
 
 fn main() {

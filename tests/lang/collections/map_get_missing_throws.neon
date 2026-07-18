@@ -20,25 +20,25 @@ fn main() {
     let m: Map[str, i64] = map::set(map::set(map::new(), "zero", 0), "one", 1);
 
     // Present: `try?` softens the (unraised) error and `orelse` never fires.
-    io::println(string::int_to_str(try? map::get(m, "one") orelse -1));
+    io::println(to_string(try? map::get(m, "one") orelse -1));
 
     // Present, and the value is 0 — not a miss. `catch` is not reached.
     try {
-        io::println(string::concat("zero: ", string::int_to_str(map::get(m, "zero"))));
+        io::println(string::concat("zero: ", to_string(map::get(m, "zero"))));
     } catch (e) {
         io::println("zero: MISSING");
     };
 
     // Absent: the throw is what reports it, and `catch` runs.
     try {
-        io::println(string::concat("nope: ", string::int_to_str(map::get(m, "nope"))));
+        io::println(string::concat("nope: ", to_string(map::get(m, "nope"))));
     } catch (e) {
         io::println("nope: MISSING");
     };
 
     // The easy path over the same miss: `try?` turns the error into null and
     // `orelse` supplies the default.
-    io::println(string::int_to_str(try? map::get(m, "nope") orelse -1));
+    io::println(to_string(try? map::get(m, "nope") orelse -1));
 
     // `contains` agrees with `get`, and does not throw either way.
     io::println(if map::contains(m, "zero") { "yes" } else { "no" });

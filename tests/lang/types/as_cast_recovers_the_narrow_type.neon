@@ -12,18 +12,18 @@ record Wrapped { v: i64 }
 fn main() {
     // Out of a union.
     let u: i64 | str = 7;
-    io::println(string::int_to_str(u as i64));
+    io::println(to_string(u as i64));
 
     // Out of `any`.
     let a: any = Wrapped { v: 3 };
     let w = a as Wrapped;
-    io::println(string::int_to_str(w.v));
+    io::println(to_string(w.v));
 
     // Across a newtype, both directions, chained.
     let m = 2.5 as Meter;
-    io::println(string::float_to_str(m as f64));
-    io::println(string::float_to_str(5.0 as Meter as f64));
+    io::println(to_string(m as f64));
+    io::println(to_string(5.0 as Meter as f64));
 
     // A cast to a type the value already has is a no-op, not an error.
-    io::println(string::int_to_str(4 as i64));
+    io::println(to_string(4 as i64));
 }

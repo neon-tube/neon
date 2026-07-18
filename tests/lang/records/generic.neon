@@ -17,8 +17,8 @@ fn swap[T](p: Pair[T]) -> Pair[T] { Pair { a: p.b, b: p.a } }
 
 fn main() {
     let nums = Pair { a: 1, b: 2 };
-    io::println(string::int_to_str(first(nums)));
-    io::println(string::int_to_str(second(nums)));
+    io::println(to_string(first(nums)));
+    io::println(to_string(second(nums)));
 
     let strs: Pair[str] = Pair { a: "x", b: "y" };
     io::println(first(strs));
@@ -26,5 +26,5 @@ fn main() {
 
     // Nesting a generic record inside itself.
     let nested = Pair { a: Pair { a: 1, b: 2 }, b: Pair { a: 3, b: 4 } };
-    io::println(string::int_to_str(second(first(nested))));
+    io::println(to_string(second(first(nested))));
 }

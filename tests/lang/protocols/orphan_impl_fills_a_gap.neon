@@ -22,6 +22,6 @@ impl Area for Circle { fn area(v: Circle) -> i64 { v.r * v.r * 3 } }
 orphan impl Area for Square { fn area(v: Square) -> i64 { v.s * v.s } }
 
 fn main() {
-    io::println(string::int_to_str(area(Circle { r: 2 })));
-    io::println(string::int_to_str(area(Square { s: 3 })));
+    io::println(to_string(area(Circle { r: 2 })));
+    io::println(to_string(area(Square { s: 3 })));
 }

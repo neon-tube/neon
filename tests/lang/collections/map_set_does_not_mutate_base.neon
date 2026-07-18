@@ -14,11 +14,11 @@ use std::collections::map;
 // softens the throw to null, and `orelse` turns it into the -999 sentinel. `[]`
 // would be wrong here — it asserts presence, and a miss is an expected answer.
 fn at(m: Map[str, i64], k: str) -> str {
-    string::int_to_str(try? map::get(m, k) orelse -999)
+    to_string(try? map::get(m, k) orelse -999)
 }
 
 fn size(m: Map[str, i64]) -> str {
-    string::int_to_str(list::len(map::keys(m)))
+    to_string(list::len(map::keys(m)))
 }
 
 fn main() {

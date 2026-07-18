@@ -10,7 +10,7 @@ use std::io;
 use std::string;
 
 fn at(needle: str) {
-    io::println(string::int_to_str(string::find("héllo", needle) orelse -1));
+    io::println(to_string(string::find("héllo", needle) orelse -1));
 }
 
 fn main() {

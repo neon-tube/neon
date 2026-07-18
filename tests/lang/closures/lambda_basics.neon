@@ -10,28 +10,28 @@ fn apply(x: i64, f: (i64) -> i64) -> i64 { f(x) }
 fn main() {
     // Explicitly typed parameter.
     let inc = (x: i64) => x + 1;
-    io::println(string::int_to_str(inc(4)));
+    io::println(to_string(inc(4)));
 
     // Parameter type inferred from the annotation on the binding.
     let dbl: (i64) -> i64 = (x) => x * 2;
-    io::println(string::int_to_str(dbl(4)));
+    io::println(to_string(dbl(4)));
 
     // Inferred from the parameter it is passed as.
-    io::println(string::int_to_str(apply(4, (x) => x - 1)));
+    io::println(to_string(apply(4, (x) => x - 1)));
 
     // Zero parameters, and more than one.
     let five = () => 5;
-    io::println(string::int_to_str(five()));
+    io::println(to_string(five()));
     let sum = (a: i64, b: i64) => a + b;
-    io::println(string::int_to_str(sum(2, 3)));
+    io::println(to_string(sum(2, 3)));
 
     // A block body; the last expression is the value.
     let squared_plus = (x: i64) => {
         let sq = x * x;
         sq + 1
     };
-    io::println(string::int_to_str(squared_plus(3)));
+    io::println(to_string(squared_plus(3)));
 
     // Applied immediately.
-    io::println(string::int_to_str(((x: i64) => x * 10)(4)));
+    io::println(to_string(((x: i64) => x * 10)(4)));
 }

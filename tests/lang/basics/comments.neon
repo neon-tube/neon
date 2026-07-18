@@ -12,7 +12,7 @@ use std::string;
    /* inner */
    still a comment. */
 
-fn show(v: i64) { io::println(string::int_to_str(v)); } // trailing comment
+fn show(v: i64) { io::println(to_string(v)); } // trailing comment
 
 fn main() {
     show(1); // after a statement

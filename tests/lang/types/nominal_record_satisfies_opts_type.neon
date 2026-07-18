@@ -23,7 +23,7 @@ record FullPreset {
 fn show(o: Opts) -> str {
     let t = o.timeout orelse 30;
     let r = o.retries orelse 1;
-    string::concat(string::int_to_str(t), string::concat("/", string::int_to_str(r)))
+    string::concat(to_string(t), string::concat("/", to_string(r)))
 }
 
 fn main() {

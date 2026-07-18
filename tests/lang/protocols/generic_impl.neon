@@ -21,14 +21,14 @@ fn main() {
     let ints = Box { item: 7, count: 1 };
     let strs = Box { item: "hi", count: 2 };
 
-    io::println(string::int_to_str(size(ints)));
-    io::println(string::int_to_str(size(strs)));
+    io::println(to_string(size(ints)));
+    io::println(to_string(size(strs)));
 
     // One impl, two instantiations: the method's own T follows the receiver.
-    io::println(string::int_to_str(unwrap(ints)));
+    io::println(to_string(unwrap(ints)));
     io::println(unwrap(strs));
 
     // Nested instantiation.
     let boxed = Box { item: Box { item: 9, count: 1 }, count: 1 };
-    io::println(string::int_to_str(unwrap(unwrap(boxed))));
+    io::println(to_string(unwrap(unwrap(boxed))));
 }

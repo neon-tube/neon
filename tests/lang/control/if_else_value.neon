@@ -17,7 +17,7 @@ fn main() {
     io::println(label);
 
     // Argument position.
-    io::println(string::int_to_str(if n > 2 { 1 } else { 2 }));
+    io::println(to_string(if n > 2 { 1 } else { 2 }));
 
     // Return position, through a chain.
     io::println(grade(95));
@@ -31,5 +31,5 @@ fn main() {
     } else {
         0
     };
-    io::println(string::int_to_str(v));
+    io::println(to_string(v));
 }

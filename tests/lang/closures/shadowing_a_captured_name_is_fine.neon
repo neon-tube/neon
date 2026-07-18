@@ -21,15 +21,15 @@ fn main() {
         n
     };
 
-    io::println(string::int_to_str(f()));
+    io::println(to_string(f()));
     io::println(g());
     // Neither closure touched the outer binding.
-    io::println(string::int_to_str(n));
+    io::println(to_string(n));
 
     // Shadowing in the enclosing scope is likewise a new binding; the closure
     // that captured the old one is unaffected.
-    let h = () => string::int_to_str(n);
+    let h = () => to_string(n);
     let n = 42;
     io::println(h());
-    io::println(string::int_to_str(n));
+    io::println(to_string(n));
 }

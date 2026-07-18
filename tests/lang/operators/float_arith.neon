@@ -4,7 +4,7 @@
 use std::io;
 use std::string;
 
-fn show(v: f64) { io::println(string::float_to_str(v)); }
+fn show(v: f64) { io::println(to_string(v)); }
 fn shows(v: bool) { io::println(if v { "true" } else { "false" }); }
 
 fn main() {

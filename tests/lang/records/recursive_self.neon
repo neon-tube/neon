@@ -37,7 +37,7 @@ fn main() {
         },
     };
 
-    io::println(string::int_to_str(sum(chain)));
-    io::println(string::int_to_str(length(chain)));
-    io::println(string::int_to_str(sum(null)));
+    io::println(to_string(sum(chain)));
+    io::println(to_string(length(chain)));
+    io::println(to_string(sum(null)));
 }

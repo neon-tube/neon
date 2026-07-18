@@ -56,9 +56,9 @@ fn area_pattern(s: Shape) -> i64 {
 fn describe(s: Shape) -> str {
     match s {
         Circle { r: 0 } => "degenerate circle",
-        Circle { r: radius } => string::concat("circle of radius ", string::int_to_str(radius)),
-        Rect { w: side, h: side2 } if side == side2 => string::concat("square of side ", string::int_to_str(side)),
-        Rect { w, h } => string::concat("rect ", string::concat(string::int_to_str(w), string::concat("x", string::int_to_str(h)))),
+        Circle { r: radius } => string::concat("circle of radius ", to_string(radius)),
+        Rect { w: side, h: side2 } if side == side2 => string::concat("square of side ", to_string(side)),
+        Rect { w, h } => string::concat("rect ", string::concat(to_string(w), string::concat("x", to_string(h)))),
     }
 }
 
@@ -66,13 +66,13 @@ fn main() {
     let c = Circle { r: 2 };
     let r = Rect { w: 3, h: 4 };
 
-    io::println(string::int_to_str(area_is(c)));
-    io::println(string::int_to_str(area_let(c)));
-    io::println(string::int_to_str(area_pattern(c)));
+    io::println(to_string(area_is(c)));
+    io::println(to_string(area_let(c)));
+    io::println(to_string(area_pattern(c)));
 
-    io::println(string::int_to_str(area_is(r)));
-    io::println(string::int_to_str(area_let(r)));
-    io::println(string::int_to_str(area_pattern(r)));
+    io::println(to_string(area_is(r)));
+    io::println(to_string(area_let(r)));
+    io::println(to_string(area_pattern(r)));
 
     io::println(describe(Circle { r: 0 }));
     io::println(describe(c));

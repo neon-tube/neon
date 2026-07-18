@@ -17,7 +17,7 @@ fn show(label: str, xs: List[i64]) {
     let i = 0;
     loop {
         if i >= list::len(xs) { break; }
-        parts = list::push(parts, string::int_to_str(xs[i]));
+        parts = list::push(parts, to_string(xs[i]));
         i = i + 1;
     };
     io::println(string::concat(label, string::join(parts, ",")));
@@ -33,9 +33,9 @@ fn main() {
     show("a: ", a);
     show("b: ", b);
 
-    io::println(string::int_to_str(list::len(base)));
-    io::println(string::int_to_str(list::len(a)));
-    io::println(string::int_to_str(list::len(b)));
+    io::println(to_string(list::len(base)));
+    io::println(to_string(list::len(a)));
+    io::println(to_string(list::len(b)));
 
     let c = list::push(a, 6);
     show("a: ", a);

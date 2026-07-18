@@ -37,5 +37,5 @@ fn main() {
     io::println(name_only({ name: "Carol", age: 41 }));
 
     // The nominal value is unchanged by having been viewed structurally.
-    io::println(string::int_to_str(alice.age));
+    io::println(to_string(alice.age));
 }

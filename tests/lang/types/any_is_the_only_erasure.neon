@@ -10,14 +10,14 @@ record Point { x: i64, y: i64 }
 
 fn describe(v: any) -> str {
     if v is i64 {
-        string::concat("i64 ", string::int_to_str(v as i64))
+        string::concat("i64 ", to_string(v as i64))
     } else if v is str {
         string::concat("str ", v as str)
     } else if v is bool {
         if v as bool { "bool true" } else { "bool false" }
     } else if v is Point {
         let p = v as Point;
-        string::concat("Point ", string::int_to_str(p.x + p.y))
+        string::concat("Point ", to_string(p.x + p.y))
     } else if v is null {
         "null"
     } else {

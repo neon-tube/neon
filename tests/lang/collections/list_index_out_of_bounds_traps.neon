@@ -29,11 +29,11 @@ fn main() {
     // In range: `[]` yields the element itself, type i64 — not `i64 | null`.
     // No `orelse` appears anywhere in this line.
     let first: i64 = xs[id(0)];
-    io::println(string::int_to_str(first));
-    io::println(string::int_to_str(xs[id(2)]));
+    io::println(to_string(first));
+    io::println(to_string(xs[id(2)]));
 
     // Out of range: traps here.
-    io::println(string::int_to_str(xs[id(3)]));
+    io::println(to_string(xs[id(3)]));
 
     io::println("unreachable");
 }

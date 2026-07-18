@@ -21,7 +21,7 @@ fn main() {
     let i = 0;
     loop {
         if i >= list::len(xs) { break; }
-        io::println(string::concat("by index: ", string::int_to_str(xs[i])));
+        io::println(string::concat("by index: ", to_string(xs[i])));
         i = i + 1;
     };
 
@@ -31,12 +31,12 @@ fn main() {
         match next() {
             is null => break,
             v => {
-                io::println(string::concat("by iter: ", string::int_to_str(v)));
+                io::println(string::concat("by iter: ", to_string(v)));
                 total = total + v;
             },
         };
     };
-    io::println(string::concat("total: ", string::int_to_str(total)));
+    io::println(string::concat("total: ", to_string(total)));
 
     // An empty list yields nothing at all.
     let nothing: List[i64] = [];

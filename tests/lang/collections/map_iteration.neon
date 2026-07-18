@@ -35,10 +35,10 @@ fn main() {
         };
     };
 
-    io::println(string::concat("count: ", string::int_to_str(count)));
-    io::println(string::concat("sum: ", string::int_to_str(sum)));
-    io::println(string::concat("key bytes: ", string::int_to_str(key_bytes)));
-    io::println(string::concat("keys: ", string::int_to_str(list::len(map::keys(m)))));
+    io::println(string::concat("count: ", to_string(count)));
+    io::println(string::concat("sum: ", to_string(sum)));
+    io::println(string::concat("key bytes: ", to_string(key_bytes)));
+    io::println(string::concat("keys: ", to_string(list::len(map::keys(m)))));
 
     let empty: Map[str, i64] = map::new();
     let none = map::iter(empty);

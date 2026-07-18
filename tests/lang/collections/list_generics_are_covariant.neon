@@ -18,8 +18,8 @@ fn count(xs: List[Shape]) -> i64 { list::len(xs) }
 
 fn main() {
     let circles: List[Circle] = [Circle { radius: 1 }, Circle { radius: 2 }];
-    io::println(string::int_to_str(count(circles)));
+    io::println(to_string(count(circles)));
 
     let mixed: List[Shape] = [Circle { radius: 3 }, Square { side: 4 }];
-    io::println(string::int_to_str(count(mixed)));
+    io::println(to_string(count(mixed)));
 }

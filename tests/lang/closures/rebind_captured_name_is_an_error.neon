@@ -19,6 +19,6 @@ fn main() {
         count = count + 1;
         count
     };
-    io::println(string::int_to_str(bump()));
-    io::println(string::int_to_str(count));
+    io::println(to_string(bump()));
+    io::println(to_string(count));
 }

@@ -15,8 +15,8 @@ record Point { x: i64, y: i64 }
 
 impl Display for Point {
     fn display(value: Point) -> str {
-        string::concat("(", string::concat(string::int_to_str(value.x),
-            string::concat(", ", string::concat(string::int_to_str(value.y), ")"))))
+        string::concat("(", string::concat(to_string(value.x),
+            string::concat(", ", string::concat(to_string(value.y), ")"))))
     }
 }
 

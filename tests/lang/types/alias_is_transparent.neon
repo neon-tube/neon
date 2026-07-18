@@ -19,17 +19,17 @@ fn unwrap(m: Maybe) -> i64 { if m is null { 0 } else { m as i64 } }
 fn main() {
     let c: Count = 5;
     // The alias flows in where the underlying type is expected...
-    io::println(string::int_to_str(takes_i64(c)));
+    io::println(to_string(takes_i64(c)));
     // ...and a bare underlying value flows in where the alias is expected.
-    io::println(string::int_to_str(takes_count(7)));
+    io::println(to_string(takes_count(7)));
     // Chained aliases are the same type all the way down.
     let t: Tally = c;
-    io::println(string::int_to_str(takes_i64(t)));
+    io::println(to_string(takes_i64(t)));
     // An alias over a closure type is that closure type.
     let double: Mapper = (x: i64) => x * 2;
-    io::println(string::int_to_str(apply(double, 4)));
-    io::println(string::int_to_str(apply((x: i64) => x + 1, 4)));
+    io::println(to_string(apply(double, 4)));
+    io::println(to_string(apply((x: i64) => x + 1, 4)));
     // An alias over a union is that union.
-    io::println(string::int_to_str(unwrap(3)));
-    io::println(string::int_to_str(unwrap(null)));
+    io::println(to_string(unwrap(3)));
+    io::println(to_string(unwrap(null)));
 }

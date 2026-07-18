@@ -15,22 +15,22 @@ fn call_with_ten(f: (i64) -> str) -> str { f(10) }
 fn main() {
     // Annotated bindings at each shape.
     let unary: (i64) -> i64 = (x) => x + 1;
-    let binary: (i64, str) -> str = (n, s) => string::concat(s, string::int_to_str(n));
+    let binary: (i64, str) -> str = (n, s) => string::concat(s, to_string(n));
     let nullary: () -> i64 = () => 7;
     let predicate: (i64) -> bool = (x) => x > 0;
 
-    io::println(string::int_to_str(unary(1)));
+    io::println(to_string(unary(1)));
     io::println(binary(2, "n="));
-    io::println(string::int_to_str(nullary()));
+    io::println(to_string(nullary()));
     io::println(if predicate(1) { "pos" } else { "non-pos" });
 
     // A closure returning a closure.
     let curried: (i64) -> (i64) -> i64 = adder;
-    io::println(string::int_to_str(curried(3)(4)));
+    io::println(to_string(curried(3)(4)));
 
     // A closure taking a closure.
     let runner: ((i64) -> i64, i64) -> i64 = apply;
-    io::println(string::int_to_str(runner(unary, 10)));
+    io::println(to_string(runner(unary, 10)));
 
-    io::println(call_with_ten((n: i64) => string::int_to_str(n * 2)));
+    io::println(call_with_ten((n: i64) => to_string(n * 2)));
 }

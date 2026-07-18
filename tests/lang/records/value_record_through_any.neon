@@ -22,7 +22,7 @@ fn box_it(x: i64, y: i64) -> any {
 fn describe(v: any) -> str {
     if v is Point {
         let p = v as Point;
-        string::concat("point ", string::int_to_str(p.x + p.y))
+        string::concat("point ", to_string(p.x + p.y))
     } else if v is Tag {
         let t = v as Tag;
         string::concat("tag ", t.label)

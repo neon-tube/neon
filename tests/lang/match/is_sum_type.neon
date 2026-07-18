@@ -40,9 +40,9 @@ fn main() {
     io::println(name(Rect { w: 3, h: 4 }));
     io::println(name(Point {}));
 
-    io::println(string::int_to_str(area(Circle { r: 2 })));
-    io::println(string::int_to_str(area(Rect { w: 3, h: 4 })));
-    io::println(string::int_to_str(area(Point {})));
+    io::println(to_string(area(Circle { r: 2 })));
+    io::println(to_string(area(Rect { w: 3, h: 4 })));
+    io::println(to_string(area(Point {})));
 
     // A unit record stays nominal: it is a member of Shape by name, and an
     // unrelated empty record is not a Shape. There is no structural hole.

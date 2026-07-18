@@ -4,7 +4,7 @@
 use std::io;
 use std::string;
 
-fn show(v: i64) { io::println(string::int_to_str(v)); }
+fn show(v: i64) { io::println(to_string(v)); }
 
 fn main() {
     // `break`: stop at the first element over 2, without visiting the rest.

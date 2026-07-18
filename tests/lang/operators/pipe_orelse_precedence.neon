@@ -14,7 +14,7 @@ fn half(x: i64) -> i64 | null {
 }
 
 fn show(label: str, v: i64) {
-    io::println(label + string::int_to_str(v));
+    io::println(label + to_string(v));
 }
 
 fn main() {

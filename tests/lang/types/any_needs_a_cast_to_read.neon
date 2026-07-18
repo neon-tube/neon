@@ -11,5 +11,5 @@ use std::string;
 fn add_one(v: any) -> i64 { v + 1 }
 
 fn main() {
-    io::println(string::int_to_str(add_one(41)));
+    io::println(to_string(add_one(41)));
 }

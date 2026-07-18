@@ -22,8 +22,8 @@ fn sign(n: i64) -> str {
 }
 
 fn main() {
-    io::println(string::int_to_str(add(2, 3)));
-    io::println(string::int_to_str(zero()));
+    io::println(to_string(add(2, 3)));
+    io::println(to_string(zero()));
     greet("world");
     io::println(sign(-4));
     io::println(sign(0));

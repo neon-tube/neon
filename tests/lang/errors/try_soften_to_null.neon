@@ -21,7 +21,7 @@ fn maybe(fail: bool) throws Boom -> i64 {
 fn describe(v: i64 | null) -> str {
     match v {
         is null => "null",
-        n => string::int_to_str(n),
+        n => to_string(n),
     }
 }
 

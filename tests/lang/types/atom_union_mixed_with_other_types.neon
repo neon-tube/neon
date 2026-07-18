@@ -31,7 +31,7 @@ fn main() {
     io::println(describe(:err));
     io::println(describe("boom"));
 
-    io::println(string::int_to_str(amount(:none)));
-    io::println(string::int_to_str(amount(null)));
-    io::println(string::int_to_str(amount(Payload { n: 7 })));
+    io::println(to_string(amount(:none)));
+    io::println(to_string(amount(null)));
+    io::println(to_string(amount(Payload { n: 7 })));
 }

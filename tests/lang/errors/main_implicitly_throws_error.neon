@@ -41,7 +41,7 @@ fn helper() throws Boom -> i64 {
 fn main() {
     // A bare `try` in main: no `throws` clause anywhere on `main`.
     let a = try go(false);
-    io::println(string::int_to_str(a));
+    io::println(to_string(a));
 
     // Two unrelated error types both propagate to main's implicit `throws Error`
     // — no union has to be spelled out.
@@ -61,10 +61,10 @@ fn main() {
 
     // The helper's declared throws is caught here like any other.
     let d = try helper();
-    io::println(string::int_to_str(d));
+    io::println(to_string(d));
 
     // try? and try! still work in main; the implicit clause changes nothing
     // about them.
-    io::println(string::int_to_str(try? go(true) orelse -1));
-    io::println(string::int_to_str(try! go(false)));
+    io::println(to_string(try? go(true) orelse -1));
+    io::println(to_string(try! go(false)));
 }
