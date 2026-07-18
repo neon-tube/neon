@@ -87,6 +87,31 @@ impl Repr {
         )
     }
 
+    /// Whether a value of this repr owns anything reference-counted — either it is a
+    /// counted pointer itself, or an aggregate with one somewhere inside.
+    ///
+    /// This, not `is_pointer`, decides whether the refcount pass tracks a value. Gating on
+    /// `is_pointer` left every aggregate untracked, so a union, record or tuple holding a
+    /// string or a list was never released: its parts were counted when a witness walked
+    /// them, but a value sitting in a local simply leaked.
+    pub fn is_counted(&self) -> bool {
+        match self {
+            Repr::Str
+            | Repr::List(_)
+            | Repr::Map(_, _)
+            | Repr::Closure { .. }
+            | Repr::BoxedRec(_)
+            | Repr::Any => true,
+            // A back-edge resolves to its unfolding in the emitter; assume it counts and
+            // let `rc_parts` emit nothing when the resolved shape holds nothing counted.
+            Repr::Recursive(_) => true,
+            Repr::Union(rs) | Repr::Tuple(rs) => rs.iter().any(Repr::is_counted),
+            Repr::Record { fields, .. } => fields.iter().any(|(_, r)| r.is_counted()),
+            Repr::Nullable(inner) => inner.is_counted(),
+            _ => false,
+        }
+    }
+
     /// Whether the repr is fully concrete — no `Var` anywhere. After monomorphisation
     /// every reachable repr must satisfy this. `Recursive` is concrete: it is a resolved
     /// back-edge, not an unknown.

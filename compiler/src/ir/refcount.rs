@@ -24,12 +24,66 @@ pub fn insert(program: &mut Program) {
     }
 }
 
+/// Where a value was read out of: a `Field`/`Elem` result *aliases* what its aggregate
+/// owns rather than holding a reference of its own. The base must therefore outlive every
+/// use of what was read from it — releasing the base the moment the base itself is dead
+/// frees the thing the reader is still holding.
+fn base_of(f: &Func, ptr: &HashSet<Value>) -> HashMap<Value, Value> {
+    let mut out = HashMap::new();
+    for b in &f.blocks {
+        for inst in &b.insts {
+            // Every projection: a field or element read, a cast between a union and one of
+            // its variants, and the two tagged-result unwraps. All of them hand back a
+            // view into their operand. `Index` is not one — `emit_index` retains what it
+            // reads, so that result owns itself.
+            let projected = match (inst.result, &inst.op) {
+                (Some(v), Op::Field { base, .. } | Op::Elem { base, .. }) => Some((v, *base)),
+                (
+                    Some(v),
+                    Op::Cast(base) | Op::UnwrapOk(base) | Op::UnwrapErr(base),
+                ) => Some((v, *base)),
+                _ => None,
+            };
+            if let Some((v, base)) = projected {
+                if ptr.contains(&v) && ptr.contains(&base) {
+                    out.insert(v, base);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Extend a live set with the bases every live value was read out of.
+fn with_bases(set: &mut HashSet<Value>, base_of: &HashMap<Value, Value>) {
+    let mut queue: Vec<Value> = set.iter().copied().collect();
+    while let Some(v) = queue.pop() {
+        if let Some(&b) = base_of.get(&v) {
+            if set.insert(b) {
+                queue.push(b);
+            }
+        }
+    }
+}
+
+/// Mark a value live, and with it every base it was read out of.
+fn mark_live(live: &mut HashSet<Value>, v: Value, base_of: &HashMap<Value, Value>) {
+    let mut cur = Some(v);
+    while let Some(x) = cur {
+        if !live.insert(x) {
+            break;
+        }
+        cur = base_of.get(&x).copied();
+    }
+}
+
 fn insert_fn(f: &mut Func) {
-    let ptr: HashSet<Value> = f.values().filter(|&v| f.value_repr(v).is_pointer()).collect();
+    let ptr: HashSet<Value> = f.values().filter(|&v| f.value_repr(v).is_counted()).collect();
     if ptr.is_empty() {
         return;
     }
-    let live_out = liveness(f, &ptr);
+    let bases = base_of(f, &ptr);
+    let live_out = liveness(f, &ptr, &bases);
 
     for b in &mut f.blocks {
         let mut live: HashSet<Value> = live_out[&b.id].clone();
@@ -64,7 +118,7 @@ fn insert_fn(f: &mut Func) {
                 if !live.contains(&w) {
                     // Dead after this borrow: release it once the borrow has read it.
                     releases_after.push(w);
-                    live.insert(w);
+                    mark_live(&mut live, w, &bases);
                 }
             }
             for w in consuming {
@@ -72,7 +126,7 @@ fn insert_fn(f: &mut Func) {
                     // Used again later, so this consume needs its own owned reference.
                     retains_before.push(w);
                 } else {
-                    live.insert(w);
+                    mark_live(&mut live, w, &bases);
                 }
             }
 
@@ -102,7 +156,7 @@ fn insert_fn(f: &mut Func) {
 
 /// Live-out per block: the counted values a block's successors still need. Standard
 /// backward dataflow; a block's parameters are definitions, not live-in.
-fn liveness(f: &Func, ptr: &HashSet<Value>) -> HashMap<super::ssa::BlockId, HashSet<Value>> {
+fn liveness(f: &Func, ptr: &HashSet<Value>, base_of: &HashMap<Value, Value>) -> HashMap<super::ssa::BlockId, HashSet<Value>> {
     let mut live_in: HashMap<_, HashSet<Value>> = f.blocks.iter().map(|b| (b.id, HashSet::new())).collect();
     let mut live_out: HashMap<_, HashSet<Value>> = live_in.clone();
 
@@ -128,6 +182,7 @@ fn liveness(f: &Func, ptr: &HashSet<Value>) -> HashMap<super::ssa::BlockId, Hash
                     defs.insert(v);
                 }
             }
+            #[allow(unused_mut)]
             let mut ins: HashSet<Value> = out.iter().copied().filter(|v| !defs.contains(v)).collect();
             for inst in &b.insts {
                 let (c, br) = operand_uses(&inst.op, ptr);
@@ -138,6 +193,8 @@ fn liveness(f: &Func, ptr: &HashSet<Value>) -> HashMap<super::ssa::BlockId, Hash
                 }
             }
 
+            with_bases(&mut out, base_of);
+            with_bases(&mut ins, base_of);
             if out != live_out[&b.id] {
                 live_out.insert(b.id, out);
                 changed = true;
