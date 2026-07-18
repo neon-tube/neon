@@ -92,6 +92,8 @@ pub enum TypeErrorKind {
     MissingSupertrait { sub: String, required: String, ty: String },
     /// A generic call whose `where T: P` bound the argument type does not satisfy.
     UnsatisfiedBound { ty: String, protocol: String },
+    /// An impl that does not provide a method its protocol requires.
+    ImplMissingMethod { protocol: String, method: String },
     /// A value-position name nothing declares. Distinct from `Unknown`, which is a
     /// TYPE nothing declares — `unknown type println` is not a sentence.
     UnknownName(String),
@@ -194,6 +196,10 @@ impl fmt::Display for TypeError {
             TypeErrorKind::Incomparable { left, right } => write!(
                 f,
                 "`{left}` and `{right}` share no common type, so they cannot be compared"
+            ),
+            TypeErrorKind::ImplMissingMethod { protocol, method } => write!(
+                f,
+                "this impl of `{protocol}` is missing the method `{method}`"
             ),
             TypeErrorKind::UnsatisfiedBound { ty, protocol } => write!(
                 f,
@@ -463,6 +469,31 @@ impl Env {
         }
 
         self.check_supertraits();
+        self.check_impl_completeness();
+    }
+
+    /// Every impl must provide each method its protocol requires and does not give a
+    /// default body for.
+    fn check_impl_completeness(&mut self) {
+        for n in 0..self.impls.len() {
+            let p = self.impls[n].protocol;
+            let required: Vec<String> = self.protocols[p.0]
+                .methods
+                .iter()
+                .filter(|m| !m.has_body)
+                .map(|m| m.name.clone())
+                .collect();
+            let protocol = self.protocols[p.0].name.clone();
+            let span = self.impls[n].span.clone();
+            for method in required {
+                if !self.impls[n].methods.iter().any(|m| m.name == method) {
+                    self.error(
+                        span.clone(),
+                        TypeErrorKind::ImplMissingMethod { protocol: protocol.clone(), method },
+                    );
+                }
+            }
+        }
     }
 
     /// `impl Ord for X` requires `impl Eq for X`, for every `where` on the protocol.
@@ -876,6 +907,22 @@ impl Env {
     /// Whether `ty` satisfies `protocol` -- has an impl covering it. For a
     /// constructor-subject protocol the match is by head; otherwise `ty` must be a
     /// subtype of the union of the protocol's impl targets.
+    /// Whether `sub` is `want` or transitively requires it through supertraits, so a
+    /// `where T: Ord` bound also satisfies a call needing `T: Eq`.
+    pub fn protocol_extends(&self, sub: ProtocolId, want: ProtocolId) -> bool {
+        if sub == want {
+            return true;
+        }
+        for path in &self.protocols[sub.0].supertraits {
+            if let Some(sup) = self.lookup_protocol(&self.protocols[sub.0].module, path) {
+                if self.protocol_extends(sup, want) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     pub fn type_satisfies(&mut self, ty: TyId, protocol: ProtocolId) -> bool {
         if self.protocols[protocol.0].subject_arity > 0 {
             let Some(head) = crate::typecheck::nominal_head_of(self, ty) else { return false };

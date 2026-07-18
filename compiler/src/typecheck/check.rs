@@ -29,6 +29,7 @@ pub fn check_module(env: &mut Env, m: &ast::Module) -> (TypecheckResult, Vec<Typ
         throws: None,
         loop_breaks: vec![],
         throw_sinks: vec![],
+        bounds: vec![],
     };
     c.decls(&[], &m.decls);
     (c.result, c.errors)
@@ -48,6 +49,9 @@ struct Checker<'a> {
     /// Throws collected by the enclosing `try` bodies. A throwing call outside any
     /// `try` is a compile error; inside one, its error type lands here.
     throw_sinks: Vec<Vec<TyId>>,
+    /// The current function's `where T: P` bounds, as (param name, protocol). A
+    /// method call on a rigid `T` is only allowed to resolve through one of these.
+    bounds: Vec<(String, super::env::ProtocolId)>,
 }
 
 impl Checker<'_> {
@@ -142,6 +146,16 @@ impl Checker<'_> {
         };
         self.ret = Some(ret);
         self.throws = Some(throws);
+        self.bounds = f
+            .wheres
+            .iter()
+            .filter_map(|w| match &w.bound.kind {
+                ast::TypeSpecKind::Named { path, .. } => {
+                    self.env.lookup_protocol(module, path).map(|p| (w.param.clone(), p))
+                }
+                _ => None,
+            })
+            .collect();
 
         // A body-less `-> ()` fn is a statement sequence; anything else must
         // produce its return type as the tail.
@@ -1030,7 +1044,19 @@ impl Checker<'_> {
 
         match dispatch::resolve(self.env, &name, qualified, &arg_tys, expected) {
             Ok(s) => {
-                self.result.set_call(e.id, s.resolution);
+                if let dispatch::Resolution::Bound { param, protocol } = &s.resolution {
+                    let ok = self.bounds.iter().any(|(n, p)| {
+                        n == param && self.env.protocol_extends(*p, *protocol)
+                    });
+                    if !ok {
+                        let pname = self.env.protocols()[protocol.0].name.clone();
+                        self.error(
+                            e.span.clone(),
+                            TypeErrorKind::UnsatisfiedBound { ty: param.clone(), protocol: pname },
+                        );
+                    }
+                }
+                self.result.set_call(e.id, s.resolution.clone());
                 self.note_throw(e.span.clone(), s.throws, true);
                 s.ret
             }

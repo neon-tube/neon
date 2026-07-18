@@ -708,3 +708,38 @@ fn a_bound_is_discharged_at_the_call_site() {
     ));
     assert!(e.iter().any(|k| matches!(k, TypeErrorKind::UnsatisfiedBound { .. })), "{e:?}");
 }
+
+// ---- bound required, impl completeness, supertrait bounds ----
+
+#[test]
+fn a_rigid_method_call_requires_a_declared_bound() {
+    // No `where T: Display`, so to_string(v) on a rigid T cannot resolve.
+    let e = check(&format!("{DISP2} fn show[T](v: T) -> str {{ to_string(v) }}"));
+    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::UnsatisfiedBound { .. })), "{e:?}");
+}
+
+#[test]
+fn an_impl_must_provide_every_required_method() {
+    // A declaration-phase error, so read it from Env::build, not check_module.
+    let m = parse(
+        "protocol Named for T { fn name(v: T) -> str  fn greet(v: T) -> str }
+         record Dog { tag: str }
+         impl Named for Dog { fn name(v: Dog) -> str { v.tag } }",
+    );
+    let env = Env::build(&m);
+    assert!(
+        env.errors().iter().any(|e| matches!(e.kind, TypeErrorKind::ImplMissingMethod { .. })),
+        "{:?}",
+        env.errors()
+    );
+}
+
+#[test]
+fn a_supertrait_bound_satisfies_the_super_protocols_method() {
+    // `where T: Ord` lets the body call Eq's method, since Ord requires Eq.
+    clean(
+        "protocol Eq for T { fn eq(a: T, b: T) -> bool }
+         protocol Ord for T where T: Eq { fn cmp(a: T, b: T) -> i64 }
+         fn same[T](a: T, b: T) -> bool where T: Ord { eq(a, b) }",
+    );
+}
