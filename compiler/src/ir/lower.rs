@@ -66,6 +66,7 @@ fn lower_fn(env: &Env, result: &TypecheckResult, module: &[String], f: &ast::FnD
         b: Builder::new(mangle(module, &f.name), ret_repr.clone()),
         scope: vec![vec![]],
         terminated: false,
+        loops: vec![],
     };
 
     // Parameters are the entry block's parameters.
@@ -99,6 +100,18 @@ struct Lower<'a> {
     /// Whether the current block already has a terminator (a `return` was lowered), so
     /// the statements after it are dead and must not be emitted.
     terminated: bool,
+    /// The enclosing loops, innermost last, for `break` and `continue`.
+    loops: Vec<LoopCtx>,
+}
+
+/// What `break` and `continue` need: where to jump, and the loop-carried variables to
+/// pass at the back-edge (the header's block parameters).
+struct LoopCtx {
+    header: BlockId,
+    exit: BlockId,
+    carried: Vec<String>,
+    /// Whether the loop yields a value (`break e`), so the exit block takes an argument.
+    has_value: bool,
 }
 
 impl Lower<'_> {
@@ -212,6 +225,26 @@ impl Lower<'_> {
             ExprKind::Call { callee, args, .. } => self.lower_call(e.id, callee, args, repr, ty),
             ExprKind::If { cond, then, else_ } => self.lower_if(cond, then, else_.as_deref(), repr, ty),
             ExprKind::Match { scrutinee, arms } => self.lower_match(scrutinee, arms, repr, ty),
+            ExprKind::Loop { body } => self.lower_loop(body, repr, ty),
+            ExprKind::While { cond, body } => self.lower_while(cond, body, ty),
+            ExprKind::Break(v) => {
+                let bv = match v {
+                    Some(e) => self.lower_expr(e),
+                    None => self.b.emit(Op::ConstNull, Repr::Null, ty),
+                };
+                if let Some(ctx) = self.loops.last() {
+                    let (exit, has_value) = (ctx.exit, ctx.has_value);
+                    let args = if has_value { vec![bv] } else { vec![] };
+                    self.b.terminate(Term::Jump(Target { to: exit, args }));
+                }
+                self.terminated = true;
+                self.b.value(Repr::Never, ty)
+            }
+            ExprKind::Continue => {
+                self.jump_to_header();
+                self.terminated = true;
+                self.b.value(Repr::Never, ty)
+            }
             ExprKind::Block(b) => self.lower_block(b).unwrap_or_else(|| self.unit(ty)),
             ExprKind::Field { base, name } => {
                 let b = self.lower_expr(base);
@@ -607,6 +640,128 @@ impl Lower<'_> {
         }
     }
 
+    /// `loop { body }` — an infinite loop the body leaves with `break`. Its value is
+    /// the union of the break values (the exit block's parameter). Loop-carried
+    /// variables (those the body reassigns) become the header block's parameters, which
+    /// is how mutable-looking locals stay SSA.
+    fn lower_loop(&mut self, body: &Block, repr: Repr, ty: TyId) -> Value {
+        let carried = self.carried_vars(body);
+        let inits: Vec<Value> = carried.iter().map(|n| self.lookup(n).unwrap()).collect();
+
+        let header = self.b.new_block();
+        let exit = self.b.new_block();
+        let produces = !matches!(repr, Repr::Unit);
+        let exit_param = produces.then(|| self.b.block_param(exit, repr.clone(), ty));
+
+        // Header parameters mirror the carried variables' current reprs.
+        let mut header_params = Vec::new();
+        for &v in &inits {
+            let (r, vty) = (self.b.value_repr(v).clone(), self.b.value_ty(v));
+            header_params.push(self.b.block_param(header, r, vty));
+        }
+
+        self.b.terminate(Term::Jump(Target { to: header, args: inits }));
+        self.b.switch_to(header);
+        self.terminated = false;
+        self.scope.push(vec![]);
+        for (n, &p) in carried.iter().zip(&header_params) {
+            self.bind(n, p);
+        }
+
+        self.loops.push(LoopCtx { header, exit, carried: carried.clone(), has_value: produces });
+        for s in &body.stmts {
+            if self.terminated {
+                break;
+            }
+            self.lower_stmt(s);
+        }
+        if !self.terminated {
+            if let Some(t) = &body.tail {
+                self.lower_expr(t);
+            }
+        }
+        // The back-edge: loop around with the carried variables' latest values.
+        if !self.terminated {
+            self.jump_to_header();
+        }
+        self.loops.pop();
+        self.scope.pop();
+
+        self.b.switch_to(exit);
+        self.terminated = false;
+        exit_param.unwrap_or_else(|| self.unit(ty))
+    }
+
+    /// `while cond { body }` — a loop whose header tests the condition. Yields unit.
+    fn lower_while(&mut self, cond: &Expr, body: &Block, ty: TyId) -> Value {
+        let carried = self.carried_vars(body);
+        let inits: Vec<Value> = carried.iter().map(|n| self.lookup(n).unwrap()).collect();
+
+        let header = self.b.new_block();
+        let body_b = self.b.new_block();
+        let exit = self.b.new_block();
+
+        let mut header_params = Vec::new();
+        for &v in &inits {
+            let (r, vty) = (self.b.value_repr(v).clone(), self.b.value_ty(v));
+            header_params.push(self.b.block_param(header, r, vty));
+        }
+
+        self.b.terminate(Term::Jump(Target { to: header, args: inits }));
+        self.b.switch_to(header);
+        self.terminated = false;
+        self.scope.push(vec![]);
+        for (n, &p) in carried.iter().zip(&header_params) {
+            self.bind(n, p);
+        }
+        let cond_v = self.lower_expr(cond);
+        self.b.terminate(Term::Branch {
+            cond: cond_v,
+            then: Target { to: body_b, args: vec![] },
+            els: Target { to: exit, args: vec![] },
+        });
+
+        self.b.switch_to(body_b);
+        self.terminated = false;
+        self.loops.push(LoopCtx { header, exit, carried: carried.clone(), has_value: false });
+        for s in &body.stmts {
+            if self.terminated {
+                break;
+            }
+            self.lower_stmt(s);
+        }
+        if !self.terminated {
+            self.jump_to_header();
+        }
+        self.loops.pop();
+        self.scope.pop();
+
+        self.b.switch_to(exit);
+        self.terminated = false;
+        self.unit(ty)
+    }
+
+    /// Jump to the innermost loop's header with the current values of its carried vars.
+    fn jump_to_header(&mut self) {
+        if let Some(ctx) = self.loops.last() {
+            let (header, carried) = (ctx.header, ctx.carried.clone());
+            let args: Vec<Value> = carried.iter().map(|n| self.lookup(n).unwrap()).collect();
+            self.b.terminate(Term::Jump(Target { to: header, args }));
+        }
+    }
+
+    /// The variables a loop body reassigns that are bound outside it — the loop-carried
+    /// state. Nested loops and lambdas manage their own, so the scan does not descend
+    /// into them.
+    fn carried_vars(&self, body: &Block) -> Vec<String> {
+        let mut names = Vec::new();
+        collect_assigns_block(body, &mut names);
+        names.retain(|n| self.lookup(n).is_some());
+        let mut seen = std::collections::HashSet::new();
+        names.retain(|n| seen.insert(n.clone()));
+        names
+    }
+
     // ---- helpers ----
 
     fn unit(&mut self, ty: TyId) -> Value {
@@ -650,6 +805,100 @@ fn kind_name(k: &ExprKind) -> &'static str {
 
 fn subj_ty(b: &Builder, v: Value) -> TyId {
     b.value_ty(v)
+}
+
+// ---- scanning for a loop's reassigned variables ----
+//
+// Descends into every sub-expression except a lambda's body: a closure cannot reassign
+// a capture (captures are sealed), so it never contributes to a loop's carried set.
+
+fn collect_assigns_block(b: &Block, out: &mut Vec<String>) {
+    for s in &b.stmts {
+        match &s.kind {
+            StmtKind::Let { value, .. } => collect_assigns_expr(value, out),
+            StmtKind::Assign { name, value } => {
+                out.push(name.clone());
+                collect_assigns_expr(value, out);
+            }
+            StmtKind::Expr(e) => collect_assigns_expr(e, out),
+            StmtKind::Error => {}
+        }
+    }
+    if let Some(t) = &b.tail {
+        collect_assigns_expr(t, out);
+    }
+}
+
+fn collect_assigns_expr(e: &Expr, out: &mut Vec<String>) {
+    match &e.kind {
+        ExprKind::Unary { rhs, .. } => collect_assigns_expr(rhs, out),
+        ExprKind::Binary { lhs, rhs, .. } => {
+            collect_assigns_expr(lhs, out);
+            collect_assigns_expr(rhs, out);
+        }
+        ExprKind::Call { callee, args, .. } => {
+            collect_assigns_expr(callee, out);
+            args.iter().for_each(|a| collect_assigns_expr(a, out));
+        }
+        ExprKind::Index { base, index } => {
+            collect_assigns_expr(base, out);
+            collect_assigns_expr(index, out);
+        }
+        ExprKind::Field { base, .. } => collect_assigns_expr(base, out),
+        ExprKind::List(elems) => {
+            for el in elems {
+                match el {
+                    ast::Elem::Value(x) | ast::Elem::Spread(x) => collect_assigns_expr(x, out),
+                }
+            }
+        }
+        ExprKind::RecordLit { fields, spread, .. } => {
+            fields.iter().for_each(|f| collect_assigns_expr(&f.value, out));
+            if let Some(s) = spread {
+                collect_assigns_expr(s, out);
+            }
+        }
+        ExprKind::Tuple(es) => es.iter().for_each(|x| collect_assigns_expr(x, out)),
+        ExprKind::If { cond, then, else_ } => {
+            collect_assigns_expr(cond, out);
+            collect_assigns_block(then, out);
+            if let Some(e) = else_ {
+                collect_assigns_expr(e, out);
+            }
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            collect_assigns_expr(scrutinee, out);
+            for arm in arms {
+                if let Some(g) = &arm.guard {
+                    collect_assigns_expr(g, out);
+                }
+                collect_assigns_expr(&arm.body, out);
+            }
+        }
+        ExprKind::Block(b) => collect_assigns_block(b, out),
+        ExprKind::Loop { body } => collect_assigns_block(body, out),
+        ExprKind::While { cond, body } => {
+            collect_assigns_expr(cond, out);
+            collect_assigns_block(body, out);
+        }
+        ExprKind::For { iter, body, .. } => {
+            collect_assigns_expr(iter, out);
+            collect_assigns_block(body, out);
+        }
+        ExprKind::Break(Some(e)) | ExprKind::Return(Some(e)) | ExprKind::Throw(e) => {
+            collect_assigns_expr(e, out)
+        }
+        ExprKind::Try { body, catch, .. } => {
+            collect_assigns_expr(body, out);
+            if let Some(c) = catch {
+                collect_assigns_block(&c.body, out);
+            }
+        }
+        ExprKind::Is { lhs, .. } | ExprKind::As { lhs, .. } => collect_assigns_expr(lhs, out),
+        ExprKind::Assert { args, .. } => args.iter().for_each(|a| collect_assigns_expr(a, out)),
+        // A lambda's body is a separate scope that cannot reassign a capture.
+        _ => {}
+    }
 }
 
 fn elem_repr(b: &Builder, base: Value, index: usize) -> Repr {

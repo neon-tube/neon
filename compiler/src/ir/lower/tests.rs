@@ -154,3 +154,28 @@ fn a_literal_match_compares_equality() {
     assert!(ir.contains("const.i64 1"), "{ir}");
     assert!(ir.contains("prim.eq"), "{ir}");
 }
+
+#[test]
+fn a_loop_carries_reassigned_variables_as_block_args() {
+    let ir = lower(
+        "fn count() -> i64 {
+             let i = 0;
+             loop {
+                 if i >= 10 { break i; }
+                 i = i + 1;
+             }
+         }",
+    );
+    // The header takes the carried `i`, the back-edge and break pass it.
+    assert!(ir.contains("jump block"), "{ir}");
+    assert!(ir.contains("i64):"), "block param for carried i: {ir}");
+}
+
+#[test]
+fn a_while_loop_tests_its_condition_in_the_header() {
+    let ir = lower(
+        "fn f() { let i = 0; while i < 3 { i = i + 1; } }",
+    );
+    assert!(ir.contains("prim.lt"), "{ir}");
+    assert!(ir.contains("branch"), "{ir}");
+}
