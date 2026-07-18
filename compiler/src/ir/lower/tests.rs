@@ -124,3 +124,33 @@ fn a_list_literal_builds_a_list() {
     let ir = lower("opaque record List[T] {}\nfn nums() -> List[i64] { [5, 6] }");
     assert!(ir.contains("list [%0, %1]"), "{ir}");
 }
+
+#[test]
+fn a_sum_type_match_becomes_a_decision_list() {
+    let ir = lower(
+        "record Circle { r: i64 }
+         record Rect { w: i64, h: i64 }
+         type Shape = Circle | Rect
+         fn area(s: Shape) -> i64 {
+             match s { is Circle => s.r, is Rect => 1 }
+         }",
+    );
+    assert!(ir.contains("is_variant %0 Circle"), "{ir}");
+    assert!(ir.contains("is_variant"), "{ir}");
+    assert!(ir.contains("branch"), "{ir}");
+}
+
+#[test]
+fn a_nullable_match_tests_null() {
+    let ir = lower(
+        "fn add_one(v: i64 | null) -> i64 { match v { is null => -1, n => n + 1 } }",
+    );
+    assert!(ir.contains("is_null %0"), "{ir}");
+}
+
+#[test]
+fn a_literal_match_compares_equality() {
+    let ir = lower("fn n(x: i64) -> i64 { match x { 1 => 10, _ => 0 } }");
+    assert!(ir.contains("const.i64 1"), "{ir}");
+    assert!(ir.contains("prim.eq"), "{ir}");
+}

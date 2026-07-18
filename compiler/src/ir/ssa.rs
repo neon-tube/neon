@@ -117,6 +117,11 @@ pub enum Op {
     MakeTuple(Vec<Value>),
     /// Read a tuple element.
     Elem { base: Value, index: usize },
+    /// Whether a nullable value is null. Codegen: a null-pointer or tag test.
+    IsNull(Value),
+    /// Whether a value is the named variant of a union (a nominal member, or a
+    /// primitive kind by name). Codegen: a discriminant compare.
+    IsVariant { value: Value, variant: String },
     /// Build a list from its elements, in order.
     MakeList(Vec<Value>),
     /// Index a list — `xs[i]`, which traps on a bad index rather than throwing.

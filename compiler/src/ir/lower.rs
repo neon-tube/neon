@@ -211,6 +211,7 @@ impl Lower<'_> {
             ExprKind::Binary { op, lhs, rhs } => self.lower_binary(*op, lhs, rhs, repr, ty),
             ExprKind::Call { callee, args, .. } => self.lower_call(e.id, callee, args, repr, ty),
             ExprKind::If { cond, then, else_ } => self.lower_if(cond, then, else_.as_deref(), repr, ty),
+            ExprKind::Match { scrutinee, arms } => self.lower_match(scrutinee, arms, repr, ty),
             ExprKind::Block(b) => self.lower_block(b).unwrap_or_else(|| self.unit(ty)),
             ExprKind::Field { base, name } => {
                 let b = self.lower_expr(base);
@@ -428,6 +429,184 @@ impl Lower<'_> {
         join_param.unwrap_or_else(|| self.unit(ty))
     }
 
+    /// A `match` as a decision list: each arm tests the subject and, on a match, binds
+    /// its pattern and runs its body, jumping to a join with the result. A dense
+    /// integer or tag decision list is left for the optimiser to fold into a switch.
+    fn lower_match(
+        &mut self,
+        scrutinee: &Expr,
+        arms: &[ast::MatchArm],
+        repr: Repr,
+        ty: TyId,
+    ) -> Value {
+        let subj = self.lower_expr(scrutinee);
+        let produces = !matches!(repr, Repr::Unit);
+        let join = self.b.new_block();
+        let join_param = produces.then(|| self.b.block_param(join, repr.clone(), ty));
+
+        for arm in arms {
+            let matched = self.b.new_block();
+            let next = self.b.new_block();
+
+            // Test the pattern in the current block.
+            match self.pattern_test(subj, &arm.pat) {
+                None => self.b.terminate(Term::Jump(Target { to: matched, args: vec![] })),
+                Some(test) => self.b.terminate(Term::Branch {
+                    cond: test,
+                    then: Target { to: matched, args: vec![] },
+                    els: Target { to: next, args: vec![] },
+                }),
+            }
+
+            // The matched block binds the pattern, checks any guard, and runs the body.
+            self.b.switch_to(matched);
+            self.terminated = false;
+            self.scope.push(vec![]);
+            self.bind_match_pattern(subj, &arm.pat);
+            if let Some(g) = &arm.guard {
+                let gv = self.lower_expr(g);
+                let body_b = self.b.new_block();
+                self.b.terminate(Term::Branch {
+                    cond: gv,
+                    then: Target { to: body_b, args: vec![] },
+                    els: Target { to: next, args: vec![] },
+                });
+                self.b.switch_to(body_b);
+                self.terminated = false;
+            }
+            let bv = self.lower_expr(&arm.body);
+            if !self.terminated {
+                let args = join_param.map(|_| vec![bv]).unwrap_or_default();
+                self.b.terminate(Term::Jump(Target { to: join, args }));
+            }
+            self.scope.pop();
+
+            self.b.switch_to(next);
+            self.terminated = false;
+        }
+
+        // The checker proved the arms exhaustive, so falling off the last is unreachable.
+        self.b.terminate(Term::Unreachable);
+        self.b.switch_to(join);
+        self.terminated = false;
+        join_param.unwrap_or_else(|| self.unit(ty))
+    }
+
+    /// The test an arm's pattern imposes, or `None` when it always matches. Sub-patterns
+    /// (a nested literal in a field) contribute their own tests, ANDed together.
+    fn pattern_test(&mut self, subj: Value, pat: &ast::Pattern) -> Option<Value> {
+        match &pat.kind {
+            ast::PatternKind::Wildcard | ast::PatternKind::Bind(_) => None,
+            ast::PatternKind::Is(spec) => Some(self.type_test(subj, spec)),
+            ast::PatternKind::Literal(lit) => Some(self.literal_test(subj, lit)),
+            ast::PatternKind::Record { path, fields, .. } => {
+                let mut test = path.as_ref().and_then(|p| p.last()).map(|n| {
+                    self.b.emit(
+                        Op::IsVariant { value: subj, variant: n.clone() },
+                        Repr::Bool,
+                        subj_ty(&self.b, subj),
+                    )
+                });
+                for f in fields {
+                    if let Some(sub) = &f.pat {
+                        let r = field_repr(&self.b, subj, &f.name);
+                        let fv = self.b.emit(
+                            Op::Field { base: subj, field: f.name.clone() },
+                            r,
+                            subj_ty(&self.b, subj),
+                        );
+                        if let Some(sub_test) = self.pattern_test(fv, sub) {
+                            test = Some(self.and(test, sub_test));
+                        }
+                    }
+                }
+                test
+            }
+            ast::PatternKind::Tuple(ps) => {
+                let mut test = None;
+                for (i, sub) in ps.iter().enumerate() {
+                    let r = elem_repr(&self.b, subj, i);
+                    let ev =
+                        self.b.emit(Op::Elem { base: subj, index: i }, r, subj_ty(&self.b, subj));
+                    if let Some(sub_test) = self.pattern_test(ev, sub) {
+                        test = Some(self.and(test, sub_test));
+                    }
+                }
+                test
+            }
+            _ => None,
+        }
+    }
+
+    /// `x is T` as a runtime test: null becomes a null check, anything else a
+    /// discriminant compare against the type's head name.
+    fn type_test(&mut self, subj: Value, spec: &ast::TypeSpec) -> Value {
+        let bty = subj_ty(&self.b, subj);
+        match &spec.kind {
+            ast::TypeSpecKind::Null => self.b.emit(Op::IsNull(subj), Repr::Bool, bty),
+            ast::TypeSpecKind::Named { path, .. } => {
+                let variant = path.last().cloned().unwrap_or_default();
+                self.b.emit(Op::IsVariant { value: subj, variant }, Repr::Bool, bty)
+            }
+            ast::TypeSpecKind::Atom(a) => {
+                let lit = self.b.emit(Op::ConstAtom(a.clone()), Repr::Tag, bty);
+                self.b.emit(Op::Prim(PrimOp::Eq, vec![subj, lit]), Repr::Bool, bty)
+            }
+            _ => self.b.emit(Op::ConstBool(true), Repr::Bool, bty),
+        }
+    }
+
+    /// A literal pattern tests equality; a `null` literal is a null check.
+    fn literal_test(&mut self, subj: Value, lit: &Expr) -> Value {
+        let bty = subj_ty(&self.b, subj);
+        if matches!(lit.kind, ExprKind::Null) {
+            return self.b.emit(Op::IsNull(subj), Repr::Bool, bty);
+        }
+        let lv = self.lower_expr(lit);
+        self.b.emit(Op::Prim(PrimOp::Eq, vec![subj, lv]), Repr::Bool, bty)
+    }
+
+    fn and(&mut self, a: Option<Value>, b: Value) -> Value {
+        match a {
+            Some(a) => {
+                let bty = subj_ty(&self.b, b);
+                self.b.emit(Op::Prim(PrimOp::And, vec![a, b]), Repr::Bool, bty)
+            }
+            None => b,
+        }
+    }
+
+    /// Bind the names an arm's pattern introduces: a bare binding narrows the subject,
+    /// a record/tuple pattern projects and recurses.
+    fn bind_match_pattern(&mut self, subj: Value, pat: &ast::Pattern) {
+        match &pat.kind {
+            ast::PatternKind::Bind(n) => self.bind(n, subj),
+            ast::PatternKind::Record { fields, .. } => {
+                for f in fields {
+                    let r = field_repr(&self.b, subj, &f.name);
+                    let fv = self.b.emit(
+                        Op::Field { base: subj, field: f.name.clone() },
+                        r,
+                        subj_ty(&self.b, subj),
+                    );
+                    match &f.pat {
+                        Some(sub) => self.bind_match_pattern(fv, sub),
+                        None => self.bind(&f.name, fv),
+                    }
+                }
+            }
+            ast::PatternKind::Tuple(ps) => {
+                for (i, sub) in ps.iter().enumerate() {
+                    let r = elem_repr(&self.b, subj, i);
+                    let ev =
+                        self.b.emit(Op::Elem { base: subj, index: i }, r, subj_ty(&self.b, subj));
+                    self.bind_match_pattern(ev, sub);
+                }
+            }
+            _ => {}
+        }
+    }
+
     // ---- helpers ----
 
     fn unit(&mut self, ty: TyId) -> Value {
@@ -467,6 +646,10 @@ fn kind_name(k: &ExprKind) -> &'static str {
         ExprKind::Assert { .. } => "assert",
         _ => "expr",
     }
+}
+
+fn subj_ty(b: &Builder, v: Value) -> TyId {
+    b.value_ty(v)
 }
 
 fn elem_repr(b: &Builder, base: Value, index: usize) -> Repr {
