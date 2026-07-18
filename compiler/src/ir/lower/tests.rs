@@ -242,3 +242,15 @@ fn a_for_loop_indexes_the_list_with_a_carried_accumulator() {
     assert!(ir.contains("prim.lt"), "bound check: {ir}");
     assert!(ir.contains("prim.add"), "increment + accumulate: {ir}");
 }
+
+#[test]
+fn a_lambda_captures_and_lowers_as_its_own_function() {
+    let ir = lower(
+        "fn adder(n: i64) -> (i64) -> i64 { (x) => x + n }",
+    );
+    // The lambda becomes its own function that unpacks `n` from the env; the parent
+    // builds a closure capturing `n`.
+    assert!(ir.contains("closure @lambda$"), "make closure: {ir}");
+    assert!(ir.contains("fn @lambda$"), "lambda function: {ir}");
+    assert!(ir.contains("elem %0.0"), "unpack capture from env: {ir}");
+}

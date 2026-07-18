@@ -14,29 +14,49 @@ use crate::typecheck::env::Env;
 use crate::typecheck::result::TypecheckResult;
 use crate::typecheck::types::TyId;
 
-/// Lower a whole module to a program of SSA functions.
-pub fn lower_module(env: &Env, result: &TypecheckResult, module: &ast::Module) -> Program {
+/// A lambda whose body is lowered as its own function, discovered while lowering an
+/// enclosing one. The captures are the free variables it closes over, in order.
+struct LambdaJob {
+    name: String,
+    lambda: Expr,
+    captures: Vec<(String, Repr, TyId)>,
+    module: Vec<String>,
+}
+
+/// Lower a whole module to a program of SSA functions. Lambdas are lowered as separate
+/// functions via a worklist: lowering a function may discover lambdas, which are queued
+/// and lowered in turn (and may discover more).
+pub fn lower_module<'a>(env: &Env, result: &TypecheckResult, module: &'a ast::Module) -> Program {
     let mut funcs = Vec::new();
-    lower_decls(env, result, &[], &module.decls, &mut funcs);
+    let mut fn_jobs: Vec<(Vec<String>, &'a ast::FnDecl)> = Vec::new();
+    collect_fn_jobs(&[], &module.decls, &mut fn_jobs);
+
+    let mut lambda_jobs: Vec<LambdaJob> = Vec::new();
+    for (module, f) in fn_jobs {
+        let (func, pending) = lower_fn(env, result, &module, f);
+        funcs.push(func);
+        lambda_jobs.extend(pending);
+    }
+    while let Some(job) = lambda_jobs.pop() {
+        let (func, pending) = lower_lambda_job(env, result, job);
+        funcs.push(func);
+        lambda_jobs.extend(pending);
+    }
     Program { funcs }
 }
 
-fn lower_decls(
-    env: &Env,
-    result: &TypecheckResult,
+fn collect_fn_jobs<'a>(
     module: &[String],
-    decls: &[Decl],
-    out: &mut Vec<Func>,
+    decls: &'a [Decl],
+    out: &mut Vec<(Vec<String>, &'a ast::FnDecl)>,
 ) {
     for d in decls {
         match &d.kind {
-            DeclKind::Fn(f) if f.body.is_some() => {
-                out.push(lower_fn(env, result, module, f));
-            }
+            DeclKind::Fn(f) if f.body.is_some() => out.push((module.to_vec(), f)),
             DeclKind::Mod(m) => {
                 let mut inner = module.to_vec();
                 inner.push(m.name.clone());
-                lower_decls(env, result, &inner, &m.decls, out);
+                collect_fn_jobs(&inner, &m.decls, out);
             }
             _ => {}
         }
@@ -53,22 +73,18 @@ fn mangle(module: &[String], name: &str) -> String {
     }
 }
 
-fn lower_fn(env: &Env, result: &TypecheckResult, module: &[String], f: &ast::FnDecl) -> Func {
+fn lower_fn(
+    env: &Env,
+    result: &TypecheckResult,
+    module: &[String],
+    f: &ast::FnDecl,
+) -> (Func, Vec<LambdaJob>) {
     let name = f.name.clone();
     let sig = env.fn_named(module, std::slice::from_ref(&name));
     let ret_ty = sig.map(|s| s.ret).unwrap_or(TyId(0));
     let ret_repr = repr_of(&env.solver.t, ret_ty);
 
-    let mut lo = Lower {
-        env,
-        result,
-        module: module.to_vec(),
-        b: Builder::new(mangle(module, &f.name), ret_repr.clone()),
-        scope: vec![vec![]],
-        terminated: false,
-        loops: vec![],
-        handlers: vec![],
-    };
+    let mut lo = Lower::new(env, result, module.to_vec(), mangle(module, &f.name), ret_repr.clone());
 
     // Parameters are the entry block's parameters.
     let mut params = Vec::new();
@@ -87,7 +103,49 @@ fn lower_fn(env: &Env, result: &TypecheckResult, module: &[String], f: &ast::FnD
         let ret = if matches!(ret_repr, Repr::Unit) { None } else { tail };
         lo.b.terminate(Term::Ret(ret));
     }
-    lo.b.finish(params)
+    let pending = std::mem::take(&mut lo.pending);
+    (lo.b.finish(params), pending)
+}
+
+/// Lower a lambda's body as its own function. Its first parameter is the environment (a
+/// tuple of the captured values); the rest are the lambda's parameters.
+fn lower_lambda_job(env: &Env, result: &TypecheckResult, job: LambdaJob) -> (Func, Vec<LambdaJob>) {
+    let ExprKind::Lambda { params: lparams, body } = &job.lambda.kind else {
+        unreachable!("a lambda job holds a lambda");
+    };
+    // The lambda's inferred arrow gives its parameter and return reprs.
+    let (param_reprs, ret_repr) = match result.ty(job.lambda.id).map(|t| repr_of(&env.solver.t, t)) {
+        Some(Repr::Closure { params, ret }) => (params, *ret),
+        _ => (vec![], Repr::Unit),
+    };
+
+    let mut lo = Lower::new(env, result, job.module.clone(), job.name.clone(), ret_repr.clone());
+
+    // The environment parameter, then unpack each capture from it.
+    let env_repr = Repr::Tuple(job.captures.iter().map(|(_, r, _)| r.clone()).collect());
+    let env_v = lo.b.block_param(BlockId(0), env_repr, TyId(0));
+    let mut params = vec![env_v];
+    if !job.captures.is_empty() {
+        for (i, (n, r, cty)) in job.captures.iter().enumerate() {
+            let cap = lo.b.emit(Op::Elem { base: env_v, index: i }, r.clone(), *cty);
+            lo.bind(n, cap);
+        }
+    }
+    for (i, p) in lparams.iter().enumerate() {
+        let r = param_reprs.get(i).cloned().unwrap_or(Repr::Any);
+        let v = lo.b.block_param(BlockId(0), r, TyId(0));
+        lo.bind(&p.name, v);
+        params.push(v);
+    }
+    lo.b.switch_to(BlockId(0));
+
+    let tail = lo.lower_expr(body);
+    if !lo.terminated {
+        let ret = if matches!(ret_repr, Repr::Unit) { None } else { Some(tail) };
+        lo.b.terminate(Term::Ret(ret));
+    }
+    let pending = std::mem::take(&mut lo.pending);
+    (lo.b.finish(params), pending)
 }
 
 struct Lower<'a> {
@@ -107,6 +165,30 @@ struct Lower<'a> {
     /// `throw` jumps to on error, passing the error value. Empty means an error
     /// propagates straight out of the function.
     handlers: Vec<BlockId>,
+    /// Lambdas discovered while lowering this function, to be lowered as their own.
+    pending: Vec<LambdaJob>,
+}
+
+impl<'a> Lower<'a> {
+    fn new(
+        env: &'a Env,
+        result: &'a TypecheckResult,
+        module: Vec<String>,
+        fn_name: String,
+        ret: Repr,
+    ) -> Self {
+        Lower {
+            env,
+            result,
+            module,
+            b: Builder::new(fn_name, ret),
+            scope: vec![vec![]],
+            terminated: false,
+            loops: vec![],
+            handlers: vec![],
+            pending: vec![],
+        }
+    }
 }
 
 /// What `break` and `continue` need: where each jumps, and the loop-carried variables to
@@ -281,6 +363,7 @@ impl Lower<'_> {
             ExprKind::Try { form, body, catch } => {
                 self.lower_try(*form, body, catch.as_ref(), repr, ty)
             }
+            ExprKind::Lambda { .. } => self.lower_lambda(e, repr, ty),
             ExprKind::Throw(e) => {
                 let ev = self.lower_expr(e);
                 match self.handlers.last().copied() {
@@ -387,8 +470,45 @@ impl Lower<'_> {
                 return v;
             }
         }
-        // A bare reference to a function as a value is not lowered yet.
+        // A bare function name used as a value: a closure with no captured environment.
+        if let Some(sig) = self.env.fn_named(&self.module, p) {
+            let func = mangle(&sig.module, &sig.name);
+            return self.b.emit(Op::MakeClosure { func, captures: vec![] }, repr, ty);
+        }
         self.unhandled_note("path-as-value", repr, ty)
+    }
+
+    /// `(x) => e` — capture the free variables, queue the body to be lowered as its own
+    /// function, and build a closure of the two.
+    fn lower_lambda(&mut self, e: &Expr, repr: Repr, ty: TyId) -> Value {
+        let captures = self.free_vars(e);
+        let capture_vals: Vec<Value> = captures.iter().map(|n| self.lookup(n).unwrap()).collect();
+        let cap_info: Vec<(String, Repr, TyId)> = captures
+            .iter()
+            .zip(&capture_vals)
+            .map(|(n, &v)| (n.clone(), self.b.value_repr(v).clone(), self.b.value_ty(v)))
+            .collect();
+        let name = format!("lambda${}", e.id.0);
+        self.pending.push(LambdaJob {
+            name: name.clone(),
+            lambda: e.clone(),
+            captures: cap_info,
+            module: self.module.clone(),
+        });
+        self.b.emit(Op::MakeClosure { func: name, captures: capture_vals }, repr, ty)
+    }
+
+    /// The free variables a lambda closes over: names its body uses that are bound in the
+    /// enclosing scope, excluding its own parameters and locals.
+    fn free_vars(&self, e: &Expr) -> Vec<String> {
+        let ExprKind::Lambda { params, body } = &e.kind else { return vec![] };
+        let mut bound: std::collections::HashSet<String> =
+            params.iter().map(|p| p.name.clone()).collect();
+        let mut used = Vec::new();
+        collect_free_expr(body, &mut bound, &mut used);
+        let mut seen = std::collections::HashSet::new();
+        used.retain(|n| self.lookup(n).is_some() && seen.insert(n.clone()));
+        used
     }
 
     fn lower_binary(&mut self, op: BinOp, lhs: &Expr, rhs: &Expr, repr: Repr, ty: TyId) -> Value {
@@ -1154,6 +1274,139 @@ fn to_string_symbol(r: &Repr) -> Option<String> {
         _ => return None,
     }
     .to_string())
+}
+
+// ---- scanning for a lambda's free variables ----
+
+fn pattern_names(p: &ast::Pattern, out: &mut Vec<String>) {
+    match &p.kind {
+        ast::PatternKind::Bind(n) => out.push(n.clone()),
+        ast::PatternKind::Tuple(ps) => ps.iter().for_each(|s| pattern_names(s, out)),
+        ast::PatternKind::Record { fields, .. } => {
+            for f in fields {
+                match &f.pat {
+                    Some(sub) => pattern_names(sub, out),
+                    None => out.push(f.name.clone()),
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_free(block: &Block, bound: &mut std::collections::HashSet<String>, used: &mut Vec<String>) {
+    for s in &block.stmts {
+        match &s.kind {
+            StmtKind::Let { pat, value, .. } => {
+                collect_free_expr(value, bound, used);
+                let mut names = Vec::new();
+                pattern_names(pat, &mut names);
+                bound.extend(names);
+            }
+            StmtKind::Assign { value, .. } => collect_free_expr(value, bound, used),
+            StmtKind::Expr(e) => collect_free_expr(e, bound, used),
+            StmtKind::Error => {}
+        }
+    }
+    if let Some(t) = &block.tail {
+        collect_free_expr(t, bound, used);
+    }
+}
+
+fn collect_free_expr(
+    e: &Expr,
+    bound: &mut std::collections::HashSet<String>,
+    used: &mut Vec<String>,
+) {
+    match &e.kind {
+        ExprKind::Path(p) => {
+            if let [name] = p.as_slice() {
+                if !bound.contains(name) {
+                    used.push(name.clone());
+                }
+            }
+        }
+        ExprKind::Lambda { params, body } => {
+            // A nested lambda's own parameters are bound within it; do not leak them out.
+            let mut inner = bound.clone();
+            inner.extend(params.iter().map(|p| p.name.clone()));
+            collect_free_expr(body, &mut inner, used);
+        }
+        ExprKind::Unary { rhs, .. } => collect_free_expr(rhs, bound, used),
+        ExprKind::Binary { lhs, rhs, .. } => {
+            collect_free_expr(lhs, bound, used);
+            collect_free_expr(rhs, bound, used);
+        }
+        ExprKind::Call { callee, args, .. } => {
+            collect_free_expr(callee, bound, used);
+            args.iter().for_each(|a| collect_free_expr(a, bound, used));
+        }
+        ExprKind::Index { base, index } => {
+            collect_free_expr(base, bound, used);
+            collect_free_expr(index, bound, used);
+        }
+        ExprKind::Field { base, .. } => collect_free_expr(base, bound, used),
+        ExprKind::List(elems) => elems.iter().for_each(|el| match el {
+            ast::Elem::Value(x) | ast::Elem::Spread(x) => collect_free_expr(x, bound, used),
+        }),
+        ExprKind::RecordLit { fields, spread, .. } => {
+            fields.iter().for_each(|f| collect_free_expr(&f.value, bound, used));
+            if let Some(s) = spread {
+                collect_free_expr(s, bound, used);
+            }
+        }
+        ExprKind::Tuple(es) => es.iter().for_each(|x| collect_free_expr(x, bound, used)),
+        ExprKind::If { cond, then, else_ } => {
+            collect_free_expr(cond, bound, used);
+            collect_free(then, bound, used);
+            if let Some(x) = else_ {
+                collect_free_expr(x, bound, used);
+            }
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            collect_free_expr(scrutinee, bound, used);
+            for arm in arms {
+                // Arm-pattern bindings scope to the arm; over-approximate by adding them
+                // to `bound` (a capture named the same as an arm binding is rare).
+                let mut names = Vec::new();
+                pattern_names(&arm.pat, &mut names);
+                let mut inner = bound.clone();
+                inner.extend(names);
+                if let Some(g) = &arm.guard {
+                    collect_free_expr(g, &mut inner, used);
+                }
+                collect_free_expr(&arm.body, &mut inner, used);
+            }
+        }
+        ExprKind::Block(b) => collect_free(b, bound, used),
+        ExprKind::Loop { body } => collect_free(body, bound, used),
+        ExprKind::While { cond, body } => {
+            collect_free_expr(cond, bound, used);
+            collect_free(body, bound, used);
+        }
+        ExprKind::For { pat, iter, body } => {
+            collect_free_expr(iter, bound, used);
+            let mut names = Vec::new();
+            pattern_names(pat, &mut names);
+            let mut inner = bound.clone();
+            inner.extend(names);
+            collect_free(body, &mut inner, used);
+        }
+        ExprKind::Break(Some(x)) | ExprKind::Return(Some(x)) | ExprKind::Throw(x) => {
+            collect_free_expr(x, bound, used)
+        }
+        ExprKind::Try { body, catch, .. } => {
+            collect_free_expr(body, bound, used);
+            if let Some(c) = catch {
+                let mut inner = bound.clone();
+                inner.insert(c.binding.clone());
+                collect_free(&c.body, &mut inner, used);
+            }
+        }
+        ExprKind::Is { lhs, .. } | ExprKind::As { lhs, .. } => collect_free_expr(lhs, bound, used),
+        ExprKind::Assert { args, .. } => args.iter().for_each(|a| collect_free_expr(a, bound, used)),
+        _ => {}
+    }
 }
 
 // ---- scanning for a loop's reassigned variables ----
