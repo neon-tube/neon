@@ -628,7 +628,7 @@ fn a_record_literal_may_not_omit_a_required_field() {
 #[test]
 fn a_record_literal_checks_field_types() {
     let e = check("fn g(o: { a: i64 }) {} fn f() { g({ a: \"s\" }); }");
-    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::Mismatch { .. })), "{e:?}");
+    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::FieldTypeMismatch { .. })), "{e:?}");
 }
 
 // ---- iteration and indexing ----

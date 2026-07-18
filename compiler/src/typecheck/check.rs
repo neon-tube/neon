@@ -92,10 +92,9 @@ impl Checker<'_> {
         for d in decls {
             match &d.kind {
                 ast::DeclKind::Fn(f) => {
-                    if module.is_empty() && f.name == "main" && (f.ret.is_some() || f.throws.is_some())
-                    {
-                        self.error(d.span.clone(), TypeErrorKind::MainSignatureFixed);
-                    }
+                    // `main`'s fixed signature is enforced in the declaration phase
+                    // (`Env::fn_sig`), so an illegal clause is caught even when it
+                    // would not resolve as a type.
                     self.fn_body(module, f, &[]);
                 }
                 ast::DeclKind::Impl(i) => {
@@ -648,7 +647,18 @@ impl Checker<'_> {
             seen.push(f.name.clone());
             match target.iter().find(|(n, _)| *n == f.name) {
                 Some((_, want)) => {
-                    self.expr(module, &f.value, Some(*want));
+                    // Like `expr`, but a mismatch names the field rather than reporting a
+                    // bare type pair -- `{ timeout: "x" }` should point at `timeout`.
+                    let want = *want;
+                    let got = self.infer(module, &f.value, Some(want));
+                    self.result.set_ty(f.value.id, got);
+                    if !self.assignable(got, want) {
+                        let (expected, found) = (self.show(want), self.show(got));
+                        self.error(
+                            f.value.span.clone(),
+                            TypeErrorKind::FieldTypeMismatch { field: f.name.clone(), expected, found },
+                        );
+                    }
                 }
                 None => {
                     self.expr(module, &f.value, None);
@@ -1125,6 +1135,21 @@ impl Checker<'_> {
         args: &[Expr],
         expected: Option<TyId>,
     ) -> TyId {
+        // `x.f(..)` is either a call of a field that holds a function, or method-call
+        // syntax -- which Neon does not have. Tell them apart by whether `f` is a
+        // field: if not, suggest the free-function or pipe form rather than letting
+        // it fail as a plain missing field.
+        if let ExprKind::Field { base, name } = &callee.kind {
+            let base_ty = self.expr(module, base, None);
+            let label = self.env.solver.t.name(name);
+            let field = narrow::project_field(&mut self.env.solver, base_ty, label);
+            if field.ty().is_none() && !self.env.is_error(base_ty) {
+                let on = self.show(base_ty);
+                self.error(callee.span.clone(), TypeErrorKind::DotCall { method: name.clone(), on });
+                return self.poison();
+            }
+        }
+
         let ExprKind::Path(p) = &callee.kind else {
             // Any other expression producing a value: a lambda, a field holding a
             // function, a parenthesised call. It is callable iff its type is an arrow.
@@ -1330,9 +1355,9 @@ impl Checker<'_> {
             DispatchError::Ambiguous { method, protocols } => {
                 TypeErrorKind::AmbiguousCall { method, protocols }
             }
-            DispatchError::NoImpl { protocol, uncovered } => {
+            DispatchError::NoImpl { protocol, method, uncovered } => {
                 let uncovered = self.show(uncovered);
-                TypeErrorKind::NoImpl { protocol, uncovered }
+                TypeErrorKind::NoImpl { protocol, method, uncovered }
             }
             DispatchError::NoReceiver(n) => TypeErrorKind::NoReceiver(n),
         };

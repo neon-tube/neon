@@ -60,6 +60,9 @@ pub enum TypeErrorKind {
     OrphanInLibrary(String),
     /// `actual` is not a subtype of `expected`. The one rule the checker rests on.
     Mismatch { expected: String, found: String },
+    /// A record-literal field whose value does not fit the field's declared type.
+    /// Named so the diagnostic points at the field, not just the type pair.
+    FieldTypeMismatch { field: String, expected: String, found: String },
     /// `match s { ... }` leaves `missing` unhandled. The residual IS the message.
     NotExhaustive { missing: String },
     /// An `if` with no `else`, consumed as a value.
@@ -68,10 +71,12 @@ pub enum TypeErrorKind {
     ImpossibleCast { from: String, to: String },
     /// Two protocols answer. `A::go(r)` picks one.
     AmbiguousCall { method: String, protocols: Vec<String> },
-    NoImpl { protocol: String, uncovered: String },
+    NoImpl { protocol: String, method: String, uncovered: String },
     NoReceiver(String),
     /// A field read that nothing in the subject has.
     NoField { field: String, on: String },
+    /// `x.f(..)` where `f` is not a field: method-call syntax, which Neon lacks.
+    DotCall { method: String, on: String },
     /// A call whose callee is not a function.
     NotCallable { what: String, ty: String },
     /// A lambda parameter with no annotation and no expected type to infer it from.
@@ -151,6 +156,10 @@ impl fmt::Display for TypeError {
             TypeErrorKind::Mismatch { expected, found } => {
                 write!(f, "expected `{expected}`, found `{found}`")
             }
+            TypeErrorKind::FieldTypeMismatch { field, expected, found } => write!(
+                f,
+                "field `{field}` expects `{expected}`, but this is `{found}`"
+            ),
             TypeErrorKind::NotExhaustive { missing } => write!(
                 f,
                 "this match is not exhaustive: `{missing}` is not handled"
@@ -166,14 +175,14 @@ impl fmt::Display for TypeError {
             ),
             TypeErrorKind::AmbiguousCall { method, protocols } => write!(
                 f,
-                "`{method}` is declared by more than one protocol in scope ({}); \
-                 qualify the call, e.g. `{}::{method}(..)`",
+                "Ambiguous call: `{method}` is declared by more than one protocol in \
+                 scope ({}); qualify it, e.g. `{}::{method}(..)`",
                 protocols.join(", "),
                 protocols.first().map(String::as_str).unwrap_or("P")
             ),
-            TypeErrorKind::NoImpl { protocol, uncovered } => write!(
+            TypeErrorKind::NoImpl { protocol, method, uncovered } => write!(
                 f,
-                "no impl of `{protocol}` for `{uncovered}`"
+                "cannot call `{method}`: no impl of `{protocol}` for `{uncovered}`"
             ),
             TypeErrorKind::NoReceiver(n) => write!(
                 f,
@@ -186,7 +195,7 @@ impl fmt::Display for TypeError {
             TypeErrorKind::NotIndexable(t) => write!(f, "`{t}` cannot be indexed"),
             TypeErrorKind::BareThrowingCall => write!(
                 f,
-                "this call can throw, so it must be a `try` -- `try`, `try?` or `try!`"
+                "this call throws, so it must be a `try` -- `try`, `try?` or `try!`"
             ),
             TypeErrorKind::Throws { thrown, declared } => write!(
                 f,
@@ -223,6 +232,11 @@ impl fmt::Display for TypeError {
             TypeErrorKind::NoField { field, on } => {
                 write!(f, "`{on}` has no field `{field}`")
             }
+            TypeErrorKind::DotCall { method, on } => write!(
+                f,
+                "`{on}` has no field `{method}`, and Neon has no method-call syntax; \
+                 write `{method}(x)` or `x |> {method}(..)`"
+            ),
             TypeErrorKind::NotCallable { what, ty } => {
                 write!(f, "{what} is a `{ty}`, which is not a function and cannot be called")
             }
@@ -788,12 +802,23 @@ impl Env {
             .iter()
             .map(|p| (p.name.clone(), self.resolve(&scope, &p.ty)))
             .collect();
+        // `main`'s signature is fixed. Catch an illegal return type or throws clause
+        // here, in the declaration phase, and do not resolve it -- otherwise
+        // `throws Error` fails as an unknown type and buries the real mistake, and
+        // the body check never runs to report it.
+        let main_sig_fixed =
+            module.is_empty() && f.name == "main" && (f.ret.is_some() || f.throws.is_some());
+        if main_sig_fixed {
+            self.error(span.clone(), TypeErrorKind::MainSignatureFixed);
+        }
         let ret = match &f.ret {
+            Some(_) if main_sig_fixed => self.solver.t.tuple(vec![]),
             Some(r) => self.resolve(&scope, r),
             // No return type is `()`, and `()` is the empty tuple.
             None => self.solver.t.tuple(vec![]),
         };
         let throws = match &f.throws {
+            Some(_) if main_sig_fixed => self.solver.t.never(),
             Some(t) => self.resolve(&scope, t),
             None => self.solver.t.never(),
         };

@@ -41,7 +41,7 @@ pub enum DispatchError {
     Ambiguous { method: String, protocols: Vec<String> },
     /// `S ∧ ¬⋁targetᵢ` is inhabited: some values have no impl, and `uncovered`
     /// names exactly which. A nominal system cannot say this.
-    NoImpl { protocol: String, uncovered: TyId },
+    NoImpl { protocol: String, method: String, uncovered: TyId },
     /// `fn make() -> T` — nothing to dispatch on without an expected type.
     NoReceiver(String),
 }
@@ -138,6 +138,7 @@ fn hkt_resolve(
     let Some(head) = nominal_head(env, receiver) else {
         return Err(DispatchError::NoImpl {
             protocol: name,
+            method: method.to_string(),
             uncovered: receiver,
         });
     };
@@ -147,7 +148,7 @@ fn hkt_resolve(
         .find(|(_, i)| i.target_head.as_deref() == Some(head.as_str()))
         .map(|(id, _)| id);
     let Some(impl_id) = impl_id else {
-        return Err(DispatchError::NoImpl { protocol: name, uncovered: receiver });
+        return Err(DispatchError::NoImpl { protocol: name, method: method.to_string(), uncovered: receiver });
     };
 
     // Instantiate the method's generics from the receiver: match its first parameter
@@ -208,7 +209,7 @@ fn applicable(
 
     let name = env.protocols()[protocol.0].name.clone();
     if hits.is_empty() {
-        return Err(DispatchError::NoImpl { protocol: name, uncovered: receiver });
+        return Err(DispatchError::NoImpl { protocol: name, method: method.to_string(), uncovered: receiver });
     }
 
     // Coverage. The residual is a type, so the diagnostic names exactly the values
@@ -217,7 +218,7 @@ fn applicable(
     let covered = env.solver.t.union_all(&targets);
     let uncovered = env.solver.t.diff(receiver, covered);
     if !env.solver.is_empty(uncovered) {
-        return Err(DispatchError::NoImpl { protocol: name, uncovered });
+        return Err(DispatchError::NoImpl { protocol: name, method: method.to_string(), uncovered });
     }
 
     let hits = most_specific(env, hits);

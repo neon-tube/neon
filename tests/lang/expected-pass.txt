@@ -76,8 +76,11 @@ control/nested_loops.neon
 control/while_break_continue.neon
 control/while_condition_false_never_runs.neon
 control/while_loop.neon
+errors/bare_throwing_call_fails.neon
+errors/catch_internal_match.neon
 errors/main_implicitly_throws_error.neon
 errors/main_throws_clause_is_fixed.neon
+errors/main_throws_error_restated_fails.neon
 errors/throw_and_catch.neon
 errors/throw_from_catch.neon
 errors/try_assert_panics.neon
@@ -89,6 +92,7 @@ errors/try_soften_orelse.neon
 errors/try_soften_to_null.neon
 errors/uncaught_at_top_level.neon
 functions/declaration.neon
+functions/dot_call_rejected.neon
 functions/generic_identity.neon
 functions/higher_order.neon
 functions/mutual_recursion.neon
@@ -96,6 +100,7 @@ functions/named_function_as_value.neon
 functions/optional_params_are_records.neon
 functions/pipe_operator.neon
 functions/record_arg_duplicate_field.neon
+functions/record_arg_wrong_field_type.neon
 functions/unbound_generic_method_call.neon
 functions/where_clause_bound.neon
 functions/where_clause_unsatisfied.neon
@@ -136,11 +141,13 @@ operators/precedence_ladder.neon
 operators/shift.neon
 operators/short_circuit.neon
 protocols/ambiguity_resolved_by_qualification.neon
+protocols/ambiguous_call.neon
 protocols/declare_and_impl.neon
 protocols/dispatch_on_receiver.neon
 protocols/generic_impl.neon
 protocols/impl_missing_method.neon
 protocols/local_name_shadows_protocol_method.neon
+protocols/no_impl_for_receiver.neon
 protocols/orphan_impl_fills_a_gap.neon
 protocols/orphan_impl_may_not_steal_covered_values.neon
 protocols/protocol_with_supertrait.neon
