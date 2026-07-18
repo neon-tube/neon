@@ -27,6 +27,7 @@ pub fn check_module(env: &mut Env, m: &ast::Module) -> (TypecheckResult, Vec<Typ
         locals: vec![],
         ret: None,
         throws: None,
+        loop_breaks: vec![],
     };
     c.decls(&[], &m.decls);
     (c.result, c.errors)
@@ -40,6 +41,9 @@ struct Checker<'a> {
     locals: Vec<Vec<(String, TyId)>>,
     ret: Option<TyId>,
     throws: Option<TyId>,
+    /// Break values of the enclosing loops, innermost last. A `loop` is the union
+    /// of the values it breaks with.
+    loop_breaks: Vec<Vec<TyId>>,
 }
 
 impl Checker<'_> {
@@ -297,7 +301,7 @@ impl Checker<'_> {
                 }
             }
 
-            ExprKind::Binary { op, lhs, rhs } => self.binary(module, e, *op, lhs, rhs),
+            ExprKind::Binary { op, lhs, rhs } => self.binary(module, e, *op, lhs, rhs, expected),
 
             ExprKind::Tuple(v) => {
                 let ts: Vec<TyId> = v.iter().map(|x| self.expr(module, x, None)).collect();
@@ -359,8 +363,12 @@ impl Checker<'_> {
             }
 
             ExprKind::Break(v) => {
-                if let Some(x) = v {
-                    self.expr(module, x, None);
+                let t = match v {
+                    Some(x) => self.expr(module, x, None),
+                    None => self.env.solver.t.tuple(vec![]),
+                };
+                if let Some(breaks) = self.loop_breaks.last_mut() {
+                    breaks.push(t);
                 }
                 self.env.solver.t.never()
             }
@@ -369,12 +377,22 @@ impl Checker<'_> {
             ExprKind::While { cond, body } => {
                 let b = self.env.solver.t.bool();
                 self.expr(module, cond, Some(b));
+                self.loop_breaks.push(vec![]);
                 self.block(module, body, None);
+                self.loop_breaks.pop();
                 self.env.solver.t.tuple(vec![])
             }
             ExprKind::Loop { body } => {
+                self.loop_breaks.push(vec![]);
                 self.block(module, body, None);
-                self.env.solver.t.tuple(vec![])
+                let breaks = self.loop_breaks.pop().unwrap_or_default();
+                if breaks.is_empty() {
+                    // No `break` with a value: the loop either never ends or only
+                    // breaks bare, so it yields nothing.
+                    self.env.solver.t.never()
+                } else {
+                    self.env.solver.t.union_all(&breaks)
+                }
             }
             ExprKind::For { pat, iter, body } => {
                 let t = self.expr(module, iter, None);
@@ -474,7 +492,7 @@ impl Checker<'_> {
         self.poison()
     }
 
-    fn binary(&mut self, module: &[String], e: &Expr, op: BinOp, lhs: &Expr, rhs: &Expr) -> TyId {
+    fn binary(&mut self, module: &[String], e: &Expr, op: BinOp, lhs: &Expr, rhs: &Expr, expected: Option<TyId>) -> TyId {
         match op {
             BinOp::And | BinOp::Or => {
                 let b = self.env.solver.t.bool();
@@ -512,8 +530,16 @@ impl Checker<'_> {
                 self.env.solver.t.union(non_null, r)
             }
             BinOp::Pipe => {
-                self.expr(module, lhs, None);
-                self.expr(module, rhs, None)
+                // `a |> f(b)` is `f(a, b)`: the receiver becomes the first argument.
+                if let ExprKind::Call { callee, generics, args } = &rhs.kind {
+                    let mut piped = Vec::with_capacity(args.len() + 1);
+                    piped.push(lhs.clone());
+                    piped.extend(args.iter().cloned());
+                    return self.call(module, rhs, callee, generics, &piped, expected);
+                }
+                // `a |> f` with a bare callee applies it to the receiver.
+                let f = self.expr(module, rhs, None);
+                self.apply(module, e, "the right of `|>`", f, std::slice::from_ref(lhs))
             }
             _ => {
                 let l = self.expr(module, lhs, None);

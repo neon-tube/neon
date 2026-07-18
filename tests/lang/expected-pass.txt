@@ -61,6 +61,7 @@ control/for_list.neon
 control/if_else_value.neon
 control/if_evaluates_one_branch.neon
 control/if_statement_no_else.neon
+control/loop_break_value.neon
 control/nested_loops.neon
 control/while_break_continue.neon
 control/while_condition_false_never_runs.neon
@@ -72,6 +73,7 @@ functions/higher_order.neon
 functions/mutual_recursion.neon
 functions/named_function_as_value.neon
 functions/optional_params_are_records.neon
+functions/pipe_operator.neon
 integers/div_by_zero.neon
 integers/div_min_by_neg_one.neon
 integers/min_literal.neon
@@ -95,11 +97,15 @@ operators/int_arith.neon
 operators/orelse_chain.neon
 operators/orelse_union.neon
 operators/orelse_zero_is_not_null.neon
+operators/pipe.neon
+operators/pipe_chain.neon
+operators/pipe_orelse_precedence.neon
 operators/precedence_arith.neon
 operators/precedence_ladder.neon
 operators/shift.neon
 operators/short_circuit.neon
 protocols/ambiguity_resolved_by_qualification.neon
+protocols/declare_and_impl.neon
 protocols/dispatch_on_receiver.neon
 protocols/local_name_shadows_protocol_method.neon
 protocols/orphan_impl_fills_a_gap.neon
