@@ -575,12 +575,15 @@ fn an_interpolated_value_must_be_display() {
 // ---- comparison ----
 
 #[test]
-fn equality_is_total() {
-    // Any two values may be compared for equality; disjoint ones are just not equal.
+fn equality_needs_comparable_operands() {
     clean("fn f() -> bool { 1 == 2 }");
-    clean("fn f() -> bool { 1 == \"s\" }");
-    clean("fn f() -> bool { :ok == :err }");
-    clean("fn f(x: i64 | str, y: i64) -> bool { x == y }");
+    clean("fn f() -> bool { :ok == :err }");   // both atoms, one domain
+    clean("fn f(x: i64 | str, y: i64) -> bool { x == y }");  // overlap on i64
+    // An atom and a string share no comparison domain.
+    let e = check("fn f() -> bool { :ok == \"ok\" }");
+    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::Incomparable { .. })), "{e:?}");
+    let e = check("fn f() -> bool { 1 == \"s\" }");
+    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::Incomparable { .. })), "{e:?}");
 }
 
 #[test]

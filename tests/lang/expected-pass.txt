@@ -23,6 +23,7 @@
 # must be re-verified against that stronger meaning — expect some to come off
 # the list. Do not read this list as more than it is.
 basics/atom_equality.neon
+basics/atom_is_not_a_string.neon
 basics/atom_literals.neon
 basics/block_expression.neon
 basics/block_scope.neon

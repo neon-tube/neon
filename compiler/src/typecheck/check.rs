@@ -726,6 +726,18 @@ impl Checker<'_> {
         self.env.solver.t.data(ty).base & super::types::B_NULL != 0
     }
 
+    /// A type that is only atoms -- `:ok`, `:ok | :err`. All atoms share one
+    /// comparison domain, so two of them may be compared for equality.
+    fn is_atomic(&self, ty: TyId) -> bool {
+        let d = self.env.solver.t.data(ty);
+        d.base == 0
+            && self.env.solver.t.atomset_of(d.vars).is_empty_set()
+            && !self.env.solver.t.atomset_of(d.atoms).is_empty_set()
+            && d.records == super::bdd::FALSE
+            && d.tuples == super::bdd::FALSE
+            && d.arrows == super::bdd::FALSE
+    }
+
     /// Record that something throws `throws`. Inside a `try` it lands in the sink to
     /// be caught or propagated; from a call outside any `try` it is a bare throwing
     /// call, a compile error; from a `throw` statement outside a `try` it propagates
@@ -848,9 +860,21 @@ impl Checker<'_> {
             // Equality is total: any two values may be compared, disjoint ones are
             // simply not equal. `:ok == :err` is false, not an error, and that is
             // what makes an atom union behave like a sum type.
+            // Equality needs comparable operands: they overlap, or both are atoms
+            // (which form one comparison domain). `:ok == :err` is false, but
+            // `:ok == "ok"` compares an atom to a string, which is a mistake.
             BinOp::Eq | BinOp::Ne => {
-                self.expr(module, lhs, None);
-                self.expr(module, rhs, None);
+                let l = self.expr(module, lhs, None);
+                let r = self.expr(module, rhs, None);
+                let is_null = |e: &Expr| matches!(e.kind, ExprKind::Null);
+                if !is_null(lhs) && !is_null(rhs) && !self.env.is_error(l) && !self.env.is_error(r) {
+                    let meet = self.env.solver.t.intersect(l, r);
+                    let both_atoms = self.is_atomic(l) && self.is_atomic(r);
+                    if self.env.solver.is_empty(meet) && !both_atoms {
+                        let (a, b) = (self.show(l), self.show(r));
+                        self.error(e.span.clone(), TypeErrorKind::Incomparable { left: a, right: b });
+                    }
+                }
                 self.env.solver.t.bool()
             }
             // Ordering needs an order. `1 < 2` and `"a" < "b"` are fine; `1 < "s"`
