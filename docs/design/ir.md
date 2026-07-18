@@ -289,9 +289,9 @@ the order they help:
 - **Constant folding and propagation.** decisions.md pins the arithmetic ("a folded
   expression and the same expression evaluated at runtime agree"), so folding is a
   correctness-preserving rewrite, not a guess.
-- **Dead-code and dead-block elimination**, **simplify-CFG** (merge straight-line blocks,
-  thread branches — the checker already "threads predecessors past empty forwarding
-  blocks"; the same idea, on the IR).
+- **Dead-code and dead-block elimination**, and **simplify-CFG** (built): fold a constant
+  branch to a jump, thread empty forwarding blocks, and merge a block into its sole
+  predecessor -- blocks are renumbered contiguously on removal so ids stay indices.
 - **GVN / CSE.** Needs the effect analysis below to know a value is safe to reuse.
 - **Last-use / reuse (Perceus, FBIP)** — see the refcount section: this is not a
   post-hoc cleanup but the *insertion strategy*, and it is the single largest win for a

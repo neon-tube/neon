@@ -50,3 +50,21 @@ fn overflowing_constant_arithmetic_is_left_for_the_runtime() {
     // Folding would change behaviour if the runtime traps, so it is not folded.
     assert!(ir.contains("prim.add"), "overflow left unfolded: {ir}");
 }
+
+#[test]
+fn simplify_cfg_collapses_a_folded_if_to_one_block() {
+    // `if true { 1 } else { 2 }`: the branch folds, the dead arm and the join marshalling
+    // blocks fall away, and single-predecessor merging fuses the rest into one block.
+    let ir = optimized("fn f() -> i64 { if true { 1 } else { 2 } }");
+    assert_eq!(ir.matches("block").count(), 1, "should collapse to a single block:\n{ir}");
+    assert!(!ir.contains("jump"), "no residual forwarding:\n{ir}");
+}
+
+#[test]
+fn a_constant_branch_folds_to_a_jump() {
+    let ir = optimized("fn f() -> i64 { if true { 1 } else { 2 } }");
+    // The condition is constant, so there is no branch and the dead arm is gone.
+    assert!(!ir.contains("branch"), "constant branch folded: {ir}");
+    assert!(ir.contains("const.i64 1"), "{ir}");
+    assert!(!ir.contains("const.i64 2"), "dead arm removed: {ir}");
+}
