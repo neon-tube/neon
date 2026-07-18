@@ -78,6 +78,8 @@ pub enum TypeErrorKind {
     LambdaParamNeedsType(String),
     /// `a == b` / `a < b` where the operands share no common type.
     Incomparable { left: String, right: String },
+    /// A required (non-nullable) field the record literal did not provide.
+    MissingField(String),
     /// `impl Sub for X` without the `impl Super for X` that Sub's `where` requires.
     MissingSupertrait { sub: String, required: String, ty: String },
     /// A value-position name nothing declares. Distinct from `Unknown`, which is a
@@ -164,6 +166,9 @@ impl fmt::Display for TypeError {
                 "`{n}` has no parameter to dispatch on, and nothing here says what it \
                  should return; annotate the binding or use a turbofish"
             ),
+            TypeErrorKind::MissingField(n) => {
+                write!(f, "this record is missing the required field `{n}`")
+            }
             TypeErrorKind::Incomparable { left, right } => write!(
                 f,
                 "`{left}` and `{right}` share no common type, so they cannot be compared"

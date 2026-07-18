@@ -33,8 +33,10 @@ fn main() {
     // structural parameter — structural means shape, not lineage.
     io::println(name_only(Product { name: "Widget", price: 5, sku: "W-1" }));
 
-    // An anonymous record literal satisfies it too.
-    io::println(name_only({ name: "Carol", age: 41 }));
+    // An anonymous record literal satisfies it too. It must be exact: a fresh
+    // literal may not carry fields the parameter does not declare (excess-property
+    // check), so `{ name: "Carol" }`, not `{ name: "Carol", age: 41 }`.
+    io::println(name_only({ name: "Carol" }));
 
     // The nominal value is unchanged by having been viewed structurally.
     io::println(to_string(alice.age));

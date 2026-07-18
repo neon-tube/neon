@@ -74,6 +74,7 @@ functions/mutual_recursion.neon
 functions/named_function_as_value.neon
 functions/optional_params_are_records.neon
 functions/pipe_operator.neon
+functions/record_arg_duplicate_field.neon
 integers/div_by_zero.neon
 integers/div_min_by_neg_one.neon
 integers/min_literal.neon
@@ -134,7 +135,9 @@ types/atom_union_mixed_with_other_types.neon
 types/generic_record_covariant.neon
 types/generics_are_covariant.neon
 types/intersection_flattens.neon
+types/intersection_requires_every_operand.neon
 types/is_narrows_the_binding.neon
+types/missing_field_non_nullable_rejected.neon
 types/missing_field_satisfies_nullable_field.neon
 types/mu_type_in_arrow_parameter.neon
 types/mu_type_in_arrow_throws_parameter.neon

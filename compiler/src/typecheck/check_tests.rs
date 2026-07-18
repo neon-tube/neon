@@ -599,3 +599,31 @@ fn a_null_comparison_needs_no_common_type() {
     clean("fn f(x: i64 | null) -> bool { x == null }");
     clean("fn f(x: i64 | null) -> bool { x != null }");
 }
+
+// ---- record literal fields ----
+
+#[test]
+fn a_record_literal_rejects_an_extra_field() {
+    // Excess-property check: a fresh literal may not carry fields the target does
+    // not declare -- that is a typo, not a widening.
+    let e = check("fn g(o: { name: str }) {} fn f() { g({ name: \"x\", extra: 9 }); }");
+    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::NoField { .. })), "{e:?}");
+}
+
+#[test]
+fn a_record_literal_may_omit_a_nullable_field() {
+    // The optional-params rule: a missing nullable field defaults, so it is fine.
+    clean("fn g(o: { a: i64, b: i64 | null }) {} fn f() { g({ a: 1 }); }");
+}
+
+#[test]
+fn a_record_literal_may_not_omit_a_required_field() {
+    let e = check("fn g(o: { a: i64, b: i64 }) {} fn f() { g({ a: 1 }); }");
+    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::MissingField(_))), "{e:?}");
+}
+
+#[test]
+fn a_record_literal_checks_field_types() {
+    let e = check("fn g(o: { a: i64 }) {} fn f() { g({ a: \"s\" }); }");
+    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::Mismatch { .. })), "{e:?}");
+}

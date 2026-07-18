@@ -427,7 +427,13 @@ impl Checker<'_> {
 
             // Not yet: each needs something that does not exist. A guess here is
             // exactly the fallback this design has no room for.
-            ExprKind::Index { .. } | ExprKind::RecordLit { .. } | ExprKind::Try { .. } => {
+            ExprKind::RecordLit { path, fields, spread } => {
+                self.record_lit(module, e, path, fields, spread, expected)
+            }
+
+            // Not yet: each needs something that does not exist. A guess here is
+            // exactly the fallback this design has no room for.
+            ExprKind::Index { .. } | ExprKind::Try { .. } => {
                 expected.unwrap_or_else(|| self.poison())
             }
         }
@@ -476,6 +482,100 @@ impl Checker<'_> {
         let arrow = self.env.solver.t.arrow(param_tys, never, ret);
         self.result.set_lambda(e.id, arrow);
         arrow
+    }
+
+    fn record_lit(
+        &mut self,
+        module: &[String],
+        e: &Expr,
+        path: &Option<Vec<String>>,
+        fields: &[ast::FieldInit],
+        spread: &Option<Box<Expr>>,
+        expected: Option<TyId>,
+    ) -> TyId {
+        // A named literal's fields must match a declared record, and generic
+        // arguments must be inferred from them -- not built yet. The expected type
+        // carries it for now, unchecked.
+        if path.is_some() {
+            for f in fields {
+                self.expr(module, &f.value, None);
+            }
+            if let Some(s) = spread {
+                self.expr(module, s, None);
+            }
+            return expected.unwrap_or_else(|| self.poison());
+        }
+
+        // An anonymous record. A fresh literal is checked exactly against the type
+        // it is written for: excess fields the target does not declare are an error
+        // (a typo, not a widening), while a missing nullable field is fine. A record
+        // held in a variable still flows by width subtyping -- this excess check is
+        // TypeScript's, and it is why a literal differs from a value here.
+        let target_fields = expected.and_then(|exp| self.record_fields(exp));
+
+        let mut seen: Vec<String> = Vec::new();
+        let mut field_tys: Vec<(super::types::NameId, TyId)> = Vec::new();
+        for f in fields {
+            if seen.contains(&f.name) {
+                self.error(f.span.clone(), TypeErrorKind::DuplicateField(f.name.clone()));
+            }
+            seen.push(f.name.clone());
+
+            let want = target_fields.as_ref().and_then(|fs| {
+                fs.iter().find(|(n, _)| *n == f.name).map(|(_, t)| *t)
+            });
+            if target_fields.as_ref().is_some_and(|fs| !fs.iter().any(|(n, _)| *n == f.name)) {
+                let on = self.show(expected.expect("target present"));
+                self.error(f.span.clone(), TypeErrorKind::NoField { field: f.name.clone(), on });
+            }
+
+            let t = self.expr(module, &f.value, want);
+            let label = self.env.solver.t.name(&f.name);
+            field_tys.push((label, t));
+        }
+        if let Some(s) = spread {
+            self.expr(module, s, None);
+        }
+
+        // Checked directly against the target: a missing field is fine only if it is
+        // nullable, and the literal then *is* the target type. Without a target the
+        // literal's own structural type flows up.
+        if let (Some(tf), Some(exp)) = (target_fields, expected) {
+            if spread.is_none() {
+                for (name, fty) in &tf {
+                    if !seen.contains(name) && !self.is_nullable(*fty) {
+                        self.error(e.span.clone(), TypeErrorKind::MissingField(name.clone()));
+                    }
+                }
+            }
+            return exp;
+        }
+        self.env.solver.t.struct_ty(field_tys)
+    }
+
+    fn is_nullable(&self, ty: TyId) -> bool {
+        self.env.solver.t.data(ty).base & super::types::B_NULL != 0
+    }
+
+    /// The declared fields of a record type -- the user-written ones, dropping the
+    /// reserved `#nominal` and `#0`, `#1` generic-argument slots. `None` when `ty`
+    /// is not a single record atom.
+    fn record_fields(&self, ty: TyId) -> Option<Vec<(String, TyId)>> {
+        let t = &self.env.solver.t;
+        let d = t.data(ty);
+        match t.rec_bdd.paths(d.records).as_slice() {
+            [(pos, neg)] if neg.is_empty() && pos.len() == 1 => {
+                let atom = &t.rec_atoms[pos[0] as usize];
+                Some(
+                    atom.fields
+                        .iter()
+                        .map(|&(l, ft)| (t.name_str(l).to_string(), ft))
+                        .filter(|(n, _)| !n.starts_with('#'))
+                        .collect(),
+                )
+            }
+            _ => None,
+        }
     }
 
     fn path(&mut self, module: &[String], e: &Expr, p: &[String]) -> TyId {
