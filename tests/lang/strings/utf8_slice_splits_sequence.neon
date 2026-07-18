@@ -23,34 +23,34 @@ fn main() {
     size(s);
 
     // Slices on a character boundary keep characters whole.
-    io::println(string::slice(s, 0, 1) orelse "?");
-    io::println(string::slice(s, 0, 3) orelse "?");
-    io::println(string::slice(s, 1, 3) orelse "?");
-    io::println(string::slice(s, 3, 6) orelse "?");
+    io::println(try? string::slice(s, 0, 1) orelse "?");
+    io::println(try? string::slice(s, 0, 3) orelse "?");
+    io::println(try? string::slice(s, 1, 3) orelse "?");
+    io::println(try? string::slice(s, 3, 6) orelse "?");
 
     // A boundary inside é: 2 bytes out, not 2 characters, and not an error.
-    size(string::slice(s, 0, 2) orelse "");
-    size(string::slice(s, 2, 6) orelse "");
+    size(try? string::slice(s, 0, 2) orelse "");
+    size(try? string::slice(s, 2, 6) orelse "");
 
     // The split loses nothing: the halves rejoin to the original, byte for byte.
-    let left = string::slice(s, 0, 2) orelse "";
-    let right = string::slice(s, 2, 6) orelse "";
+    let left = try? string::slice(s, 0, 2) orelse "";
+    let right = try? string::slice(s, 2, 6) orelse "";
     size(string::concat(left, right));
     yesno(string::concat(left, right) == s);
 
     // char_at is a byte index too, so index 1 yields é's lead byte alone: one
     // byte, an incomplete sequence — not the character é, which is 2 bytes.
-    size(string::char_at(s, 0) orelse "");
-    size(string::char_at(s, 1) orelse "");
-    io::println(string::char_at(s, 0) orelse "?");
-    io::println(string::char_at(s, 3) orelse "?");
+    size(try? string::char_at(s, 0) orelse "");
+    size(try? string::char_at(s, 1) orelse "");
+    io::println(try? string::char_at(s, 0) orelse "?");
+    io::println(try? string::char_at(s, 3) orelse "?");
 
     // Out of range is the one thing that IS null — an absence, not a failure.
     // A non-boundary is in range, so it is never null.
-    io::println(string::slice(s, 0, 99) orelse "OUT OF RANGE");
-    io::println(string::slice(s, -1, 2) orelse "OUT OF RANGE");
-    io::println(string::char_at(s, 6) orelse "OUT OF RANGE");
+    io::println(try? string::slice(s, 0, 99) orelse "OUT OF RANGE");
+    io::println(try? string::slice(s, -1, 2) orelse "OUT OF RANGE");
+    io::println(try? string::char_at(s, 6) orelse "OUT OF RANGE");
 
     // An empty slice at any in-range offset, boundary or not, is zero bytes.
-    size(string::slice(s, 2, 2) orelse "?");
+    size(try? string::slice(s, 2, 2) orelse "?");
 }

@@ -173,7 +173,9 @@ strings/interpolation_literal_braces.neon
 strings/interpolation_record_literal_in_hole.neon
 strings/interpolation_unterminated_fails.neon
 strings/literals_and_escapes.neon
+strings/utf8_find_is_byte_offset.neon
 strings/utf8_len_is_bytes.neon
+strings/utf8_slice_splits_sequence.neon
 types/alias_is_transparent.neon
 types/any_is_the_only_erasure.neon
 types/any_needs_a_cast_to_read.neon
