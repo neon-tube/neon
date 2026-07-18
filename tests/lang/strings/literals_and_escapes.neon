@@ -5,7 +5,7 @@
 use std::io;
 use std::string;
 
-fn size(s: str) { io::println(to_string(string::len(s))); }
+fn size(s: str) { io::println(to_string(string::byte_len(s))); }
 
 fn main() {
     io::println("plain");

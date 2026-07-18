@@ -145,9 +145,13 @@ records/union_typed_field.neon
 records/unit_record.neon
 records/value_and_heap_records_same_semantics.neon
 records/value_record_through_any.neon
+strings/interpolation_basic.neon
 strings/interpolation_display.neon
+strings/interpolation_literal_braces.neon
 strings/interpolation_record_literal_in_hole.neon
 strings/interpolation_unterminated_fails.neon
+strings/literals_and_escapes.neon
+strings/utf8_len_is_bytes.neon
 types/alias_is_transparent.neon
 types/any_is_the_only_erasure.neon
 types/any_needs_a_cast_to_read.neon

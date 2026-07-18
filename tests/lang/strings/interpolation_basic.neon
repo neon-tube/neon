@@ -48,5 +48,5 @@ fn main() {
 
     // The result is an ordinary str.
     let msg = "n=#{n}";
-    io::println(to_string(string::len(msg)));
+    io::println(to_string(string::byte_len(msg)));
 }

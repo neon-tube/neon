@@ -26,7 +26,7 @@ fn main() {
     // The offset round-trips through slice.
     let s = "héllo";
     let i = string::find(s, "llo") orelse -1;
-    io::println(string::slice(s, i, string::len(s)) orelse "?");
+    io::println(string::slice(s, i, string::byte_len(s)) orelse "?");
     io::println(string::slice(s, 0, i) orelse "?");
 
     // A multi-byte needle matches whole; its lead byte alone is not a match for

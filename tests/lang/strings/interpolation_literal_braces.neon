@@ -35,8 +35,8 @@ fn main() {
 
     // Byte lengths: a literal brace is one source character and one byte, not
     // two. `\#{n}` is four bytes — the backslash is the escape, not content.
-    io::println(to_string(string::len("{")));
-    io::println(to_string(string::len("{}")));
-    io::println(to_string(string::len("{ \"json\": true }")));
-    io::println(to_string(string::len("\#{n}")));
+    io::println(to_string(string::byte_len("{")));
+    io::println(to_string(string::byte_len("{}")));
+    io::println(to_string(string::byte_len("{ \"json\": true }")));
+    io::println(to_string(string::byte_len("\#{n}")));
 }

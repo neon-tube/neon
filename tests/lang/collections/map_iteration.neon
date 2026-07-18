@@ -25,7 +25,7 @@ fn main() {
                 let (k, v) = entry;
                 count = count + 1;
                 sum = sum + v;
-                key_bytes = key_bytes + string::len(k);
+                key_bytes = key_bytes + string::byte_len(k);
                 // Every key the iterator hands back is really in the map, with
                 // the value it handed back.
                 if (try? map::get(m, k) orelse -1) != v {
