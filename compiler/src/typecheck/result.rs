@@ -27,6 +27,11 @@ impl TypecheckResult {
         self.expr_types.get(&e).copied()
     }
 
+    /// Every expression's type. The IR walks these to assign a representation to each.
+    pub fn types(&self) -> impl Iterator<Item = (ExprId, TyId)> + '_ {
+        self.expr_types.iter().map(|(&e, &t)| (e, t))
+    }
+
     pub fn call(&self, e: ExprId) -> Option<&Resolution> {
         self.resolved_calls.get(&e)
     }

@@ -4,6 +4,7 @@ pub mod ast;
 pub mod diagnostic;
 pub mod expand;
 pub mod format;
+pub mod ir;
 pub mod lexer;
 pub mod ops;
 pub mod parser;
