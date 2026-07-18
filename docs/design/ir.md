@@ -248,9 +248,16 @@ generic never instantiated is simply never emitted.
 ## Refcount insertion
 
 A backend-independent pass inserts `Retain`/`Release` so every counted value's count is
-balanced: a value is retained when it is stored or captured, released when a binding
-leaves scope, and the last release runs the header's `drop`. **This is complete — no
-leaks — because the language is immutable.** A reference cycle needs mutation or a
+balanced. It is **last-use-driven (Perceus-style)**, not naive-insert-then-elide: the
+pass computes each value's last use and, where a value is *consumed* at its last use,
+**moves** it (hands over the existing reference) rather than emitting a retain/release
+pair. Two analyses ride on this. **Reuse (FBIP):** when a value has `rc == 1` at its last
+use and a new value of the same shape is being built, its memory is rewritten in place —
+which is what turns `list::set(xs, i, v)` into an O(1) write when `xs` is unshared,
+immutable semantics at mutable speed. **Escape analysis:** a value that never escapes its
+creating scope is stack-allocated, with no header and no count at all. What remains after
+those — genuinely shared values — gets ordinary counts, and **that is complete: no leaks,
+because the language is immutable.** A reference cycle needs mutation or a
 value-level fixpoint to close the loop, and Neon has neither, so every value is a finite
 DAG; the count always reaches zero. A recursive *type* (a `mu` list) does not change
 this: its *values* are still acyclic. `is_cycle_root` concerns the *representation* of a
@@ -276,11 +283,12 @@ the order they help:
   thread branches — the checker already "threads predecessors past empty forwarding
   blocks"; the same idea, on the IR).
 - **GVN / CSE.** Needs the effect analysis below to know a value is safe to reuse.
-- **Refcount optimisation**, run after insertion: cancel a `Retain` immediately followed
-  by a `Release`, hoist/sink counts out of hot paths, and turn a copy of an object with
-  `rc == 1` into an in-place mutation. This is the single largest win for a refcounted
-  language and is the reason refcount *insertion* is its own pass with an optimiser after
-  it.
+- **Last-use / reuse (Perceus, FBIP)** — see the refcount section: this is not a
+  post-hoc cleanup but the *insertion strategy*, and it is the single largest win for a
+  refcounted immutable language.
+- **Escape analysis** — a value that never escapes its creating scope is stack-allocated,
+  with no header and no refcount traffic at all. With inline aggregates that is a large
+  class of values.
 
 First cut runs a minimal always-on set (fold, DCE, the obvious refcount-pair cancellation)
 and grows. The point now is that the *substrate* — SSA + a pass manager — is in place, so a
@@ -290,15 +298,30 @@ pass is a self-contained addition rather than a rewrite.
 
 CSE, DCE and reordering must know what is safe to move or drop, which means knowing which
 calls have effects. This is **not** purity in the type system — the decision to keep
-purity out of signatures stands. It is an invisible, inferred, IR-level analysis:
+purity out of signatures stands. It is an invisible, inferred, IR-level analysis, and it
+is *small*, because the category that dominates effect systems — reads and writes of
+mutable memory — **does not exist** in an immutable language. What remains is two
+independent flags:
 
-- Each native is tagged with its effect — `neon_i64_add` is `pure`, `neon_io_println` is
-  `io`, a throwing native carries `throw`. The tag can ride the annotation system
-  (`@native("...") @pure`) or a small runtime table.
+- **`io`** — talks to the world: output (`neon_io_println`, write, send) *and*
+  nondeterministic input (clock, random, env, file read). `io`s are ordered among
+  themselves, never eliminated, and never shared by CSE (a second read returns a
+  different value).
+- **`throw`** — may return an error rather than a value; a control effect. Never deleted
+  (the error is observable), never hoisted above an `io`. Non-termination folds in here
+  as "may not return normally."
+
+`pure` is neither flag: a deterministic, terminating function of its inputs, free to CSE,
+DCE, reorder, hoist and duplicate. So the whole effect of a call is `{ may_throw, does_io
+}`, two bits.
+
+- Each native is tagged (`neon_i64_add` = pure; `neon_io_println` = io; a throwing native
+  carries throw), riding the `@native` annotation or a small table.
 - A Neon function's effect is the join of its body's — inferred, transitively, never
   written by the user.
-- DCE may delete a dead value only if it is `pure`; an `io` or a `throw` is preserved
-  even when its result is unused. CSE may share only `pure` computations.
+- DCE deletes a dead call only if it is `pure`; CSE shares only `pure` computations. (One
+  policy call: a pure-but-possibly-non-terminating call is treated as terminating for
+  DCE, as C does; a `may_diverge` bit would make that strict, and is not worth it in v1.)
 
 No surface syntax, no signature change, no monad. Codegen simply knows what it may touch.
 
