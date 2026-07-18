@@ -202,20 +202,6 @@ fn emit_block(out: &mut String, types: &TypeTable, f: &Func, b: &Block) {
 fn emit_inst(out: &mut String, types: &TypeTable, f: &Func, inst: &crate::ir::ssa::Inst) {
     match &inst.op {
         Op::MakeList(elems) => emit_make_list(out, types, f, inst.result, elems),
-        // Reading out of a heap record hands the caller its own reference. Without the
-        // retain, `let n = node.next` followed by releasing `node` frees the child the
-        // parent owned, and the next use is a dangling read.
-        Op::Field { base, .. } if types.is_boxed(f.value_repr(*base)) => {
-            if let Some(r) = inst.result {
-                let rhs = op_rhs(types, f, inst.result, &inst.op);
-                let _ = writeln!(out, "{} = {rhs};", var(r));
-                let mut parts = Vec::new();
-                rc_parts(types, "neon_retain", f.value_repr(r), &var(r), &mut parts);
-                if !parts.is_empty() {
-                    let _ = writeln!(out, "{};", parts.join(", "));
-                }
-            }
-        }
         // A recursive record is heap-allocated, which is two statements: claim the memory,
         // then move the built value in. `neon_alloc` prepends the header and returns it,
         // and the wrapper carries that header first, so the pointer needs no adjusting.
