@@ -80,11 +80,46 @@ fn match_repr(template: &Repr, concrete: &Repr, subst: &mut std::collections::Ha
         (Repr::Tuple(a), Repr::Tuple(b)) | (Repr::Union(a), Repr::Union(b)) => {
             a.iter().zip(b).for_each(|(x, y)| match_repr(x, y, subst));
         }
+        // A nullable parameter (`T | null`) accepts a non-null argument: match the
+        // variable in the non-null half against the concrete argument.
+        (Repr::Nullable(a), c) => match_repr(a, c, subst),
+        (Repr::Union(ts), c) => {
+            for t in ts {
+                if matches!(t, Repr::Var(_)) {
+                    match_repr(t, c, subst);
+                }
+            }
+        }
         (Repr::Closure { params: ap, ret: ar }, Repr::Closure { params: bp, ret: br }) => {
             ap.iter().zip(bp).for_each(|(x, y)| match_repr(x, y, subst));
             match_repr(ar, br, subst);
         }
         _ => {}
+    }
+}
+
+/// A repr for a turbofish type argument, read from its syntax. Only the head is needed
+/// for a generic instance (mangling and bound-dispatch resolution), so a nominal's
+/// fields are left empty -- which is why `describe[X](null)` still finds `X`.
+fn repr_from_typespec(spec: &ast::TypeSpec) -> Repr {
+    match &spec.kind {
+        ast::TypeSpecKind::Null => Repr::Null,
+        ast::TypeSpecKind::Named { path, args } => {
+            let name = path.last().map(String::as_str).unwrap_or("");
+            match name {
+                "i64" => Repr::I64,
+                "f64" => Repr::F64,
+                "str" => Repr::Str,
+                "bool" => Repr::Bool,
+                "List" => Repr::List(Box::new(args.first().map_or(Repr::Any, repr_from_typespec))),
+                "Map" => Repr::Map(
+                    Box::new(args.first().map_or(Repr::Any, repr_from_typespec)),
+                    Box::new(args.get(1).map_or(Repr::Any, repr_from_typespec)),
+                ),
+                other => Repr::Record { name: Some(other.to_string()), fields: vec![] },
+            }
+        }
+        _ => Repr::Any,
     }
 }
 
@@ -500,6 +535,10 @@ struct Lower<'a> {
     subst: std::collections::HashMap<String, Repr>,
     /// Generic instances discovered at call sites, to be lowered in turn.
     instances: Vec<InstanceJob>,
+    /// While non-zero, a call is lowered without consulting its recorded resolution.
+    /// String interpolation records a `to_string` dispatch on the *interpolated
+    /// expression's* id, so lowering that expression's own value must ignore it.
+    suppress_dispatch: usize,
 }
 
 impl<'a> Lower<'a> {
@@ -533,6 +572,7 @@ impl<'a> Lower<'a> {
             pending: vec![],
             subst,
             instances: vec![],
+            suppress_dispatch: 0,
         }
     }
 }
@@ -666,7 +706,9 @@ impl Lower<'_> {
                 self.b.emit(Op::Prim(un_prim(*op), vec![r]), repr, ty)
             }
             ExprKind::Binary { op, lhs, rhs } => self.lower_binary(*op, lhs, rhs, repr, ty),
-            ExprKind::Call { callee, args, .. } => self.lower_call(e.id, callee, args, repr, ty),
+            ExprKind::Call { callee, generics, args } => {
+                self.lower_call(e.id, callee, generics, args, repr, ty)
+            }
             ExprKind::If { cond, then, else_ } => self.lower_if(cond, then, else_.as_deref(), repr, ty),
             ExprKind::Match { scrutinee, arms } => self.lower_match(scrutinee, arms, repr, ty),
             ExprKind::Loop { body } => self.lower_loop(body, repr, ty),
@@ -798,21 +840,23 @@ impl Lower<'_> {
             let piece = match part {
                 ast::StrPart::Text(s) => self.b.emit(Op::ConstStr(s.clone()), Repr::Str, ty),
                 ast::StrPart::Interp(e) => {
+                    // Lower the hole's value without dispatching (its id carries the
+                    // `to_string` resolution, not the value's own call), then apply that
+                    // recorded Display dispatch to convert it to a string.
+                    self.suppress_dispatch += 1;
                     let v = self.lower_expr(e);
-                    let vr = self.b.value_repr(v).clone();
-                    match to_string_symbol(&vr) {
-                        Some(sym) => self.b.emit(Op::Native { symbol: sym, args: vec![v] }, Repr::Str, ty),
-                        // A str hole is already a string.
-                        None if matches!(vr, Repr::Str) => v,
-                        // A nominal hole dispatches to its Display impl's `to_string`.
-                        None => match &vr {
-                            Repr::Record { name: Some(n), .. } => self.b.emit(
-                                Op::Call { func: mangle_impl("Display", n, "to_string"), args: vec![v] },
-                                Repr::Str,
-                                ty,
-                            ),
-                            _ => return self.unhandled_note("string interpolation of a value type", repr, ty),
-                        },
+                    self.suppress_dispatch -= 1;
+                    match self.result.call(e.id).cloned() {
+                        Some(res) => self.lower_dispatch(&res, "to_string", vec![v], Repr::Str, ty),
+                        None => {
+                            let vr = self.b.value_repr(v).clone();
+                            match to_string_symbol(&vr) {
+                                Some(sym) => {
+                                    self.b.emit(Op::Native { symbol: sym, args: vec![v] }, Repr::Str, ty)
+                                }
+                                None => v,
+                            }
+                        }
                     }
                 }
             };
@@ -969,19 +1013,25 @@ impl Lower<'_> {
         };
         let mut arg_vs = vec![self.lower_expr(lhs)];
         arg_vs.extend(args.iter().map(|a| self.lower_expr(a)));
-        self.lower_call_vals(rhs.id, callee, arg_vs, repr, ty)
+        // A pipe target's own turbofish, if any.
+        let generics: &[ast::TypeSpec] = match &rhs.kind {
+            ExprKind::Call { generics, .. } => generics,
+            _ => &[],
+        };
+        self.lower_call_vals(rhs.id, callee, generics, arg_vs, repr, ty)
     }
 
     fn lower_call(
         &mut self,
         id: crate::ast::ExprId,
         callee: &Expr,
+        generics: &[ast::TypeSpec],
         args: &[Expr],
         repr: Repr,
         ty: TyId,
     ) -> Value {
         let arg_vs: Vec<Value> = args.iter().map(|a| self.lower_expr(a)).collect();
-        self.lower_call_vals(id, callee, arg_vs, repr, ty)
+        self.lower_call_vals(id, callee, generics, arg_vs, repr, ty)
     }
 
     /// Lower a call whose arguments are already lowered (shared by `f(..)` and pipe).
@@ -989,13 +1039,23 @@ impl Lower<'_> {
         &mut self,
         id: crate::ast::ExprId,
         callee: &Expr,
+        generics: &[ast::TypeSpec],
         arg_vs: Vec<Value>,
         repr: Repr,
         ty: TyId,
     ) -> Value {
-        // A dispatched call: the checker already chose the impl.
-        if let Some(res) = self.result.call(id) {
-            return self.lower_dispatch(res, callee, arg_vs, repr, ty);
+        // A dispatched call: the checker already chose the impl. Suppressed while
+        // lowering the value of an interpolated expression (whose id carries the
+        // interpolation's own `to_string` resolution, not this call's).
+        if self.suppress_dispatch == 0 {
+            if let Some(res) = self.result.call(id) {
+                let res = res.clone();
+                let method = match &callee.kind {
+                    ExprKind::Path(p) => p.last().cloned().unwrap_or_default(),
+                    _ => String::new(),
+                };
+                return self.lower_dispatch(&res, &method, arg_vs, repr, ty);
+            }
         }
 
         // A call through a local of arrow type is a closure call.
@@ -1010,24 +1070,31 @@ impl Lower<'_> {
                 let throws = sig.throws;
                 let native = sig.native.clone();
                 let is_generic = !sig.generics.is_empty();
+                let sgenerics = sig.generics.clone();
                 let (smodule, sname) = (sig.module.clone(), sig.name.clone());
                 let param_tys: Vec<TyId> = sig.params.iter().map(|(_, t)| *t).collect();
                 let ret_ty = sig.ret;
 
                 if is_generic && native.is_none() {
-                    // Specialise: build the substitution from the argument reprs (and the
-                    // return, for a type variable that only appears there), then call and
-                    // queue the concrete instance.
+                    // Specialise. A turbofish pins the type arguments outright; otherwise
+                    // infer them by matching the parameter (and return) reprs against the
+                    // concrete argument reprs.
                     let mut subst = std::collections::HashMap::new();
-                    for (i, &av) in arg_vs.iter().enumerate() {
-                        if let Some(&pty) = param_tys.get(i) {
-                            let template = repr_of(&self.env.solver.t, pty);
-                            let concrete = self.b.value_repr(av).clone();
-                            match_repr(&template, &concrete, &mut subst);
+                    if !generics.is_empty() {
+                        for (gname, spec) in sgenerics.iter().zip(generics) {
+                            subst.insert(gname.clone(), repr_from_typespec(spec));
                         }
+                    } else {
+                        for (i, &av) in arg_vs.iter().enumerate() {
+                            if let Some(&pty) = param_tys.get(i) {
+                                let template = repr_of(&self.env.solver.t, pty);
+                                let concrete = self.b.value_repr(av).clone();
+                                match_repr(&template, &concrete, &mut subst);
+                            }
+                        }
+                        let ret_template = repr_of(&self.env.solver.t, ret_ty);
+                        match_repr(&ret_template, &repr, &mut subst);
                     }
-                    let ret_template = repr_of(&self.env.solver.t, ret_ty);
-                    match_repr(&ret_template, &repr, &mut subst);
                     let mangled = mangle_instance(&mangle(&smodule, &sname), &subst);
                     self.instances.push(InstanceJob {
                         mangled: mangled.clone(),
@@ -1047,7 +1114,10 @@ impl Lower<'_> {
                 return self.wrap_throwing(result, throws, repr, ty);
             }
         }
-        self.unhandled_note("call target", repr, ty)
+        // The callee is an expression producing a closure -- `f()(x)`, `(lambda)(x)` --
+        // so evaluate it and call through it.
+        let callee_v = self.lower_expr(callee);
+        self.b.emit(Op::CallClosure { callee: callee_v, args: arg_vs }, repr, ty)
     }
 
     /// Lower a call the checker resolved by protocol dispatch. A `Direct` to a native
@@ -1056,16 +1126,13 @@ impl Lower<'_> {
     fn lower_dispatch(
         &mut self,
         res: &crate::typecheck::dispatch::Resolution,
-        callee: &Expr,
+        method: &str,
         args: Vec<Value>,
         repr: Repr,
         ty: TyId,
     ) -> Value {
         use crate::typecheck::dispatch::Resolution;
-        let method = match &callee.kind {
-            ExprKind::Path(p) => p.last().cloned().unwrap_or_default(),
-            _ => return self.unhandled_note("dispatch callee", repr, ty),
-        };
+        let method = method.to_string();
         match res {
             Resolution::Direct(impl_id) => {
                 let impl_def = &self.env.impls()[impl_id.0];

@@ -97,4 +97,5 @@ fn lower_the_corpus_and_report_gaps() {
         eprintln!("  {n:>5}  {what}");
     }
     assert!(files > 100, "expected to lower most of the corpus, got {files}");
+    assert_eq!(clean, files, "every checkable corpus program should lower fully");
 }
