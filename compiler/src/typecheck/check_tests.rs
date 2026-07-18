@@ -652,6 +652,28 @@ fn a_record_literal_may_not_omit_a_required_field() {
 }
 
 #[test]
+fn a_nominal_record_satisfies_a_structural_opts_type() {
+    // A `| null` field is optional, so a nominal record that omits it -- and carries
+    // an extra field besides -- still satisfies the structural type.
+    clean(
+        "record Preset { timeout: i64, label: str }
+         fn show(o: { timeout: i64 | null, retries: i64 | null }) {}
+         fn f() { show(Preset { timeout: 5, label: \"x\" }); }",
+    );
+}
+
+#[test]
+fn a_negated_field_is_not_optional() {
+    // `!i64` admits null once resolved, but it was not written as `| null`, so the
+    // field stays required: a record that omits it does not satisfy the type.
+    mismatch(
+        "record NoX { y: i64 }
+         fn want(o: { x: !i64 }) {}
+         fn f() { want(NoX { y: 1 }); }",
+    );
+}
+
+#[test]
 fn a_record_literal_checks_field_types() {
     let e = check("fn g(o: { a: i64 }) {} fn f() { g({ a: \"s\" }); }");
     assert!(e.iter().any(|k| matches!(k, TypeErrorKind::FieldTypeMismatch { .. })), "{e:?}");

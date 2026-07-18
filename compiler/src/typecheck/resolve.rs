@@ -47,6 +47,17 @@ impl Scope {
     }
 }
 
+/// Whether a struct field's annotation opts into null *by writing it* -- `T | null`
+/// or a bare `null`. This reads the syntax, not the resolved type: `!i64` also admits
+/// null but is a required field, and only the AST can still tell the two apart.
+fn spec_admits_null(spec: &TypeSpec) -> bool {
+    match &spec.kind {
+        TypeSpecKind::Null => true,
+        TypeSpecKind::Union(xs) => xs.iter().any(spec_admits_null),
+        _ => false,
+    }
+}
+
 pub fn resolve(env: &mut Env, scope: &Scope, spec: &TypeSpec) -> TyId {
     match &spec.kind {
         TypeSpecKind::Any => env.solver.t.any(),
@@ -99,12 +110,23 @@ pub fn resolve(env: &mut Env, scope: &Scope, spec: &TypeSpec) -> TyId {
             for f in fields {
                 let t = resolve(env, scope, &f.ty);
                 ts.push(t);
+                // A field written with an explicit `| null` is optional: a record that
+                // omits it satisfies the type, the omission reading as null. The intent
+                // is only visible here in the syntax -- once resolved, `i64 | null` and
+                // `!i64` both admit null, but only the former opted in -- so the "may be
+                // absent" marker is added now, from the shape of the annotation.
+                let field = if spec_admits_null(&f.ty) {
+                    let u = env.solver.t.undef();
+                    env.solver.t.union(t, u)
+                } else {
+                    t
+                };
                 let l = env.solver.t.name(&f.name);
                 if labels.iter().any(|(seen, _)| *seen == l) {
                     env.error(f.span.clone(), TypeErrorKind::DuplicateField(f.name.clone()));
                     return env.error_ty();
                 }
-                labels.push((l, t));
+                labels.push((l, field));
             }
             or_poison(env, &ts, |e| e.solver.t.struct_ty(labels.clone()))
         }
