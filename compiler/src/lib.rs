@@ -1,6 +1,7 @@
 //! The Neon compiler: source -> C11.
 
 pub mod ast;
+pub mod backend;
 pub mod diagnostic;
 pub mod expand;
 pub mod format;

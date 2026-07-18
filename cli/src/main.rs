@@ -75,6 +75,13 @@ enum Command {
         #[arg(long, value_enum, default_value_t = IrStage::Final)]
         stage: IrStage,
     },
+    /// Compile a source file to an executable.
+    Compile {
+        file: OsString,
+        /// The output executable (defaults to the source name without its extension).
+        #[arg(short)]
+        output: Option<OsString>,
+    },
     /// Print the resolved sysroot.
     Sysroot,
 }
@@ -87,6 +94,7 @@ fn main() -> Result<()> {
         Command::Check { file, lib } => cmd::check::run(&file, lib),
         Command::Fmt { file, write, check } => cmd::fmt::run(&file, write, check),
         Command::Ir { file, stage } => cmd::ir::run(&file, stage.into()),
+        Command::Compile { file, output } => cmd::compile::run(&file, output),
         Command::Sysroot => cmd::sysroot::run(),
     }
 }
