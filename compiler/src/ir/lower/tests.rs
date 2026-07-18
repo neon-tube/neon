@@ -179,3 +179,23 @@ fn a_while_loop_tests_its_condition_in_the_header() {
     assert!(ir.contains("prim.lt"), "{ir}");
     assert!(ir.contains("branch"), "{ir}");
 }
+
+#[test]
+fn short_circuit_and_orelse_and_pipe() {
+    let ir = lower(
+        "fn both(a: bool, b: bool) -> bool { a and b }
+         fn def(v: i64 | null) -> i64 { v orelse 0 }
+         fn dbl(x: i64) -> i64 { x + x }
+         fn piped(x: i64) -> i64 { x |> dbl() }",
+    );
+    // `and` short-circuits through blocks; `orelse` null-tests; pipe becomes a call.
+    assert!(ir.contains("branch"), "and short-circuit: {ir}");
+    assert!(ir.contains("is_null"), "orelse: {ir}");
+    assert!(ir.contains("call @dbl(%0)"), "pipe: {ir}");
+}
+
+#[test]
+fn a_cast_reinterprets() {
+    let ir = lower("newtype Meter = f64\nfn m(x: f64) -> Meter { x as Meter }");
+    assert!(ir.contains("cast %0"), "{ir}");
+}

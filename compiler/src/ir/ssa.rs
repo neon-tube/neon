@@ -117,6 +117,9 @@ pub enum Op {
     MakeTuple(Vec<Value>),
     /// Read a tuple element.
     Elem { base: Value, index: usize },
+    /// `x as T` — a reinterpretation to a narrower or wrapping type: identity at
+    /// runtime for a narrowing or a newtype, an extraction out of a union.
+    Cast(Value),
     /// Whether a nullable value is null. Codegen: a null-pointer or tag test.
     IsNull(Value),
     /// Whether a value is the named variant of a union (a nominal member, or a

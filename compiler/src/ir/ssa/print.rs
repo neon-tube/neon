@@ -74,6 +74,7 @@ fn op(o: &Op) -> String {
         Op::Field { base, field } => format!("field {}.{field}", val(*base)),
         Op::MakeTuple(vs) => format!("tuple ({})", vals(vs)),
         Op::Elem { base, index } => format!("elem {}.{index}", val(*base)),
+        Op::Cast(v) => format!("cast {}", val(*v)),
         Op::IsNull(v) => format!("is_null {}", val(*v)),
         Op::IsVariant { value, variant } => format!("is_variant {} {variant}", val(*value)),
         Op::MakeList(vs) => format!("list [{}]", vals(vs)),

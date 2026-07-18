@@ -263,6 +263,14 @@ impl Lower<'_> {
                 let i = self.lower_expr(index);
                 self.b.emit(Op::Index { base: b, index: i }, repr, ty)
             }
+            ExprKind::Is { lhs, ty: spec } => {
+                let v = self.lower_expr(lhs);
+                self.type_test(v, spec)
+            }
+            ExprKind::As { lhs, .. } => {
+                let v = self.lower_expr(lhs);
+                self.b.emit(Op::Cast(v), repr, ty)
+            }
             ExprKind::Return(v) => {
                 let rv = v.as_ref().map(|e| self.lower_expr(e));
                 self.b.terminate(Term::Ret(rv));
@@ -338,14 +346,100 @@ impl Lower<'_> {
     }
 
     fn lower_binary(&mut self, op: BinOp, lhs: &Expr, rhs: &Expr, repr: Repr, ty: TyId) -> Value {
-        match bin_prim(op) {
-            Some(p) => {
-                let l = self.lower_expr(lhs);
-                let r = self.lower_expr(rhs);
-                self.b.emit(Op::Prim(p, vec![l, r]), repr, ty)
-            }
-            None => self.unhandled_note("binary op (orelse/pipe/short-circuit)", repr, ty),
+        if let Some(p) = bin_prim(op) {
+            let l = self.lower_expr(lhs);
+            let r = self.lower_expr(rhs);
+            return self.b.emit(Op::Prim(p, vec![l, r]), repr, ty);
         }
+        match op {
+            BinOp::And | BinOp::Or => self.lower_and_or(op, lhs, rhs, ty),
+            BinOp::Orelse => self.lower_orelse(lhs, rhs, repr, ty),
+            BinOp::Pipe => self.lower_pipe(lhs, rhs, repr, ty),
+            _ => self.unhandled_note("binary op", repr, ty),
+        }
+    }
+
+    /// `and`/`or` short-circuit: the right operand is only evaluated when the left does
+    /// not already decide the result.
+    fn lower_and_or(&mut self, op: BinOp, lhs: &Expr, rhs: &Expr, ty: TyId) -> Value {
+        let l = self.lower_expr(lhs);
+        let rhs_b = self.b.new_block();
+        let short_b = self.b.new_block();
+        let join = self.b.new_block();
+        let jp = self.b.block_param(join, Repr::Bool, ty);
+
+        // `and`: `l` false shorts to false, else evaluate `rhs`. `or`: `l` true shorts
+        // to true, else evaluate `rhs`.
+        let (then_tgt, else_tgt, short_const) = match op {
+            BinOp::And => (rhs_b, short_b, false),
+            BinOp::Or => (short_b, rhs_b, true),
+            _ => unreachable!(),
+        };
+        self.b.terminate(Term::Branch {
+            cond: l,
+            then: Target { to: then_tgt, args: vec![] },
+            els: Target { to: else_tgt, args: vec![] },
+        });
+
+        self.b.switch_to(rhs_b);
+        self.terminated = false;
+        let r = self.lower_expr(rhs);
+        if !self.terminated {
+            self.b.terminate(Term::Jump(Target { to: join, args: vec![r] }));
+        }
+
+        self.b.switch_to(short_b);
+        self.terminated = false;
+        let sv = self.b.emit(Op::ConstBool(short_const), Repr::Bool, ty);
+        self.b.terminate(Term::Jump(Target { to: join, args: vec![sv] }));
+
+        self.b.switch_to(join);
+        self.terminated = false;
+        jp
+    }
+
+    /// `a orelse b` — `b` when `a` is null, else `a`'s non-null value.
+    fn lower_orelse(&mut self, lhs: &Expr, rhs: &Expr, repr: Repr, ty: TyId) -> Value {
+        let l = self.lower_expr(lhs);
+        let lty = self.b.value_ty(l);
+        let isnull = self.b.emit(Op::IsNull(l), Repr::Bool, lty);
+        let none_b = self.b.new_block();
+        let some_b = self.b.new_block();
+        let join = self.b.new_block();
+        let jp = self.b.block_param(join, repr.clone(), ty);
+
+        self.b.terminate(Term::Branch {
+            cond: isnull,
+            then: Target { to: none_b, args: vec![] },
+            els: Target { to: some_b, args: vec![] },
+        });
+
+        self.b.switch_to(none_b);
+        self.terminated = false;
+        let r = self.lower_expr(rhs);
+        if !self.terminated {
+            self.b.terminate(Term::Jump(Target { to: join, args: vec![r] }));
+        }
+
+        self.b.switch_to(some_b);
+        self.terminated = false;
+        // The non-null value, reinterpreted to the non-null repr.
+        let unwrapped = self.b.emit(Op::Cast(l), repr, ty);
+        self.b.terminate(Term::Jump(Target { to: join, args: vec![unwrapped] }));
+
+        self.b.switch_to(join);
+        self.terminated = false;
+        jp
+    }
+
+    /// `a |> f(b)` is `f(a, b)` — the pipe threads its left side as the first argument.
+    fn lower_pipe(&mut self, lhs: &Expr, rhs: &Expr, repr: Repr, ty: TyId) -> Value {
+        let ExprKind::Call { callee, args, .. } = &rhs.kind else {
+            return self.unhandled_note("pipe rhs", repr, ty);
+        };
+        let mut arg_vs = vec![self.lower_expr(lhs)];
+        arg_vs.extend(args.iter().map(|a| self.lower_expr(a)));
+        self.lower_call_vals(rhs.id, callee, arg_vs, repr, ty)
     }
 
     fn lower_call(
@@ -357,7 +451,18 @@ impl Lower<'_> {
         ty: TyId,
     ) -> Value {
         let arg_vs: Vec<Value> = args.iter().map(|a| self.lower_expr(a)).collect();
+        self.lower_call_vals(id, callee, arg_vs, repr, ty)
+    }
 
+    /// Lower a call whose arguments are already lowered (shared by `f(..)` and pipe).
+    fn lower_call_vals(
+        &mut self,
+        id: crate::ast::ExprId,
+        callee: &Expr,
+        arg_vs: Vec<Value>,
+        repr: Repr,
+        ty: TyId,
+    ) -> Value {
         // A dispatched call: the checker already chose the impl.
         if let Some(res) = self.result.call(id) {
             return self.lower_dispatch(res, callee, arg_vs, repr, ty);
