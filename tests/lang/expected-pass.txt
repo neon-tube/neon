@@ -72,6 +72,7 @@ control/if_missing_else_in_void_body.neon
 control/if_missing_else_is_an_error.neon
 control/if_statement_no_else.neon
 control/loop_break_value.neon
+control/loop_break_value_union.neon
 control/nested_loops.neon
 control/while_break_continue.neon
 control/while_condition_false_never_runs.neon
@@ -93,6 +94,7 @@ errors/try_soften_to_null.neon
 errors/uncaught_at_top_level.neon
 functions/declaration.neon
 functions/dot_call_rejected.neon
+functions/explicit_type_arguments.neon
 functions/generic_identity.neon
 functions/higher_order.neon
 functions/mutual_recursion.neon

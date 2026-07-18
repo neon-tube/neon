@@ -30,6 +30,7 @@ pub fn check_module(env: &mut Env, m: &ast::Module) -> (TypecheckResult, Vec<Typ
         loop_breaks: vec![],
         throw_sinks: vec![],
         bounds: vec![],
+        rigids: vec![],
     };
     c.decls(&[], &m.decls);
     (c.result, c.errors)
@@ -52,6 +53,9 @@ struct Checker<'a> {
     /// The current function's `where T: P` bounds, as (param name, protocol). A
     /// method call on a rigid `T` is only allowed to resolve through one of these.
     bounds: Vec<(String, super::env::ProtocolId)>,
+    /// The current function's generic names, so a type written in its body -- `as T`,
+    /// `is T`, `let x: T` -- resolves `T` as the rigid variable it introduced.
+    rigids: Vec<String>,
 }
 
 impl Checker<'_> {
@@ -134,6 +138,7 @@ impl Checker<'_> {
         let mut generics: Vec<String> = outer.to_vec();
         generics.extend(f.generics.iter().cloned());
         scope = scope.with_rigid(self.env, &generics);
+        self.rigids = generics;
 
         self.locals.push(vec![]);
         for p in &f.params {
@@ -223,10 +228,17 @@ impl Checker<'_> {
         }
     }
 
+    /// A scope for resolving a type written in the current function's body. It
+    /// carries the function's generics, so `as T` and `let x: T` see `T`.
+    fn type_scope(&mut self, module: &[String]) -> Scope {
+        let rigids = self.rigids.clone();
+        Scope::new(module).with_rigid(self.env, &rigids)
+    }
+
     fn stmt(&mut self, module: &[String], s: &ast::Stmt) {
         match &s.kind {
             ast::StmtKind::Let { pat, ty, value } => {
-                let scope = Scope::new(module);
+                let scope = self.type_scope(module);
                 let want = ty.as_ref().map(|t| self.env.resolve(&scope, t));
                 // A binding consumes a value. With an annotation, `if_expr` already
                 // rejects a bare `if` against it; without one, there is no expected
@@ -384,14 +396,14 @@ impl Checker<'_> {
 
             ExprKind::Is { lhs, ty } => {
                 self.expr(module, lhs, None);
-                let scope = Scope::new(module);
+                let scope = self.type_scope(module);
                 self.env.resolve(&scope, ty);
                 self.env.solver.t.bool()
             }
 
             ExprKind::As { lhs, ty } => {
                 let from = self.expr(module, lhs, None);
-                let scope = Scope::new(module);
+                let scope = self.type_scope(module);
                 let to = self.env.resolve(&scope, ty);
                 // A cast narrows -- it cannot reach a type the value could never be --
                 // except across a newtype boundary, where it wraps or unwraps: a
@@ -425,9 +437,12 @@ impl Checker<'_> {
             }
 
             ExprKind::Break(v) => {
+                // A bare `break` exits with no value, which reads as `null`: a loop
+                // that can break bare yields `T | null`, and one that only breaks bare
+                // yields `null`.
                 let t = match v {
                     Some(x) => self.expr(module, x, None),
-                    None => self.env.solver.t.tuple(vec![]),
+                    None => self.env.solver.t.null(),
                 };
                 if let Some(breaks) = self.loop_breaks.last_mut() {
                     breaks.push(t);
@@ -550,7 +565,7 @@ impl Checker<'_> {
         body: &Expr,
         expected: Option<TyId>,
     ) -> TyId {
-        let scope = Scope::new(module);
+        let scope = self.type_scope(module);
         let want = expected.and_then(|t| self.env.solver.t.as_arrow(t));
 
         self.locals.push(vec![]);
@@ -602,7 +617,7 @@ impl Checker<'_> {
                 if self.env.is_generic(key) {
                     return self.generic_record_lit(module, e, key, fields, spread);
                 }
-                let scope = Scope::new(module);
+                let scope = self.type_scope(module);
                 let spec = ast::TypeSpec {
                     kind: ast::TypeSpecKind::Named { path: p.clone(), args: vec![] },
                     span: e.span.clone(),
@@ -1096,7 +1111,7 @@ impl Checker<'_> {
     /// What an arm tests for, or `None` when it is a plain binding (which admits
     /// everything, and so is not a test at all).
     fn arm_test(&mut self, module: &[String], arm: &ast::MatchArm, subject: TyId) -> Option<narrow::Test> {
-        let scope = Scope::new(module);
+        let scope = self.type_scope(module);
         match &arm.pat.kind {
             ast::PatternKind::Wildcard | ast::PatternKind::Bind(_) => {
                 Some(narrow::Test::exact(subject))
@@ -1311,7 +1326,7 @@ impl Checker<'_> {
             sig.generics.iter().map(|g| self.env.solver.t.name(g)).collect();
 
         if !generics.is_empty() {
-            let scope = Scope::new(module);
+            let scope = self.type_scope(module);
             for (g, spec) in sig.generics.iter().zip(generics) {
                 let ty = self.env.resolve(&scope, spec);
                 let n = self.env.solver.t.name(g);
