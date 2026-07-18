@@ -2,7 +2,7 @@
 // — so it iterates through `map::keys`, which returns a `List[K]` you walk with a
 // `for` loop, looking each value up as you go.
 //
-// Map iteration order is UNSPECIFIED — it follows the trie, not insertion. So this
+// Map iteration order is UNSPECIFIED — it follows the hash table, not insertion. So this
 // golden asserts only order-independent facts: the number of entries, the sum of
 // the values, and a per-key lookup. A test that printed entries in iteration order
 // would be pinning an implementation detail, not the language.

@@ -41,8 +41,12 @@ when capture-free, so those allocate nothing.
 marks **immortal** objects. **String literals are immortal `.rodata`**: a static header
 whose immortal flag makes retain/release no-ops and needs no copy. Other `str` is a flat
 refcounted byte buffer; slices are `{buf, offset, len}` views sharing it. `List` stores
-elements inline (size from the witness) plus the witness for bulk retain/drop. `Map` is
-an immutable **HAMT**.
+elements inline (size from the witness) plus the witness for bulk retain/drop. `Map` is a
+**flat open-addressing (Swiss-table) hash map** with copy-on-write: an update mutates in
+place when the map is unshared (`rc == 1`, via FBIP) and copies only when shared. A HAMT
+would exist to avoid that O(n) copy on a persistent update, but reuse already handles the
+common unshared case, and the flat table wins decisively on cache behaviour; HAMT is
+deferred behind the same `map::` surface for the rare heavily-shared-and-updated workload.
 
 **Errors.** A throwing call returns a **tagged result** `{ tag, union{ ok, err } }`; the
 caller checks the tag. An uncaught error reaching `main` prints `to_string` to **stderr**
@@ -185,7 +189,9 @@ slices as `{buf, offset, len}` views sharing it; a **string literal is an immort
 `List` stores elements **inline** and carries the element's **value-witness** (`{ size,
 retain, release, drop }`), so grow/clone/drop-all work over elements the runtime cannot
 see the shape of, while codegen reads and writes slots directly by their known `Repr`.
-`Map` is an immutable **HAMT**.
+`Map` is a **flat Swiss-table hash map**, copy-on-write: mutated in place when unshared
+(FBIP), copied only when shared — the persistent-sharing job a HAMT would do is already
+covered by reuse for the common case, and the flat layout is far kinder to the cache.
 
 **3. Closures.** A closure value is `{ void (*fn)(void* env, ...); neon_header* env }` —
 a function pointer and a boxed environment holding the captures. A native that takes a
