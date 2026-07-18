@@ -5,6 +5,68 @@ and holds at 198/198 on the corpus. This document pins the phase after it: an
 intermediate representation, and the first backend behind a seam a second could also
 sit behind.
 
+## Decisions (settled)
+
+The prose below predates these and is superseded by them where they disagree.
+
+**Backend & CLI.** C, emitting C **source text**, compiled by shelling out to `cc`
+configured through env vars and/or `neon.toml`. One `.c` for the whole program. Verbs:
+`neon compile` → executable; `neon codegen` → emit C; `neon ir [--stage]` → emit IR
+text; `neon build` → build a `neon.toml` project to an executable.
+
+**Memory.** Reference counting, **non-atomic, 64-bit** counts (single-threaded v1,
+x86-64). **No leaks, and no cycle collector — because immutability makes every value
+acyclic.** A cycle needs mutation or a value-level fixpoint to tie the knot; Neon has
+neither, so a recursive *type* still only ever holds finite, acyclic *values*, and
+refcounting is complete — the last release always runs. Allocation goes through a
+swappable runtime shim (`neon_alloc`/`neon_free`), selected by the existing
+`--allocator` / `neon.toml` mechanism. `atexit` runs teardown; globals release there.
+
+**Representations.** **Inline aggregates** — records, tuples and containers store
+elements *by value*, not boxed (`List[Point]` has `Point`-sized slots). Generic
+containers carry a per-element **value-witness** — `{ size, retain, release, drop }`
+generated for each monomorphic element type — so they can copy and drop elements whose
+shape they cannot see. Unions are inline `{tag, payload}` when they fit; nullable-of-
+pointer is a null pointer, no tag. `bool` is one byte. Atoms are tagged by a **64-bit
+hash of the name**, globally consistent with no intern table (collisions astronomically
+unlikely, checkable within a program). Closures are `{ fn_ptr, env }` with a **null env**
+when capture-free, so those allocate nothing.
+
+**Runtime ABI (frozen contract).** Object header `{ u64 rc; u32 flags; void(*drop)(void*) }`
+— `drop` per-object so the runtime frees what it holds with no switch; a `flags` bit
+marks **immortal** objects. **String literals are immortal `.rodata`**: a static header
+whose immortal flag makes retain/release no-ops and needs no copy. Other `str` is a flat
+refcounted byte buffer; slices are `{buf, offset, len}` views sharing it. `List` stores
+elements inline (size from the witness) plus the witness for bulk retain/drop. `Map` is
+an immutable **HAMT**.
+
+**Errors.** A throwing call returns a **tagged result** `{ tag, union{ ok, err } }`; the
+caller checks the tag. An uncaught error reaching `main` prints `to_string` to **stderr**
+and exits with the chosen panic code.
+
+**Codegen & IR.** Full **monomorphisation** (no generic boxing), instances mangled from
+`(fn, concrete types)`, termination trusted to `TooDeep`. **SSA with block arguments**;
+loops carry state as header block args. IR values typed by **both** `Repr` and `TyId`.
+**Value-level** instructions (`GetField`/`MakeAggregate`); the backend lowers aggregates
+to memory. Primitive ops (`i64` add, compare) are **IR instructions**, not native calls.
+`const` is **compile-time folded**. The C `main` initialises the runtime and packs
+`argc`/`argv` (though `fn main()` takes none in v1).
+
+**Optimisation.** An always-on set (fold, DCE, simplify-CFG, refcount-pair cancellation)
+run at **maximum aggression by default** — no `-O` to opt into. Inline wherever able.
+Debug info (`#line`) only under a debug flag.
+
+**Textual form.** A **custom, LLVM-ish-but-deliberately-distinct** syntax (not mistakable
+for LLVM). **Printer only, never a parser.** Stage selectable via a `neon ir` argument.
+
+**Testing.** Corpus `.stdout` files become end-to-end execution oracles; IR dumps guard
+passes.
+
+**Open.** *Effects.* Aggressive-always optimisation needs to know which calls are pure.
+Proposed: an inferred, **IR-level** effect analysis — natives tagged `pure`/`io`/`throw`
+(via `@native`), Neon functions inferred transitively, never in a signature; DCE keeps
+`io`/`throw`, CSE shares only `pure`. Awaiting confirmation.
+
 ## Why an IR at all, and the one lesson from the graveyard
 
 The previous compiler lowered the typed AST straight to output, re-deriving on the way
@@ -66,22 +128,27 @@ boundary, so lowering meets no `any` it did not expect. The test for this pass i
 mechanical — every `TyId` reachable from a corpus program maps to a `Repr` with no gap.
 That test *is* the guarantee erasure cannot return.
 
-### Word-or-box
+### Inline aggregates and the value-witness
 
-One rule keeps representations simple and containers generic: **a value is either an
-unboxed scalar that fits in a 64-bit word, or a `Box` — a pointer to a heap object.**
+Aggregates are stored **by value**, not boxed. A record lives inline in whatever holds
+it; a `List[Point]` has `Point`-sized slots, not a slot of pointers-to-`Point`. Scalars
+(`i64`, `f64`, `bool`, atom tag, pointer) are their natural width; a union is inline
+`{tag, payload}` when it fits, and nullable-of-pointer collapses to a nullable pointer
+with no tag.
 
-- `i64`, `f64`, `bool`, `null`, an atom's tag, a pointer: unboxed, one word.
-- A record, a tuple, a union too wide for a word: `Box` — heap-allocated, one word at
-  the use site (the pointer).
-- `i64 | null` and other small unions: a two-word `Union` when they fit inline, a `Box`
-  when they do not. (Nullable-of-`Box` is special-cased to a nullable pointer — `null`
-  is the null pointer, no tag — but that is an optimisation, not part of the contract.)
+The cost of "by value" is that a generic container cannot see the shape of what it
+holds, yet still has to copy and drop it. That is what the **value-witness** is for: for
+each monomorphic element type, the compiler generates a static `{ size, retain, release,
+drop }`, and `neon_list_new` takes it. Only *bulk* runtime operations (grow, clone,
+drop-all) go through the witness; element *access* is emitted by codegen, which knows the
+type statically and reads the slot directly. The witness is one static table per element
+*type*, resolved at compile time — not a per-*value* vtable, which is the thing the
+graveyard's erasure produced and this design refuses.
 
-Storing aggregates behind a `Box` in the first cut costs an allocation per record in a
-list. Inline aggregate storage (a `List[Point]` with `Point`-sized slots) is a known
-optimisation and is **explicitly deferred** — correctness first, then `rc == 1` reuse
-and inline slots.
+This is more machinery than boxing every aggregate, and it is the deliberate trade: no
+per-element allocation, at the cost of generating and threading witnesses. Word-or-box
+(box every aggregate, one pointer per slot, no witness) is the simpler fallback if inline
+storage proves painful before it proves fast.
 
 ## The shared contract: the runtime ABI
 
@@ -90,28 +157,31 @@ about. Every backend links the same `runtime/` (a C library today), so everythin
 **crosses the runtime boundary** has a layout `rt.h` dictates and all backends honour.
 Everything that does not is a backend's private choice.
 
-**1. The object header.** Every heap object — every `Box`, every `str`, `List`, `Map`,
-every closure environment — begins with the same header:
+**1. The object header.** Every heap object — every aggregate, every `str`, `List`,
+`Map`, every closure environment — begins with the same header:
 
 ```c
-typedef struct { uint64_t rc; void (*drop)(void*); } neon_header;
+typedef struct { uint64_t rc; uint32_t flags; void (*drop)(void*); } neon_header;
 ```
 
-`rc` is the reference count; `drop` is how to free *this* object (it releases the
-object's own refcounted fields, then frees). `neon_retain(void*)` and
-`neon_release(void*)` operate on the header alone and are the only refcount primitives.
-A backend emits calls to these two symbols; it never open-codes the count. Putting
-`drop` *in the header* rather than in a type-indexed table is what lets the runtime free
+`rc` is the (non-atomic, 64-bit) reference count; `flags` carries the **immortal** bit
+for `.rodata` objects like string literals; `drop` is how to free *this* object (it
+releases the object's own counted fields, then frees). `neon_retain(void*)` and
+`neon_release(void*)` operate on the header alone, are no-ops on an immortal object, and
+are the only refcount primitives. A backend emits calls to these two symbols; it never
+open-codes the count. Putting `drop` *in the header* rather than in a type-indexed table
+is what lets the runtime free
 an object it holds (a list element, a map value) without a compile-time switch — the
 header carries its own destructor.
 
 **2. `str`, `List`, `Map`.** Their layouts live in `rt.h` and the `neon_*` natives read
-and write them directly, so they are ABI. A `List` is a growable array of **one-word
-slots** plus a flag for whether those slots are boxed (so `drop` on the list releases
-each element) — that single bit is all the runtime needs to manage elements
-generically, and it is set by codegen, which always knows the element's `Repr`. (The
-richer "value-witness" version — an ops pointer per element type instead of a bit — is
-the door left open for inline aggregates later; the bit is enough for word-or-box.)
+and write them directly, so they are ABI. `str` is a flat refcounted byte buffer, with
+slices as `{buf, offset, len}` views sharing it; a **string literal is an immortal
+`.rodata` object** whose header flag makes retain/release no-ops and needs no copy.
+`List` stores elements **inline** and carries the element's **value-witness** (`{ size,
+retain, release, drop }`), so grow/clone/drop-all work over elements the runtime cannot
+see the shape of, while codegen reads and writes slots directly by their known `Repr`.
+`Map` is an immutable **HAMT**.
 
 **3. Closures.** A closure value is `{ void (*fn)(void* env, ...); neon_header* env }` —
 a function pointer and a boxed environment holding the captures. A native that takes a
@@ -177,14 +247,17 @@ generic never instantiated is simply never emitted.
 
 ## Refcount insertion
 
-A backend-independent pass inserts `Retain`/`Release` so every boxed value's count is
+A backend-independent pass inserts `Retain`/`Release` so every counted value's count is
 balanced: a value is retained when it is stored or captured, released when a binding
-leaves scope, and the last release runs the header's `drop`. Because the language is
-immutable and values are trees, there are no reference cycles to collect *except* through
-`mu`-recursive types, which is why the checker already computes `is_cycle_root` — that
-flag tells this pass where a cycle collector (or a conservative leak, in the first cut)
-is needed. Getting the retain/release discipline right here, once, keeps every backend
-from reimplementing it.
+leaves scope, and the last release runs the header's `drop`. **This is complete — no
+leaks — because the language is immutable.** A reference cycle needs mutation or a
+value-level fixpoint to close the loop, and Neon has neither, so every value is a finite
+DAG; the count always reaches zero. A recursive *type* (a `mu` list) does not change
+this: its *values* are still acyclic. `is_cycle_root` concerns the *representation* of a
+recursive type — where its layout needs a pointer at the back-edge to stay finite — not a
+runtime cycle. There is no collector to write, now or later. Getting the retain/release
+discipline right here, once, keeps every backend from reimplementing it, and immortal
+objects (string literals) short-circuit both operations via their header flag.
 
 ## Optimisation
 
@@ -264,14 +337,16 @@ deferred is **volume**, not architecture:
 - **A second backend.** The seam exists; building LLVM/Cranelift before C runs a program
   end-to-end is speculative. The value delivered now is the *boundary*, not a choice of
   targets.
-- **Most optimisation passes.** The pass manager is there; the first cut runs a minimal
-  always-on set and each further pass is an addition, not a redesign.
-- **Inline aggregate storage** and `rc == 1` in-place reuse. Word-or-box is correct; these
-  are the throughput follow-ups the git history is already reaching for.
-- **The text → IR parser.** The printer comes first; the parser arrives with the first
-  pass that wants to be tested on hand-written IR.
-- **A cycle collector.** Only `mu`-recursive values can cycle; `is_cycle_root` marks them,
-  and the first cut may leak them loudly rather than collect them.
+- **Optimisation passes beyond the always-on set**, and `rc == 1` in-place reuse. The
+  pass manager is there and runs aggressively; each further pass is an addition, not a
+  redesign.
+- **The text → IR parser.** The printer only, forever (a decision, not a deferral) — but
+  the *first* pass may still want a scratch parser for isolated tests; if so it is a test
+  aid, not a supported input.
+- **A threading story.** Single-threaded v1 with non-atomic counts; a `shared` bit in the
+  header flags is the room left for atomic counts later without an ABI break.
+
+There is **no cycle collector, ever** — immutability makes it unnecessary, not deferred.
 
 The order of work: the representation map (`Repr`, with the no-gaps test) → the SSA IR and
 lowering for the scalar/first-order subset, with its printer → `emit_c` for that subset → a
