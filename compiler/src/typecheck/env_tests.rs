@@ -827,7 +827,7 @@ fn an_explicit_binding_beats_a_glob() {
     // Two modules both export `f`; the explicit import wins over the glob.
     let a = parse("@native(\"af\") fn f() -> i64");
     let b = parse("@native(\"bf\") fn f() -> str");
-    let user = parse("use a::*\nuse b::f\nfn main() -> str { f() }");
+    let user = parse("use a::*\nuse b::f\nfn top() -> str { f() }");
     let mut env = Env::build_with(
         &[(vec!["a".into()], &a), (vec!["b".into()], &b), (vec![], &user)],
         super::env::Unit::RootApplication,

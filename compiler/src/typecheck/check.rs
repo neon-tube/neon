@@ -91,7 +91,13 @@ impl Checker<'_> {
     fn decls(&mut self, module: &[String], decls: &[ast::Decl]) {
         for d in decls {
             match &d.kind {
-                ast::DeclKind::Fn(f) => self.fn_body(module, f, &[]),
+                ast::DeclKind::Fn(f) => {
+                    if module.is_empty() && f.name == "main" && (f.ret.is_some() || f.throws.is_some())
+                    {
+                        self.error(d.span.clone(), TypeErrorKind::MainSignatureFixed);
+                    }
+                    self.fn_body(module, f, &[]);
+                }
                 ast::DeclKind::Impl(i) => {
                     for m in &i.methods {
                         self.fn_body(module, m, &i.generics);
@@ -142,6 +148,9 @@ impl Checker<'_> {
         };
         let throws = match &f.throws {
             Some(t) => self.env.resolve(&scope, t),
+            // `main` implicitly throws `Error`, and every error record implements it,
+            // so any error propagates to it. Modelled as the top type here.
+            None if module.is_empty() && f.name == "main" => self.env.solver.t.any(),
             None => self.env.solver.t.never(),
         };
         self.ret = Some(ret);

@@ -71,6 +71,8 @@ control/nested_loops.neon
 control/while_break_continue.neon
 control/while_condition_false_never_runs.neon
 control/while_loop.neon
+errors/main_implicitly_throws_error.neon
+errors/main_throws_clause_is_fixed.neon
 errors/throw_and_catch.neon
 errors/throw_from_catch.neon
 errors/try_assert_panics.neon
@@ -79,6 +81,7 @@ errors/try_incompatible_throws_fails.neon
 errors/try_propagates_two_frames.neon
 errors/try_soften_needs_null_handling.neon
 errors/try_soften_orelse.neon
+errors/uncaught_at_top_level.neon
 functions/declaration.neon
 functions/generic_identity.neon
 functions/higher_order.neon

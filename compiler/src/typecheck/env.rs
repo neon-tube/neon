@@ -94,6 +94,8 @@ pub enum TypeErrorKind {
     UnsatisfiedBound { ty: String, protocol: String },
     /// An impl that does not provide a method its protocol requires.
     ImplMissingMethod { protocol: String, method: String },
+    /// `main` with an explicit return type or throws clause -- both are fixed.
+    MainSignatureFixed,
     /// A value-position name nothing declares. Distinct from `Unknown`, which is a
     /// TYPE nothing declares — `unknown type println` is not a sentence.
     UnknownName(String),
@@ -196,6 +198,11 @@ impl fmt::Display for TypeError {
             TypeErrorKind::Incomparable { left, right } => write!(
                 f,
                 "`{left}` and `{right}` share no common type, so they cannot be compared"
+            ),
+            TypeErrorKind::MainSignatureFixed => write!(
+                f,
+                "`main`'s signature is fixed: it returns `()` and implicitly throws \
+                 `Error`, so it may not declare a return type or a throws clause"
             ),
             TypeErrorKind::ImplMissingMethod { protocol, method } => write!(
                 f,
