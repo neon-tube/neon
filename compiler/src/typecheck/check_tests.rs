@@ -659,3 +659,23 @@ fn a_map_index_is_keyed_and_yields_the_value() {
     // The key must match: a str-keyed map cannot be indexed by i64.
     mismatch(&format!("{COLL} fn f(m: Map[str, i64]) -> i64 {{ m[0] }}"));
 }
+
+// ---- generic record construction ----
+
+#[test]
+fn a_generic_record_infers_its_argument_from_the_fields() {
+    clean("record Box[T] { item: T }  fn f() -> Box[i64] { Box { item: 7 } }");
+    clean("record Box[T] { item: T }  fn f() { let b = Box { item: \"hi\" }; }");
+}
+
+#[test]
+fn a_generic_record_with_two_uses_of_a_variable_must_agree() {
+    clean("record Pair[T] { a: T, b: T }  fn f() { let p = Pair { a: 1, b: 2 }; }");
+    mismatch("record Pair[T] { a: T, b: T }  fn f() { let p = Pair { a: 1, b: \"x\" }; }");
+}
+
+#[test]
+fn a_generic_record_rejects_an_unknown_field() {
+    let e = check("record Box[T] { item: T }  fn f() { let b = Box { item: 1, extra: 2 }; }");
+    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::NoField { .. })), "{e:?}");
+}

@@ -580,6 +580,11 @@ impl Env {
         self.decls.get(key).is_some_and(|d| !d.generics().is_empty())
     }
 
+    /// The generic parameter names of a declared type, in order.
+    pub fn generic_names(&self, key: &str) -> Vec<String> {
+        self.decls.get(key).map(|d| d.generics().to_vec()).unwrap_or_default()
+    }
+
     pub fn resolve(&mut self, scope: &Scope, spec: &ast::TypeSpec) -> TyId {
         resolve::resolve(self, scope, spec)
     }

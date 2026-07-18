@@ -539,8 +539,11 @@ impl Checker<'_> {
         // arguments inferred from the fields, which is not built yet -- those still
         // flow the expected type unchecked.
         if let Some(p) = path {
-            let generic = self.env.lookup(module, p).is_some_and(|k| self.env.is_generic(&k));
-            if !generic {
+            let key = self.env.lookup(module, p);
+            if let Some(key) = &key {
+                if self.env.is_generic(key) {
+                    return self.generic_record_lit(module, e, key, fields, spread);
+                }
                 let scope = Scope::new(module);
                 let spec = ast::TypeSpec {
                     kind: ast::TypeSpecKind::Named { path: p.clone(), args: vec![] },
@@ -624,6 +627,80 @@ impl Checker<'_> {
                 self.error(e.span.clone(), TypeErrorKind::MissingField(name.clone()));
             }
         }
+    }
+
+    /// A named literal for a generic record: `Box { item: 1 }`. Instantiate the
+    /// record with fresh rigid variables, infer them from the field values, then
+    /// substitute -- so the literal's type is `Box[i64]`, not `Box[T]`.
+    fn generic_record_lit(
+        &mut self,
+        module: &[String],
+        e: &Expr,
+        key: &str,
+        fields: &[ast::FieldInit],
+        spread: &Option<Box<Expr>>,
+    ) -> TyId {
+        use std::collections::{HashMap, HashSet};
+        let names = self.env.generic_names(key);
+        let var_names: HashSet<_> = names.iter().map(|n| self.env.solver.t.name(n)).collect();
+        let var_args: Vec<TyId> = names
+            .iter()
+            .map(|n| {
+                let nn = self.env.solver.t.name(n);
+                self.env.solver.t.var(nn)
+            })
+            .collect();
+        let templated = self.env.instantiate(key, var_args, &e.span);
+        let tfields = self.record_fields(templated).unwrap_or_default();
+
+        // Infer the variables from the fields, remembering each field's own type.
+        let mut subst: HashMap<_, TyId> = HashMap::new();
+        let mut given: Vec<(String, TyId)> = Vec::new();
+        let mut seen: Vec<String> = Vec::new();
+        for f in fields {
+            if seen.contains(&f.name) {
+                self.error(f.span.clone(), TypeErrorKind::DuplicateField(f.name.clone()));
+            }
+            seen.push(f.name.clone());
+            let ft = self.expr(module, &f.value, None);
+            match tfields.iter().find(|(n, _)| *n == f.name) {
+                Some((_, tmpl)) => {
+                    super::generic::infer(&mut self.env.solver.t, *tmpl, ft, &var_names, &mut subst);
+                    given.push((f.name.clone(), ft));
+                }
+                None => {
+                    let on = key.rsplit("::").next().unwrap_or(key).to_string();
+                    self.error(f.span.clone(), TypeErrorKind::NoField { field: f.name.clone(), on });
+                }
+            }
+        }
+        if let Some(s) = spread {
+            self.expr(module, s, None);
+        }
+
+        // Now check each field against the resolved parameter type -- this catches a
+        // variable pinned by one field and violated by another, e.g. Pair[T] with
+        // mismatched a and b.
+        for (name, got) in &given {
+            if let Some((_, tmpl)) = tfields.iter().find(|(n, _)| n == name) {
+                let want = self.env.solver.t.substitute(*tmpl, &subst);
+                if !self.assignable(*got, want) {
+                    let (g, w) = (self.show(*got), self.show(want));
+                    self.error(e.span.clone(), TypeErrorKind::Mismatch { expected: w, found: g });
+                }
+            }
+        }
+        if spread.is_none() {
+            for (name, tmpl) in &tfields {
+                if !seen.contains(name) {
+                    let concrete = self.env.solver.t.substitute(*tmpl, &subst);
+                    if !self.is_nullable(concrete) {
+                        self.error(e.span.clone(), TypeErrorKind::MissingField(name.clone()));
+                    }
+                }
+            }
+        }
+        self.env.solver.t.substitute(templated, &subst)
     }
 
     fn record_name(&mut self, target: &[(String, TyId)]) -> String {
