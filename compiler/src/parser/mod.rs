@@ -315,8 +315,9 @@ where
         )
         .boxed();
 
-    just(Token::Protocol)
-        .ignore_then(ident())
+    annotations()
+        .then_ignore(just(Token::Protocol))
+        .then(ident())
         .then_ignore(just(Token::For))
         .then(subject)
         .then(where_clauses(ty.clone()))
@@ -326,12 +327,13 @@ where
                 .collect::<Vec<_>>()
                 .delimited_by(just(Token::LBrace), just(Token::RBrace)),
         )
-        .map(|(((name, (subject, subject_arity)), wheres), methods)| ProtocolDecl {
+        .map(|((((annotations, name), (subject, subject_arity)), wheres), methods)| ProtocolDecl {
             name,
             subject,
             subject_arity,
             wheres,
             methods,
+            annotations,
         })
         .boxed()
 }
@@ -346,9 +348,8 @@ where
 {
     // Contextual, not a keyword: `orphan` is only special immediately before
     // `impl`, so it stays usable as a name.
-    ident_named("orphan")
-        .or_not()
-        .map(|o| o.is_some())
+    annotations()
+        .then(ident_named("orphan").or_not().map(|o| o.is_some()))
         .then_ignore(just(Token::Impl))
         .then(generic_params())
         .then(path())
@@ -360,12 +361,13 @@ where
                 .collect::<Vec<_>>()
                 .delimited_by(just(Token::LBrace), just(Token::RBrace)),
         )
-        .map(|((((orphan, generics), protocol), target), methods)| ImplDecl {
+        .map(|(((((annotations, orphan), generics), protocol), target), methods)| ImplDecl {
             orphan,
             protocol,
             generics,
             target,
             methods,
+            annotations,
         })
         .boxed()
 }
@@ -468,9 +470,8 @@ fn mod_decl<'t, I>(decl: impl P<'t, I, Decl> + 't) -> impl P<'t, I, DeclKind>
 where
     I: ValueInput<'t, Token = Token, Span = Span>,
 {
-    just(Token::Internal)
-        .or_not()
-        .map(|i| i.is_some())
+    annotations()
+        .then(just(Token::Internal).or_not().map(|i| i.is_some()))
         .then_ignore(just(Token::Mod))
         .then(ident())
         .then(
@@ -478,7 +479,9 @@ where
                 .collect::<Vec<_>>()
                 .delimited_by(just(Token::LBrace), just(Token::RBrace)),
         )
-        .map(|((internal, name), decls)| DeclKind::Mod(ModDecl { name, internal, decls }))
+        .map(|(((annotations, internal), name), decls)| {
+            DeclKind::Mod(ModDecl { name, internal, decls, annotations })
+        })
         .boxed()
 }
 

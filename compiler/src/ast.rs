@@ -107,6 +107,7 @@ pub struct ProtocolDecl {
     /// Implementing this protocol obliges the type to implement each of these.
     pub wheres: Vec<WhereClause>,
     pub methods: Vec<FnDecl>,
+    pub annotations: Vec<Annotation>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -118,6 +119,7 @@ pub struct ImplDecl {
     pub generics: Vec<String>,
     pub target: TypeSpec,
     pub methods: Vec<FnDecl>,
+    pub annotations: Vec<Annotation>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -151,6 +153,7 @@ pub struct ModDecl {
     pub name: String,
     pub internal: bool,
     pub decls: Vec<Decl>,
+    pub annotations: Vec<Annotation>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

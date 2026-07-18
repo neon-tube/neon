@@ -31,6 +31,21 @@ pub fn run(file: &OsString, lib: bool) -> Result<()> {
     }
     let module = module.expect("no errors means a module");
 
+    // Annotation expansion: `@cfg` drops code the target does not want, `@doc` is pulled
+    // aside, `@native` is validated, and an unknown `@name` is an error. Seed `@cfg` with
+    // the host's OS and arch (host == target until cross-compilation exists).
+    let config = neon_compiler::expand::Config::with([
+        std::env::consts::OS.to_string(),
+        std::env::consts::ARCH.to_string(),
+    ]);
+    let (module, _meta, expand_errors) = neon_compiler::expand::expand(module, &config);
+    if !expand_errors.is_empty() {
+        for e in &expand_errors {
+            r.eprint(e.span.clone(), &e.message);
+        }
+        std::process::exit(1);
+    }
+
     let unit = if lib { Unit::Library } else { Unit::RootApplication };
 
     // The stdlib is declared alongside the program, so `use std::io` resolves.

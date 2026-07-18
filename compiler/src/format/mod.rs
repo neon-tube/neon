@@ -479,6 +479,7 @@ impl<'a> Fmt<'a> {
                 self.push(";");
             }
             DeclKind::Mod(m) => {
+                self.annotations(&m.annotations);
                 if m.internal {
                     self.push("internal ");
                 }
@@ -664,6 +665,7 @@ impl<'a> Fmt<'a> {
     }
 
     fn protocol_decl(&mut self, p: &ProtocolDecl, span: &Span) {
+        self.annotations(&p.annotations);
         self.push("protocol ");
         self.push(&p.name);
         self.push(" for ");
@@ -689,6 +691,7 @@ impl<'a> Fmt<'a> {
     }
 
     fn impl_decl(&mut self, i: &ImplDecl, span: &Span) {
+        self.annotations(&i.annotations);
         if i.orphan {
             self.push("orphan ");
         }

@@ -383,6 +383,12 @@ fn declarations_of_every_shape() {
         "@cfg(\"not(windows)\")\n@doc(\"Spawns.\")\nfn spawn(){}\n",
         "@cfg(\"not(windows)\")\n@doc(\"Spawns.\")\nfn spawn() {}\n",
     );
+    // Annotations survive on a protocol, impl and mod, not just fn and record.
+    pin(
+        "@doc(\"a\") protocol P for T { fn a(v: T) -> i64 }\n",
+        "@doc(\"a\") protocol P for T { fn a(v: T) -> i64 }\n",
+    );
+    pin("@doc(\"m\") mod inner {}\n", "@doc(\"m\") mod inner {\n}\n");
     pin(
         "opaque record Rng[T]{seed: i64}\n",
         "opaque record Rng[T] { seed: i64 }\n",
