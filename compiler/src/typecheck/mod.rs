@@ -7,6 +7,7 @@ pub mod bdd;
 pub mod check;
 pub mod dispatch;
 pub mod empty;
+pub mod generic;
 pub mod env;
 pub mod narrow;
 pub mod print;
@@ -20,6 +21,8 @@ mod check_tests;
 mod dispatch_tests;
 #[cfg(test)]
 mod env_tests;
+#[cfg(test)]
+mod generic_tests;
 #[cfg(test)]
 mod tests;
 

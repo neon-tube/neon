@@ -373,7 +373,9 @@ impl Checker<'_> {
                 self.env.solver.t.tuple(vec![])
             }
 
-            ExprKind::Call { callee, args, .. } => self.call(module, e, callee, args, expected),
+            ExprKind::Call { callee, generics, args } => {
+                self.call(module, e, callee, generics, args, expected)
+            }
 
             ExprKind::Field { base, name } => {
                 let t = self.expr(module, base, None);
@@ -601,6 +603,7 @@ impl Checker<'_> {
         module: &[String],
         e: &Expr,
         callee: &Expr,
+        generics: &[ast::TypeSpec],
         args: &[Expr],
         expected: Option<TyId>,
     ) -> TyId {
@@ -623,7 +626,7 @@ impl Checker<'_> {
         // Then a module fn, which shadows protocols.
         if let Some(sig) = self.env.fn_named(module, p).cloned() {
             self.result.set_ty(callee.id, sig.ty);
-            return self.direct_call(module, e, &sig, args);
+            return self.direct_call(module, e, &sig, generics, args, expected);
         }
 
         let arg_tys: Vec<TyId> = args.iter().map(|a| self.expr(module, a, None)).collect();
@@ -646,7 +649,15 @@ impl Checker<'_> {
         }
     }
 
-    fn direct_call(&mut self, module: &[String], e: &Expr, sig: &super::env::FnSig, args: &[Expr]) -> TyId {
+    fn direct_call(
+        &mut self,
+        module: &[String],
+        e: &Expr,
+        sig: &super::env::FnSig,
+        generics: &[ast::TypeSpec],
+        args: &[Expr],
+        expected: Option<TyId>,
+    ) -> TyId {
         if sig.params.len() != args.len() {
             self.error(
                 e.span.clone(),
@@ -657,13 +668,68 @@ impl Checker<'_> {
                 },
             );
         }
-        for (a, (_, want)) in args.iter().zip(&sig.params) {
-            self.expr(module, a, Some(*want));
+
+        // A non-generic fn: flow each parameter type into its argument as the
+        // expected type, so a lambda argument infers its parameters.
+        if sig.generics.is_empty() {
+            for (a, (_, want)) in args.iter().zip(&sig.params) {
+                self.expr(module, a, Some(*want));
+            }
+            for a in args.iter().skip(sig.params.len()) {
+                self.expr(module, a, None);
+            }
+            return sig.ret;
+        }
+
+        // A generic fn: solve its type parameters, then check under the solution.
+        let subst = self.solve_generics(module, sig, generics, args, expected);
+        for (a, (_, template)) in args.iter().zip(&sig.params) {
+            let want = self.env.solver.t.substitute(*template, &subst);
+            self.expr(module, a, Some(want));
         }
         for a in args.iter().skip(sig.params.len()) {
             self.expr(module, a, None);
         }
-        sig.ret
+        self.env.solver.t.substitute(sig.ret, &subst)
+    }
+
+    /// The substitution for a generic call's type parameters: a turbofish if
+    /// present, else inferred from the argument types and the expected result.
+    fn solve_generics(
+        &mut self,
+        module: &[String],
+        sig: &super::env::FnSig,
+        generics: &[ast::TypeSpec],
+        args: &[Expr],
+        expected: Option<TyId>,
+    ) -> std::collections::HashMap<super::types::NameId, TyId> {
+        use std::collections::{HashMap, HashSet};
+        let mut subst: HashMap<_, TyId> = HashMap::new();
+        let var_names: HashSet<_> =
+            sig.generics.iter().map(|g| self.env.solver.t.name(g)).collect();
+
+        if !generics.is_empty() {
+            let scope = Scope::new(module);
+            for (g, spec) in sig.generics.iter().zip(generics) {
+                let ty = self.env.resolve(&scope, spec);
+                let n = self.env.solver.t.name(g);
+                subst.insert(n, ty);
+            }
+            return subst;
+        }
+
+        // Top-down before bottom-up: the expected result sets a variable first, and
+        // `infer` is first-wins, so the arguments then conform to it rather than
+        // widening it. That is what lets `-> List[i64|str] { push(xs, "s") }` widen
+        // on request while a bare `push(xs, "s")` pins `T := i64` and rejects the str.
+        if let Some(exp) = expected {
+            super::generic::infer(&mut self.env.solver.t, sig.ret, exp, &var_names, &mut subst);
+        }
+        let arg_tys: Vec<TyId> = args.iter().map(|a| self.expr(module, a, None)).collect();
+        for ((_, template), &aty) in sig.params.iter().zip(&arg_tys) {
+            super::generic::infer(&mut self.env.solver.t, *template, aty, &var_names, &mut subst);
+        }
+        subst
     }
 
     /// Call a value. `callee_ty` must be an arrow; `what` names it for diagnostics.

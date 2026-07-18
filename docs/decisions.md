@@ -324,6 +324,27 @@ here after invariance and `T | null`.
 `string::to_int` stays: parsing is not stringifying, and it throws. The pair is
 asymmetric on purpose — `to_string` is total, `to_int` is partial.
 
+### Generic inference is strict: no silent widening
+
+A type variable binds to the first concrete type it meets and stays there. So
+`push(xs, "s")` with `xs: List[i64]` pins `T := i64` from the list, and the `str` is a
+mismatch — not a silent widening to `List[i64|str]`.
+
+Widening a generic *is* sound for a covariant immutable collection: the result is a new
+list and the original is untouched. It is also what Scala and Kotlin infer, and it is a
+known papercut in both — a list quietly becomes `List[Any]` and nobody asked for it.
+That silent surprise is exactly what the rest of this language is built to avoid, next
+to no fallback to `any` and no erased type.
+
+So widening is explicit. A turbofish (`push[i64|str](xs, "s")`) or the expected type
+(`-> List[i64|str] { push(xs, "s") }`) sets `T` first, and the arguments then conform to
+it. Inference is top-down before bottom-up for exactly this reason.
+
+The cost, stated plainly: it is mildly order-dependent — the first argument mentioning a
+variable anchors it — and it rejects a few programs sound in theory, like `pair(1, "s")`,
+which needs `pair[i64|str](1, "s")`. Every such rejection is a place the wide type was
+probably unintended, and the escape hatch is one turbofish away.
+
 ### Comparison operators are protocol calls
 
 `==` and `!=` desugar to `Eq::eq`; `<`, `<=`, `>`, `>=` desugar to `Ord::cmp` (which

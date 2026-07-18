@@ -7,6 +7,13 @@ pub struct NameId(pub u32);
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub struct TyId(pub u32);
 
+#[derive(Clone, Copy)]
+enum Kind {
+    Record,
+    Tuple,
+    Arrow,
+}
+
 // ---- base primitives ----
 
 pub type BaseSet = u8;
@@ -657,6 +664,112 @@ impl Types {
     pub fn diff(&mut self, a: TyId, b: TyId) -> TyId {
         let nb = self.negate(b);
         self.intersect(a, nb)
+    }
+
+    /// Replace rigid variables by their bindings, everywhere they occur.
+    ///
+    /// Distributes over union, intersection and negation, so it is correct for any
+    /// type; in practice it runs on function signatures, which are simple. `List[T]`
+    /// with `T := i64` becomes `List[i64]`; a bare `T` becomes its binding.
+    pub fn substitute(&mut self, ty: TyId, subst: &HashMap<NameId, TyId>) -> TyId {
+        if subst.is_empty() {
+            return ty;
+        }
+        let d = self.data(ty);
+        let mut acc = self.never();
+
+        if d.base != 0 {
+            let b = self.of_base(d.base);
+            acc = self.union(acc, b);
+        }
+        if !self.atomset_of(d.atoms).is_empty_set() {
+            let mut e = self.empty_data();
+            e.atoms = d.atoms;
+            let t = self.intern(e);
+            acc = self.union(acc, t);
+        }
+
+        let vars = self.atomset_of(d.vars).clone();
+        for name in &vars.names {
+            let t = subst.get(name).copied().unwrap_or_else(|| self.var(*name));
+            acc = self.union(acc, t);
+        }
+
+        acc = self.subst_kind(acc, d.records, subst, Kind::Record);
+        acc = self.subst_kind(acc, d.tuples, subst, Kind::Tuple);
+        acc = self.subst_kind(acc, d.arrows, subst, Kind::Arrow);
+        acc
+    }
+
+    fn empty_data(&mut self) -> TyData {
+        let atoms = self.atomset(AtomSet::empty());
+        let vars = self.atomset(AtomSet::empty());
+        TyData { base: 0, atoms, vars, records: bdd::FALSE, tuples: bdd::FALSE, arrows: bdd::FALSE }
+    }
+
+    fn kind_top(&mut self, kind: Kind) -> TyId {
+        let mut d = self.empty_data();
+        match kind {
+            Kind::Record => d.records = bdd::TRUE,
+            Kind::Tuple => d.tuples = bdd::TRUE,
+            Kind::Arrow => d.arrows = bdd::TRUE,
+        }
+        self.intern(d)
+    }
+
+    fn subst_kind(
+        &mut self,
+        acc: TyId,
+        bdd: BddId,
+        subst: &HashMap<NameId, TyId>,
+        kind: Kind,
+    ) -> TyId {
+        let paths = match kind {
+            Kind::Record => self.rec_bdd.paths(bdd),
+            Kind::Tuple => self.tup_bdd.paths(bdd),
+            Kind::Arrow => self.arrow_bdd.paths(bdd),
+        };
+        let mut acc = acc;
+        for (pos, neg) in paths {
+            let mut pt = self.kind_top(kind);
+            for i in pos {
+                let a = self.subst_atom(i, subst, kind);
+                pt = self.intersect(pt, a);
+            }
+            for j in neg {
+                let a = self.subst_atom(j, subst, kind);
+                pt = self.diff(pt, a);
+            }
+            acc = self.union(acc, pt);
+        }
+        acc
+    }
+
+    fn subst_atom(&mut self, idx: u32, subst: &HashMap<NameId, TyId>, kind: Kind) -> TyId {
+        match kind {
+            Kind::Record => {
+                let a = self.rec_atoms[idx as usize].clone();
+                let fields = a
+                    .fields
+                    .iter()
+                    .map(|&(l, t)| (l, self.substitute(t, subst)))
+                    .collect();
+                let rest = self.substitute(a.rest, subst);
+                self.record(RecordAtom { fields, rest })
+            }
+            Kind::Tuple => {
+                let a = self.tup_atoms[idx as usize].clone();
+                let elems = a.elems.iter().map(|&t| self.substitute(t, subst)).collect();
+                self.tuple(elems)
+            }
+            Kind::Arrow => {
+                let a = self.arrow_atoms[idx as usize].clone();
+                let params = a.params.iter().map(|&t| self.substitute(t, subst)).collect();
+                let throws = self.substitute(a.throws, subst);
+                let ret = self.substitute(a.ret, subst);
+                self.arrow(params, throws, ret)
+            }
+        }
     }
 
     pub fn union_all(&mut self, ts: &[TyId]) -> TyId {

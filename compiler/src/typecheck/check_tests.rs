@@ -482,3 +482,75 @@ fn a_module_fn_wins_over_a_protocol_method_of_the_same_name() {
          fn f(b: Buf) -> str { len(b) }",
     );
 }
+
+// ---- generic function calls ----
+
+#[test]
+fn a_generic_return_is_inferred_from_the_expected_type() {
+    clean(
+        "record List[T] {}
+         @native(\"n\") fn new[T]() -> List[T]
+         fn f() { let xs: List[i64] = new(); }",
+    );
+}
+
+#[test]
+fn a_generic_param_is_inferred_from_the_argument() {
+    clean(
+        "record List[T] {}
+         @native(\"g\") fn get[T](xs: List[T], i: i64) -> T
+         fn f(xs: List[str]) -> str { get(xs, 0) }",
+    );
+    mismatch(
+        "record List[T] {}
+         @native(\"g\") fn get[T](xs: List[T], i: i64) -> T
+         fn f(xs: List[i64]) -> str { get(xs, 0) }",
+    );
+}
+
+#[test]
+fn a_turbofish_pins_the_type_argument() {
+    clean(
+        "record List[T] {}
+         @native(\"n\") fn new[T]() -> List[T]
+         fn f() -> List[i64] { new[i64]() }",
+    );
+    mismatch(
+        "record List[T] {}
+         @native(\"n\") fn new[T]() -> List[T]
+         fn f() -> List[str] { new[i64]() }",
+    );
+}
+
+#[test]
+fn strict_inference_rejects_a_silent_widening() {
+    // `push(xs, "s")` with xs: List[i64] pins T := i64 from the list, so the str
+    // argument is a mismatch -- not a silent widening to List[i64|str].
+    mismatch(
+        "record List[T] {}
+         @native(\"p\") fn push[T](xs: List[T], v: T) -> List[T]
+         fn f(xs: List[i64]) { push(xs, \"s\"); }",
+    );
+    clean(
+        "record List[T] {}
+         @native(\"p\") fn push[T](xs: List[T], v: T) -> List[T]
+         fn f(xs: List[i64]) { push(xs, 9); }",
+    );
+}
+
+#[test]
+fn widening_a_generic_is_explicit() {
+    // The expected type sets T first, so the arguments conform to the wider list --
+    // widening on request, via the annotation.
+    clean(
+        "record List[T] {}
+         @native(\"p\") fn push[T](xs: List[T], v: T) -> List[T]
+         fn f(xs: List[i64]) -> List[i64 | str] { push(xs, \"s\") }",
+    );
+    // A turbofish does the same.
+    clean(
+        "record List[T] {}
+         @native(\"p\") fn push[T](xs: List[T], v: T) -> List[T]
+         fn f(xs: List[i64]) { push[i64 | str](xs, \"s\"); }",
+    );
+}

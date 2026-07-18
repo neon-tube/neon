@@ -884,3 +884,40 @@ fn a_defined_id_is_the_canonical_one() {
     let rebuilt = s.t.nominal(n, vec![i], vec![]);
     assert_eq!(rebuilt, a, "rebuilding the shape reaches the defined id");
 }
+
+// ---- substitution ----
+
+#[test]
+fn substitute_replaces_a_bare_variable() {
+    let mut s = s();
+    let t = s.t.name("T");
+    let v = s.t.var(t);
+    let i = s.t.i64();
+    let sub = std::collections::HashMap::from([(t, i)]);
+    assert_eq!(s.t.substitute(v, &sub), i);
+}
+
+#[test]
+fn substitute_reaches_into_a_generic_argument() {
+    let mut s = s();
+    let t = s.t.name("T");
+    let v = s.t.var(t);
+    let box_t = { let n = s.t.name("Box"); s.t.nominal(n, vec![v], vec![]) };
+    let i = s.t.i64();
+    let box_i = { let n = s.t.name("Box"); s.t.nominal(n, vec![i], vec![]) };
+    let sub = std::collections::HashMap::from([(t, i)]);
+    assert_eq!(s.t.substitute(box_t, &sub), box_i, "Box[T] with T:=i64 is Box[i64]");
+}
+
+#[test]
+fn substitute_reaches_into_an_arrow() {
+    let mut s = s();
+    let t = s.t.name("T");
+    let v = s.t.var(t);
+    let never = s.t.never();
+    let arr_t = s.t.arrow(vec![v], never, v);
+    let i = s.t.i64();
+    let arr_i = s.t.arrow(vec![i], never, i);
+    let sub = std::collections::HashMap::from([(t, i)]);
+    assert_eq!(s.t.substitute(arr_t, &sub), arr_i);
+}
