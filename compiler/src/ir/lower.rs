@@ -109,10 +109,11 @@ struct Lower<'a> {
     handlers: Vec<BlockId>,
 }
 
-/// What `break` and `continue` need: where to jump, and the loop-carried variables to
-/// pass at the back-edge (the header's block parameters).
+/// What `break` and `continue` need: where each jumps, and the loop-carried variables to
+/// pass at the back-edge. `continue_target` is the header for `loop`/`while` and the
+/// latch (which increments the index) for `for`; both take the carried variables.
 struct LoopCtx {
-    header: BlockId,
+    continue_target: BlockId,
     exit: BlockId,
     carried: Vec<String>,
     /// Whether the loop yields a value (`break e`), so the exit block takes an argument.
@@ -232,6 +233,7 @@ impl Lower<'_> {
             ExprKind::Match { scrutinee, arms } => self.lower_match(scrutinee, arms, repr, ty),
             ExprKind::Loop { body } => self.lower_loop(body, repr, ty),
             ExprKind::While { cond, body } => self.lower_while(cond, body, ty),
+            ExprKind::For { pat, iter, body } => self.lower_for(pat, iter, body, ty),
             ExprKind::Break(v) => {
                 let bv = match v {
                     Some(e) => self.lower_expr(e),
@@ -344,12 +346,39 @@ impl Lower<'_> {
     }
 
     fn lower_str(&mut self, parts: &[ast::StrPart], repr: Repr, ty: TyId) -> Value {
-        // A single literal chunk is a constant; interpolation is not lowered yet.
-        match parts {
-            [] => self.b.emit(Op::ConstStr(String::new()), repr, ty),
-            [ast::StrPart::Text(s)] => self.b.emit(Op::ConstStr(s.clone()), repr, ty),
-            _ => self.unhandled_note("string interpolation", repr, ty),
+        if let [ast::StrPart::Text(s)] = parts {
+            return self.b.emit(Op::ConstStr(s.clone()), repr.clone(), ty);
         }
+        if parts.is_empty() {
+            return self.b.emit(Op::ConstStr(String::new()), repr, ty);
+        }
+        // Interpolation: each hole is `to_string`'d, each text chunk is a literal, and
+        // the pieces are concatenated left to right.
+        let mut acc: Option<Value> = None;
+        for part in parts {
+            let piece = match part {
+                ast::StrPart::Text(s) => self.b.emit(Op::ConstStr(s.clone()), Repr::Str, ty),
+                ast::StrPart::Interp(e) => {
+                    let v = self.lower_expr(e);
+                    match to_string_symbol(self.b.value_repr(v)) {
+                        Some(sym) => self.b.emit(Op::Native { symbol: sym, args: vec![v] }, Repr::Str, ty),
+                        // A str hole is already a string; a record/nominal hole needs a
+                        // Display dispatch, lowered with the rest of user dispatch.
+                        None if matches!(self.b.value_repr(v), Repr::Str) => v,
+                        None => return self.unhandled_note("string interpolation of a user type", repr, ty),
+                    }
+                }
+            };
+            acc = Some(match acc {
+                None => piece,
+                Some(a) => self.b.emit(
+                    Op::Native { symbol: "neon_str_concat".into(), args: vec![a, piece] },
+                    Repr::Str,
+                    ty,
+                ),
+            });
+        }
+        acc.unwrap_or_else(|| self.b.emit(Op::ConstStr(String::new()), repr, ty))
     }
 
     fn lower_path(&mut self, p: &[String], repr: Repr, ty: TyId) -> Value {
@@ -880,7 +909,7 @@ impl Lower<'_> {
             self.bind(n, p);
         }
 
-        self.loops.push(LoopCtx { header, exit, carried: carried.clone(), has_value: produces });
+        self.loops.push(LoopCtx { continue_target: header, exit, carried: carried.clone(), has_value: produces });
         for s in &body.stmts {
             if self.terminated {
                 break;
@@ -935,7 +964,7 @@ impl Lower<'_> {
 
         self.b.switch_to(body_b);
         self.terminated = false;
-        self.loops.push(LoopCtx { header, exit, carried: carried.clone(), has_value: false });
+        self.loops.push(LoopCtx { continue_target: header, exit, carried: carried.clone(), has_value: false });
         for s in &body.stmts {
             if self.terminated {
                 break;
@@ -953,12 +982,108 @@ impl Lower<'_> {
         self.unit(ty)
     }
 
+    /// `for x in xs { body }` — a C loop over a contiguous list, indexed from 0 to its
+    /// length. The index and any reassigned locals are block parameters; the latch block
+    /// increments the index and is where `continue` lands.
+    fn lower_for(&mut self, pat: &ast::Pattern, iter: &Expr, body: &Block, ty: TyId) -> Value {
+        let list = self.lower_expr(iter);
+        let elem_repr = match self.b.value_repr(list) {
+            Repr::List(e) => (**e).clone(),
+            _ => Repr::Any,
+        };
+        let len = self.b.emit(Op::Native { symbol: "neon_list_len".into(), args: vec![list] }, Repr::I64, ty);
+        let zero = self.b.emit(Op::ConstI64(0), Repr::I64, ty);
+
+        let carried = self.carried_vars(body);
+        let inits: Vec<Value> = carried.iter().map(|n| self.lookup(n).unwrap()).collect();
+
+        let header = self.b.new_block();
+        let body_b = self.b.new_block();
+        let latch = self.b.new_block();
+        let exit = self.b.new_block();
+
+        let i_param = self.b.block_param(header, Repr::I64, ty);
+        let mut carried_params = Vec::new();
+        for &v in &inits {
+            let (r, vty) = (self.b.value_repr(v).clone(), self.b.value_ty(v));
+            carried_params.push(self.b.block_param(header, r, vty));
+        }
+        // The latch takes the carried variables from each back-edge (body end, continue).
+        let mut latch_params = Vec::new();
+        for &v in &inits {
+            let (r, vty) = (self.b.value_repr(v).clone(), self.b.value_ty(v));
+            latch_params.push(self.b.block_param(latch, r, vty));
+        }
+
+        let mut entry_args = vec![zero];
+        entry_args.extend(inits);
+        self.b.terminate(Term::Jump(Target { to: header, args: entry_args }));
+
+        // header: test the index, bind carried, branch into the body or out.
+        self.b.switch_to(header);
+        self.terminated = false;
+        self.scope.push(vec![]);
+        for (n, &p) in carried.iter().zip(&carried_params) {
+            self.bind(n, p);
+        }
+        let cond = self.b.emit(Op::Prim(PrimOp::Lt, vec![i_param, len]), Repr::Bool, ty);
+        self.b.terminate(Term::Branch {
+            cond,
+            then: Target { to: body_b, args: vec![] },
+            els: Target { to: exit, args: vec![] },
+        });
+
+        // body: bind the element and run.
+        self.b.switch_to(body_b);
+        self.terminated = false;
+        self.scope.push(vec![]);
+        let elem = self.b.emit(Op::Index { base: list, index: i_param }, elem_repr, ty);
+        self.bind_pattern(pat, elem);
+        self.loops.push(LoopCtx {
+            continue_target: latch,
+            exit,
+            carried: carried.clone(),
+            has_value: false,
+        });
+        for s in &body.stmts {
+            if self.terminated {
+                break;
+            }
+            self.lower_stmt(s);
+        }
+        if !self.terminated {
+            if let Some(t) = &body.tail {
+                self.lower_expr(t);
+            }
+        }
+        if !self.terminated {
+            let args: Vec<Value> = carried.iter().map(|n| self.lookup(n).unwrap()).collect();
+            self.b.terminate(Term::Jump(Target { to: latch, args }));
+        }
+        self.loops.pop();
+        self.scope.pop();
+
+        // latch: increment the index, loop with the carried variables it received.
+        self.b.switch_to(latch);
+        self.terminated = false;
+        let one = self.b.emit(Op::ConstI64(1), Repr::I64, ty);
+        let next_i = self.b.emit(Op::Prim(PrimOp::Add, vec![i_param, one]), Repr::I64, ty);
+        let mut back = vec![next_i];
+        back.extend(latch_params);
+        self.b.terminate(Term::Jump(Target { to: header, args: back }));
+
+        self.scope.pop();
+        self.b.switch_to(exit);
+        self.terminated = false;
+        self.unit(ty)
+    }
+
     /// Jump to the innermost loop's header with the current values of its carried vars.
     fn jump_to_header(&mut self) {
         if let Some(ctx) = self.loops.last() {
-            let (header, carried) = (ctx.header, ctx.carried.clone());
+            let (target, carried) = (ctx.continue_target, ctx.carried.clone());
             let args: Vec<Value> = carried.iter().map(|n| self.lookup(n).unwrap()).collect();
-            self.b.terminate(Term::Jump(Target { to: header, args }));
+            self.b.terminate(Term::Jump(Target { to: target, args }));
         }
     }
 
@@ -1017,6 +1142,18 @@ fn kind_name(k: &ExprKind) -> &'static str {
 
 fn subj_ty(b: &Builder, v: Value) -> TyId {
     b.value_ty(v)
+}
+
+/// The runtime `to_string` symbol for a primitive repr, for string interpolation. A
+/// `str` needs none (identity); a user type needs a Display dispatch instead.
+fn to_string_symbol(r: &Repr) -> Option<String> {
+    Some(match r {
+        Repr::I64 => "neon_i64_to_string",
+        Repr::F64 => "neon_f64_to_string",
+        Repr::Bool => "neon_bool_to_string",
+        _ => return None,
+    }
+    .to_string())
 }
 
 // ---- scanning for a loop's reassigned variables ----

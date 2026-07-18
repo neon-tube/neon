@@ -214,3 +214,31 @@ fn try_and_throw_lower_to_tagged_result_control_flow() {
     assert!(ir.contains("unwrap_ok"), "{ir}");
     assert!(ir.contains("throw %"), "propagate re-throws: {ir}");
 }
+
+#[test]
+fn string_interpolation_builds_via_to_string_and_concat() {
+    let ir = lower(
+        "protocol Display for T { fn to_string(v: T) -> str }
+         impl Display for i64 { @native(\"neon_i64_to_string\") fn to_string(v: i64) -> str }
+         fn show(n: i64) -> str { \"n = #{n}\" }",
+    );
+    assert!(ir.contains("neon_i64_to_string"), "{ir}");
+    assert!(ir.contains("neon_str_concat"), "{ir}");
+}
+
+#[test]
+fn a_for_loop_indexes_the_list_with_a_carried_accumulator() {
+    let ir = lower(
+        "opaque record List[T] {}
+         @native(\"neon_list_len\") fn len[T](xs: List[T]) -> i64
+         fn total(xs: List[i64]) -> i64 {
+             let sum = 0;
+             for x in xs { sum = sum + x; }
+             sum
+         }",
+    );
+    assert!(ir.contains("neon_list_len"), "{ir}");
+    assert!(ir.contains("index %"), "element read: {ir}");
+    assert!(ir.contains("prim.lt"), "bound check: {ir}");
+    assert!(ir.contains("prim.add"), "increment + accumulate: {ir}");
+}
