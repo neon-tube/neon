@@ -23,19 +23,132 @@ struct LambdaJob {
     module: Vec<String>,
 }
 
+/// A concrete instance of a generic function, discovered at a call site. Monomorphisation
+/// specialises the generic body under `subst`, mapping each generic parameter name to the
+/// concrete `Repr` it was called with.
+#[derive(Clone)]
+struct InstanceJob {
+    mangled: String,
+    module: Vec<String>,
+    fn_name: String,
+    subst: std::collections::HashMap<String, Repr>,
+}
+
+/// Replace every type variable in a repr with its concrete binding. After this a
+/// monomorphic instance has no `Var` left.
+fn substitute_repr(r: &Repr, subst: &std::collections::HashMap<String, Repr>) -> Repr {
+    match r {
+        Repr::Var(n) => subst.get(n).cloned().unwrap_or_else(|| r.clone()),
+        Repr::Record { name, fields } => Repr::Record {
+            name: name.clone(),
+            fields: fields.iter().map(|(n, r)| (n.clone(), substitute_repr(r, subst))).collect(),
+        },
+        Repr::Tuple(rs) => Repr::Tuple(rs.iter().map(|r| substitute_repr(r, subst)).collect()),
+        Repr::Union(rs) => Repr::Union(rs.iter().map(|r| substitute_repr(r, subst)).collect()),
+        Repr::List(e) => Repr::List(Box::new(substitute_repr(e, subst))),
+        Repr::Nullable(e) => Repr::Nullable(Box::new(substitute_repr(e, subst))),
+        Repr::Map(k, v) => {
+            Repr::Map(Box::new(substitute_repr(k, subst)), Box::new(substitute_repr(v, subst)))
+        }
+        Repr::Closure { params, ret } => Repr::Closure {
+            params: params.iter().map(|r| substitute_repr(r, subst)).collect(),
+            ret: Box::new(substitute_repr(ret, subst)),
+        },
+        _ => r.clone(),
+    }
+}
+
+/// Bind the type variables in a template repr to make it match a concrete one, for
+/// building a call's instance substitution from its argument reprs.
+fn match_repr(template: &Repr, concrete: &Repr, subst: &mut std::collections::HashMap<String, Repr>) {
+    match (template, concrete) {
+        (Repr::Var(n), c) => {
+            subst.entry(n.clone()).or_insert_with(|| c.clone());
+        }
+        (Repr::List(a), Repr::List(b)) | (Repr::Nullable(a), Repr::Nullable(b)) => {
+            match_repr(a, b, subst)
+        }
+        (Repr::Map(ak, av), Repr::Map(bk, bv)) => {
+            match_repr(ak, bk, subst);
+            match_repr(av, bv, subst);
+        }
+        (Repr::Record { fields: a, .. }, Repr::Record { fields: b, .. }) => {
+            for ((_, at), (_, bt)) in a.iter().zip(b) {
+                match_repr(at, bt, subst);
+            }
+        }
+        (Repr::Tuple(a), Repr::Tuple(b)) | (Repr::Union(a), Repr::Union(b)) => {
+            a.iter().zip(b).for_each(|(x, y)| match_repr(x, y, subst));
+        }
+        (Repr::Closure { params: ap, ret: ar }, Repr::Closure { params: bp, ret: br }) => {
+            ap.iter().zip(bp).for_each(|(x, y)| match_repr(x, y, subst));
+            match_repr(ar, br, subst);
+        }
+        _ => {}
+    }
+}
+
+/// The mangled name of a generic instance: the base name with its concrete arguments.
+fn mangle_instance(base: &str, subst: &std::collections::HashMap<String, Repr>) -> String {
+    let mut keys: Vec<&String> = subst.keys().collect();
+    keys.sort();
+    let args: Vec<String> = keys.iter().map(|k| repr_key(&subst[*k])).collect();
+    format!("{base}${}", args.join("$"))
+}
+
+/// A short, stable spelling of a repr for a mangled name.
+fn repr_key(r: &Repr) -> String {
+    match r {
+        Repr::I64 => "i64".into(),
+        Repr::F64 => "f64".into(),
+        Repr::Bool => "bool".into(),
+        Repr::Str => "str".into(),
+        Repr::Null => "null".into(),
+        Repr::Unit => "unit".into(),
+        Repr::Tag => "tag".into(),
+        Repr::Record { name: Some(n), .. } => n.clone(),
+        Repr::Record { .. } => "rec".into(),
+        Repr::List(e) => format!("list_{}", repr_key(e)),
+        Repr::Map(k, v) => format!("map_{}_{}", repr_key(k), repr_key(v)),
+        Repr::Tuple(rs) => format!("tup_{}", rs.iter().map(repr_key).collect::<Vec<_>>().join("_")),
+        Repr::Nullable(e) => format!("opt_{}", repr_key(e)),
+        Repr::Closure { .. } => "fn".into(),
+        Repr::Union(_) => "union".into(),
+        Repr::Var(n) => n.clone(),
+        Repr::Recursive(_) => "rec".into(),
+        Repr::Any => "any".into(),
+        Repr::Never => "never".into(),
+    }
+}
+
 /// Lower a whole module to a program of SSA functions. Lambdas are lowered as separate
 /// functions via a worklist: lowering a function may discover lambdas, which are queued
 /// and lowered in turn (and may discover more).
 pub fn lower_module<'a>(env: &Env, result: &TypecheckResult, module: &'a ast::Module) -> Program {
     let mut funcs = Vec::new();
+    let mut lambda_jobs: Vec<LambdaJob> = Vec::new();
+    let mut instance_jobs: Vec<InstanceJob> = Vec::new();
+    let mut lowered: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // Every function body, keyed by (module, name), so a generic instance can find its
+    // source when its call site discovers it.
+    let mut all_fns: std::collections::HashMap<(Vec<String>, String), ast::FnDecl> =
+        std::collections::HashMap::new();
+    collect_all_fns(&[], &module.decls, &mut all_fns);
+
+    // Non-generic top-level functions. A generic one is lowered only per instance, as its
+    // call sites discover them.
     let mut fn_jobs: Vec<(Vec<String>, &'a ast::FnDecl)> = Vec::new();
     collect_fn_jobs(&[], &module.decls, &mut fn_jobs);
-
-    let mut lambda_jobs: Vec<LambdaJob> = Vec::new();
-    for (module, f) in fn_jobs {
-        let (func, pending) = lower_fn(env, result, &module, f);
+    for (m, f) in fn_jobs {
+        if !f.generics.is_empty() {
+            continue;
+        }
+        let (func, l, i) = lower_fn(env, result, &m, f);
+        lowered.insert(func.name.clone());
         funcs.push(func);
-        lambda_jobs.extend(pending);
+        lambda_jobs.extend(l);
+        instance_jobs.extend(i);
     }
 
     // Impl methods: correlate each `ImplDef`'s method (which carries the types) with its
@@ -47,24 +160,105 @@ pub fn lower_module<'a>(env: &Env, result: &TypecheckResult, module: &'a ast::Mo
         let proto = env.protocols()[impl_def.protocol.0].name.clone();
         let head = impl_head(env, impl_def);
         for m in &impl_def.methods {
-            if !m.has_body {
+            if !m.has_body || !m.generics.is_empty() {
                 continue;
             }
             let name = mangle_impl(&proto, &head, &m.name);
             if let Some(fd) = impl_bodies.get(&name) {
-                let (func, pending) = lower_method(env, result, &impl_def.module, fd, m, name);
+                let (func, l, i) = lower_method(env, result, &impl_def.module, fd, m, name);
+                lowered.insert(func.name.clone());
                 funcs.push(func);
-                lambda_jobs.extend(pending);
+                lambda_jobs.extend(l);
+                instance_jobs.extend(i);
             }
         }
     }
 
-    while let Some(job) = lambda_jobs.pop() {
-        let (func, pending) = lower_lambda_job(env, result, job);
-        funcs.push(func);
-        lambda_jobs.extend(pending);
+    // Drain the worklists: lambdas and generic instances, deduplicated by name.
+    loop {
+        if let Some(job) = lambda_jobs.pop() {
+            if !lowered.insert(job.name.clone()) {
+                continue;
+            }
+            let (func, l, i) = lower_lambda_job(env, result, job);
+            funcs.push(func);
+            lambda_jobs.extend(l);
+            instance_jobs.extend(i);
+            continue;
+        }
+        if let Some(job) = instance_jobs.pop() {
+            if !lowered.insert(job.mangled.clone()) {
+                continue;
+            }
+            if let Some((func, l, i)) = lower_instance(env, result, &all_fns, job) {
+                funcs.push(func);
+                lambda_jobs.extend(l);
+                instance_jobs.extend(i);
+            }
+            continue;
+        }
+        break;
     }
     Program { funcs }
+}
+
+fn collect_all_fns(
+    module: &[String],
+    decls: &[Decl],
+    out: &mut std::collections::HashMap<(Vec<String>, String), ast::FnDecl>,
+) {
+    for d in decls {
+        match &d.kind {
+            DeclKind::Fn(f) if f.body.is_some() => {
+                out.insert((module.to_vec(), f.name.clone()), f.clone());
+            }
+            DeclKind::Mod(m) => {
+                let mut inner = module.to_vec();
+                inner.push(m.name.clone());
+                collect_all_fns(&inner, &m.decls, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Lower one concrete instance of a generic function under its substitution.
+fn lower_instance(
+    env: &Env,
+    result: &TypecheckResult,
+    all_fns: &std::collections::HashMap<(Vec<String>, String), ast::FnDecl>,
+    job: InstanceJob,
+) -> Option<(Func, Vec<LambdaJob>, Vec<InstanceJob>)> {
+    let f = all_fns.get(&(job.module.clone(), job.fn_name.clone()))?;
+    let sig = env.fn_named(&job.module, std::slice::from_ref(&job.fn_name));
+    let ret_ty = sig.map(|s| s.ret).unwrap_or(TyId(0));
+    let ret_repr = substitute_repr(&repr_of(&env.solver.t, ret_ty), &job.subst);
+
+    let mut lo = Lower::with_subst(
+        env,
+        result,
+        job.module.clone(),
+        job.mangled.clone(),
+        ret_repr.clone(),
+        job.subst.clone(),
+    );
+    let mut params = Vec::new();
+    for (i, p) in f.params.iter().enumerate() {
+        let ty = sig.and_then(|s| s.params.get(i)).map(|(_, t)| *t).unwrap_or(TyId(0));
+        let r = lo.repr_of_ty(ty);
+        let v = lo.b.block_param(BlockId(0), r, ty);
+        lo.bind(&p.name, v);
+        params.push(v);
+    }
+    lo.b.switch_to(BlockId(0));
+    let body = f.body.as_ref().expect("generic fn has a body");
+    let tail = lo.lower_block(body);
+    if !lo.terminated {
+        let ret = if matches!(ret_repr, Repr::Unit) { None } else { tail };
+        lo.b.terminate(Term::Ret(ret));
+    }
+    let (l, i) = (std::mem::take(&mut lo.pending), std::mem::take(&mut lo.instances));
+    Some((lo.b.finish(params), l, i))
 }
 
 fn collect_fn_jobs<'a>(
@@ -116,6 +310,39 @@ fn impl_head(env: &Env, impl_def: &crate::typecheck::env::ImplDef) -> String {
     }
 }
 
+/// The head name of a repr, for matching a bound-dispatch receiver to an impl.
+fn repr_head(r: &Repr) -> Option<String> {
+    Some(match r {
+        Repr::Record { name: Some(n), .. } => n.clone(),
+        Repr::I64 => "i64".into(),
+        Repr::F64 => "f64".into(),
+        Repr::Str => "str".into(),
+        Repr::Bool => "bool".into(),
+        Repr::List(_) => "List".into(),
+        Repr::Map(_, _) => "Map".into(),
+        _ => return None,
+    })
+}
+
+/// Find the impl of `protocol` for a type whose head is `head`, and its method — its
+/// native symbol (if any) and what it throws. This discharges a `where` bound once the
+/// receiver is concrete.
+fn find_impl_method(
+    env: &Env,
+    protocol: crate::typecheck::env::ProtocolId,
+    head: &str,
+    method: &str,
+) -> Option<(Option<String>, TyId)> {
+    for impl_def in env.impls() {
+        if impl_def.protocol == protocol && impl_head(env, impl_def) == head {
+            if let Some(m) = impl_def.methods.iter().find(|m| m.name == method) {
+                return Some((m.native.clone(), m.throws));
+            }
+        }
+    }
+    None
+}
+
 /// The head of an impl target written in the AST, matching `impl_head`.
 fn ast_head(ty: &ast::TypeSpec) -> String {
     match &ty.kind {
@@ -153,7 +380,7 @@ fn lower_method(
     f: &ast::FnDecl,
     sig: &crate::typecheck::env::FnSig,
     name: String,
-) -> (Func, Vec<LambdaJob>) {
+) -> (Func, Vec<LambdaJob>, Vec<InstanceJob>) {
     let ret_repr = repr_of(&env.solver.t, sig.ret);
     let mut lo = Lower::new(env, result, module.to_vec(), name, ret_repr.clone());
     let mut params = Vec::new();
@@ -171,8 +398,8 @@ fn lower_method(
         let ret = if matches!(ret_repr, Repr::Unit) { None } else { tail };
         lo.b.terminate(Term::Ret(ret));
     }
-    let pending = std::mem::take(&mut lo.pending);
-    (lo.b.finish(params), pending)
+    let (l, i) = (std::mem::take(&mut lo.pending), std::mem::take(&mut lo.instances));
+    (lo.b.finish(params), l, i)
 }
 
 fn lower_fn(
@@ -180,7 +407,7 @@ fn lower_fn(
     result: &TypecheckResult,
     module: &[String],
     f: &ast::FnDecl,
-) -> (Func, Vec<LambdaJob>) {
+) -> (Func, Vec<LambdaJob>, Vec<InstanceJob>) {
     let name = f.name.clone();
     let sig = env.fn_named(module, std::slice::from_ref(&name));
     let ret_ty = sig.map(|s| s.ret).unwrap_or(TyId(0));
@@ -205,13 +432,13 @@ fn lower_fn(
         let ret = if matches!(ret_repr, Repr::Unit) { None } else { tail };
         lo.b.terminate(Term::Ret(ret));
     }
-    let pending = std::mem::take(&mut lo.pending);
-    (lo.b.finish(params), pending)
+    let (l, i) = (std::mem::take(&mut lo.pending), std::mem::take(&mut lo.instances));
+    (lo.b.finish(params), l, i)
 }
 
 /// Lower a lambda's body as its own function. Its first parameter is the environment (a
 /// tuple of the captured values); the rest are the lambda's parameters.
-fn lower_lambda_job(env: &Env, result: &TypecheckResult, job: LambdaJob) -> (Func, Vec<LambdaJob>) {
+fn lower_lambda_job(env: &Env, result: &TypecheckResult, job: LambdaJob) -> (Func, Vec<LambdaJob>, Vec<InstanceJob>) {
     let ExprKind::Lambda { params: lparams, body } = &job.lambda.kind else {
         unreachable!("a lambda job holds a lambda");
     };
@@ -246,8 +473,8 @@ fn lower_lambda_job(env: &Env, result: &TypecheckResult, job: LambdaJob) -> (Fun
         let ret = if matches!(ret_repr, Repr::Unit) { None } else { Some(tail) };
         lo.b.terminate(Term::Ret(ret));
     }
-    let pending = std::mem::take(&mut lo.pending);
-    (lo.b.finish(params), pending)
+    let (l, i) = (std::mem::take(&mut lo.pending), std::mem::take(&mut lo.instances));
+    (lo.b.finish(params), l, i)
 }
 
 struct Lower<'a> {
@@ -269,6 +496,10 @@ struct Lower<'a> {
     handlers: Vec<BlockId>,
     /// Lambdas discovered while lowering this function, to be lowered as their own.
     pending: Vec<LambdaJob>,
+    /// This instance's type-variable bindings (empty for a non-generic function).
+    subst: std::collections::HashMap<String, Repr>,
+    /// Generic instances discovered at call sites, to be lowered in turn.
+    instances: Vec<InstanceJob>,
 }
 
 impl<'a> Lower<'a> {
@@ -278,6 +509,17 @@ impl<'a> Lower<'a> {
         module: Vec<String>,
         fn_name: String,
         ret: Repr,
+    ) -> Self {
+        Self::with_subst(env, result, module, fn_name, ret, Default::default())
+    }
+
+    fn with_subst(
+        env: &'a Env,
+        result: &'a TypecheckResult,
+        module: Vec<String>,
+        fn_name: String,
+        ret: Repr,
+        subst: std::collections::HashMap<String, Repr>,
     ) -> Self {
         Lower {
             env,
@@ -289,6 +531,8 @@ impl<'a> Lower<'a> {
             loops: vec![],
             handlers: vec![],
             pending: vec![],
+            subst,
+            instances: vec![],
         }
     }
 }
@@ -315,8 +559,18 @@ impl Lower<'_> {
 
     fn repr(&self, e: &Expr) -> Repr {
         match self.result.ty(e.id) {
-            Some(ty) => repr_of(&self.env.solver.t, ty),
+            Some(ty) => self.repr_of_ty(ty),
             None => Repr::Unit,
+        }
+    }
+
+    /// The repr of a type, with this instance's type variables substituted away.
+    fn repr_of_ty(&self, ty: TyId) -> Repr {
+        let r = repr_of(&self.env.solver.t, ty);
+        if self.subst.is_empty() {
+            r
+        } else {
+            substitute_repr(&r, &self.subst)
         }
     }
 
@@ -754,9 +1008,40 @@ impl Lower<'_> {
             // A direct call to a named module function: native symbol or a Neon body.
             if let Some(sig) = self.env.fn_named(&self.module, p) {
                 let throws = sig.throws;
-                let op = match &sig.native {
-                    Some(sym) => Op::Native { symbol: sym.clone(), args: arg_vs },
-                    None => Op::Call { func: mangle(&sig.module, &sig.name), args: arg_vs },
+                let native = sig.native.clone();
+                let is_generic = !sig.generics.is_empty();
+                let (smodule, sname) = (sig.module.clone(), sig.name.clone());
+                let param_tys: Vec<TyId> = sig.params.iter().map(|(_, t)| *t).collect();
+                let ret_ty = sig.ret;
+
+                if is_generic && native.is_none() {
+                    // Specialise: build the substitution from the argument reprs (and the
+                    // return, for a type variable that only appears there), then call and
+                    // queue the concrete instance.
+                    let mut subst = std::collections::HashMap::new();
+                    for (i, &av) in arg_vs.iter().enumerate() {
+                        if let Some(&pty) = param_tys.get(i) {
+                            let template = repr_of(&self.env.solver.t, pty);
+                            let concrete = self.b.value_repr(av).clone();
+                            match_repr(&template, &concrete, &mut subst);
+                        }
+                    }
+                    let ret_template = repr_of(&self.env.solver.t, ret_ty);
+                    match_repr(&ret_template, &repr, &mut subst);
+                    let mangled = mangle_instance(&mangle(&smodule, &sname), &subst);
+                    self.instances.push(InstanceJob {
+                        mangled: mangled.clone(),
+                        module: smodule,
+                        fn_name: sname,
+                        subst,
+                    });
+                    let result = self.b.emit(Op::Call { func: mangled, args: arg_vs }, repr.clone(), ty);
+                    return self.wrap_throwing(result, throws, repr, ty);
+                }
+
+                let op = match native {
+                    Some(sym) => Op::Native { symbol: sym, args: arg_vs },
+                    None => Op::Call { func: mangle(&smodule, &sname), args: arg_vs },
                 };
                 let result = self.b.emit(op, repr.clone(), ty);
                 return self.wrap_throwing(result, throws, repr, ty);
@@ -802,7 +1087,34 @@ impl Lower<'_> {
                 self.wrap_throwing(result, throws, repr, ty)
             }
             Resolution::Switch(_) => self.unhandled_note("dispatch switch", repr, ty),
-            Resolution::Bound { .. } => self.unhandled_note("dispatch bound", repr, ty),
+            Resolution::Bound { protocol, .. } => {
+                // In a monomorphic instance the receiver is concrete, so its head picks
+                // the impl the bound stood for.
+                let recv = args.first().copied();
+                let head = recv.and_then(|v| repr_head(self.b.value_repr(v)));
+                let proto = self.env.protocols()[protocol.0].name.clone();
+                match head {
+                    Some(h) => {
+                        let found = find_impl_method(self.env, *protocol, &h, &method);
+                        match found {
+                            Some((Some(sym), throws)) => {
+                                let result = self.b.emit(Op::Native { symbol: sym, args }, repr.clone(), ty);
+                                self.wrap_throwing(result, throws, repr, ty)
+                            }
+                            Some((None, throws)) => {
+                                let result = self.b.emit(
+                                    Op::Call { func: mangle_impl(&proto, &h, &method), args },
+                                    repr.clone(),
+                                    ty,
+                                );
+                                self.wrap_throwing(result, throws, repr, ty)
+                            }
+                            None => self.unhandled_note("bound: no impl", repr, ty),
+                        }
+                    }
+                    None => self.unhandled_note("bound: abstract receiver", repr, ty),
+                }
+            }
         }
     }
 

@@ -267,3 +267,31 @@ fn user_impl_dispatch_calls_the_lowered_method() {
     assert!(ir.contains("fn @Area$Sq$area"), "impl method lowered: {ir}");
     assert!(ir.contains("call @Area$Sq$area"), "dispatch calls it: {ir}");
 }
+
+#[test]
+fn a_generic_function_is_specialised_per_instance() {
+    let ir = lower(
+        "fn identity[T](x: T) -> T { x }
+         fn use_i(n: i64) -> i64 { identity(n) }
+         fn use_s(s: str) -> str { identity(s) }",
+    );
+    // Two instances: identity$i64 and identity$str, each called by name.
+    assert!(ir.contains("fn @identity$i64"), "i64 instance: {ir}");
+    assert!(ir.contains("fn @identity$str"), "str instance: {ir}");
+    assert!(ir.contains("call @identity$i64"), "{ir}");
+    assert!(ir.contains("call @identity$str"), "{ir}");
+    assert!(!ir.contains("'T"), "no type variable left after mono: {ir}");
+}
+
+#[test]
+fn a_where_bound_is_discharged_to_the_concrete_impl() {
+    let ir = lower(
+        "protocol Display for T { fn to_string(v: T) -> str }
+         impl Display for i64 { @native(\"neon_i64_to_string\") fn to_string(v: i64) -> str }
+         fn show[T](v: T) -> str where T: Display { to_string(v) }
+         fn use_it(n: i64) -> str { show(n) }",
+    );
+    // Inside show$i64, the bound `to_string` resolves to the i64 impl's native symbol.
+    assert!(ir.contains("fn @show$i64"), "instance: {ir}");
+    assert!(ir.contains("neon_i64_to_string"), "bound discharged to i64 impl: {ir}");
+}
