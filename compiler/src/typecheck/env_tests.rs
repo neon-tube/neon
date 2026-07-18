@@ -397,9 +397,12 @@ fn a_mu_type_may_recurse_through_several_constructors_at_once() {
 }
 
 #[test]
-fn a_mu_type_guarded_by_a_visible_record_field_is_contractive() {
+fn a_mu_that_only_recurses_through_a_record_field_is_rejected() {
+    // `T` never appears in its own body (`Node`). The recursion belongs to `Node`,
+    // which recurses without a `mu`. So this is not a recursive `mu` -- `T` does not
+    // name itself -- regardless of whether Node's fields are visible.
     let e = env("record Node { next: T | null }\nmu type T = Node");
-    assert_clean(&e);
+    assert!(matches!(kinds(&e).as_slice(), [TypeErrorKind::MuWithoutRecursion(_)]), "{:?}", kinds(&e));
 }
 
 #[test]
@@ -489,17 +492,17 @@ fn a_generic_mu_type_instantiates() {
 // ---- opaque is module-scoped ----
 
 #[test]
-fn an_opaque_record_expands_inside_its_own_module() {
-    // `Rng` is a data constructor with a guardable field where its fields are
-    // visible, so the same `mu type` is well-formed here...
-    let e = env("mod rand { opaque record Rng { seed: T | null }\n mu type T = Rng }");
+fn a_mu_that_names_itself_through_a_generic_argument_is_contractive() {
+    // The right way: the variable occurs in the body, guarded by a constructor
+    // written there -- here `Box`'s argument.
+    let e = env("record Box[T] {}\nmu type A = :nil | Box[A]");
     assert_clean(&e);
 }
 
 #[test]
-fn an_opaque_records_fields_reach_one_parent_module() {
-    let e = env("mod rand { opaque record Rng { seed: T | null } }\nmu type T = rand::Rng");
-    assert_clean(&e);
+fn a_mu_with_no_occurrence_at_all_is_rejected() {
+    let e = env("mu type A = :ok | :err");
+    assert!(matches!(kinds(&e).as_slice(), [TypeErrorKind::MuWithoutRecursion(_)]), "{:?}", kinds(&e));
 }
 
 #[test]
@@ -517,9 +520,9 @@ fn an_opaque_record_is_an_atom_beyond_its_parent() {
 }
 
 #[test]
-fn a_transparent_record_expands_from_anywhere() {
+fn a_mu_through_a_records_field_is_rejected_from_anywhere() {
     let e = env("mod m { record Node { next: T | null } }\nmu type T = m::Node");
-    assert_clean(&e);
+    assert!(matches!(kinds(&e).as_slice(), [TypeErrorKind::MuWithoutRecursion(_)]), "{:?}", kinds(&e));
 }
 
 // ---- modules ----
@@ -722,7 +725,7 @@ fn a_mu_type_prints_by_name_rather_than_as_a_binder() {
     // `mu A0 = ...` is not syntax anyone can write, so a recursive type with a name
     // must reach for it. `defs` is what carries the name from env to the printer,
     // and nothing populated it until now.
-    let mut e = env("record Wrap { v: Json | null }\nmu type Json = Wrap");
+    let mut e = env("record Box[T] {}\nmu type Json = :nil | Box[Json]");
     let json = ty(&mut e, "Json");
     let shown = super::print::print(&mut e.solver.t, json);
     assert_eq!(shown, "Json");

@@ -28,6 +28,7 @@ pub fn check_module(env: &mut Env, m: &ast::Module) -> (TypecheckResult, Vec<Typ
         ret: None,
         throws: None,
         loop_breaks: vec![],
+        throw_sinks: vec![],
     };
     c.decls(&[], &m.decls);
     (c.result, c.errors)
@@ -44,6 +45,9 @@ struct Checker<'a> {
     /// Break values of the enclosing loops, innermost last. A `loop` is the union
     /// of the values it breaks with.
     loop_breaks: Vec<Vec<TyId>>,
+    /// Throws collected by the enclosing `try` bodies. A throwing call outside any
+    /// `try` is a compile error; inside one, its error type lands here.
+    throw_sinks: Vec<Vec<TyId>>,
 }
 
 impl Checker<'_> {
@@ -357,8 +361,8 @@ impl Checker<'_> {
             }
 
             ExprKind::Throw(x) => {
-                let want = self.throws;
-                self.expr(module, x, want);
+                let t = self.expr(module, x, None);
+                self.note_throw(x.span.clone(), t, false);
                 self.env.solver.t.never()
             }
 
@@ -469,8 +473,9 @@ impl Checker<'_> {
                 }
             }
 
-            // Not yet: `try` needs the throws machinery it desugars into.
-            ExprKind::Try { .. } => expected.unwrap_or_else(|| self.poison()),
+            ExprKind::Try { form, body, catch } => {
+                self.try_expr(module, *form, body, catch, expected)
+            }
         }
     }
 
@@ -628,6 +633,69 @@ impl Checker<'_> {
 
     fn is_nullable(&self, ty: TyId) -> bool {
         self.env.solver.t.data(ty).base & super::types::B_NULL != 0
+    }
+
+    /// Record that something throws `throws`. Inside a `try` it lands in the sink to
+    /// be caught or propagated; from a call outside any `try` it is a bare throwing
+    /// call, a compile error; from a `throw` statement outside a `try` it propagates
+    /// to the enclosing function's declared `throws`.
+    fn note_throw(&mut self, span: Span, throws: TyId, from_call: bool) {
+        let never = self.env.solver.t.never();
+        if self.env.is_error(throws) || throws == never {
+            return;
+        }
+        if let Some(sink) = self.throw_sinks.last_mut() {
+            sink.push(throws);
+        } else if from_call {
+            self.error(span, TypeErrorKind::BareThrowingCall);
+        } else {
+            let want = self.throws.unwrap_or(never);
+            if !self.assignable(throws, want) {
+                let (t, w) = (self.show(throws), self.show(want));
+                self.error(span, TypeErrorKind::Throws { thrown: t, declared: w });
+            }
+        }
+    }
+
+    fn try_expr(
+        &mut self,
+        module: &[String],
+        form: ast::TryForm,
+        body: &Expr,
+        catch: &Option<ast::CatchArm>,
+        expected: Option<TyId>,
+    ) -> TyId {
+        self.throw_sinks.push(vec![]);
+        // The body's value flows the expected type down only when nothing follows it;
+        // with a catch the arms are unioned, so let both synthesize.
+        let val = self.expr(module, body, if catch.is_some() { None } else { expected });
+        let thrown = self.throw_sinks.pop().unwrap_or_default();
+        let caught = self.env.solver.t.union_all(&thrown);
+        let never = self.env.solver.t.never();
+
+        if let Some(arm) = catch {
+            // The error union is handled here, not propagated. `catch` binds it.
+            self.locals.push(vec![]);
+            self.bind(&arm.binding, if thrown.is_empty() { never } else { caught });
+            let handled = self.block(module, &arm.body, expected);
+            self.locals.pop();
+            return self.union_branches(val, handled);
+        }
+
+        match form {
+            // Propagate: the errors become the enclosing function's to declare.
+            ast::TryForm::Propagate => {
+                self.note_throw(body.span.clone(), caught, false);
+                val
+            }
+            // Soften: a failure yields null instead.
+            ast::TryForm::Soften => {
+                let null = self.env.solver.t.null();
+                self.env.solver.t.union(val, null)
+            }
+            // Assert: a failure panics, so the value is the success type unchanged.
+            ast::TryForm::Assert => val,
+        }
     }
 
     /// The element of a single-argument collection -- `List[T]` carries it in `#0`.
@@ -886,6 +954,7 @@ impl Checker<'_> {
         match dispatch::resolve(self.env, &name, qualified, &arg_tys, expected) {
             Ok(s) => {
                 self.result.set_call(e.id, s.resolution);
+                self.note_throw(e.span.clone(), s.throws, true);
                 s.ret
             }
             Err(err) => {
@@ -924,6 +993,7 @@ impl Checker<'_> {
             for a in args.iter().skip(sig.params.len()) {
                 self.expr(module, a, None);
             }
+            self.note_throw(e.span.clone(), sig.throws, true);
             return sig.ret;
         }
 
@@ -936,6 +1006,8 @@ impl Checker<'_> {
         for a in args.iter().skip(sig.params.len()) {
             self.expr(module, a, None);
         }
+        let throws = self.env.solver.t.substitute(sig.throws, &subst);
+        self.note_throw(e.span.clone(), throws, true);
         self.env.solver.t.substitute(sig.ret, &subst)
     }
 

@@ -17,8 +17,8 @@ fn at(xs: List[i64], i: i64) -> str {
 fn main() {
     let base: List[i64] = [10, 20, 30];
 
-    let a = list::set(base, 1, 99);
-    let b = list::set(base, 1, 77);
+    let a = try! list::set(base, 1, 99);
+    let b = try! list::set(base, 1, 77);
 
     io::println(at(base, 1));
     io::println(at(a, 1));

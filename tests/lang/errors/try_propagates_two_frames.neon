@@ -10,9 +10,10 @@ use std::string;
 
 record Boom { msg: str }
 
-impl Error for Boom {
-    fn message(error: Boom) -> str { error.msg }
+impl Display for Boom {
+    fn to_string(error: Boom) -> str { error.msg }
 }
+impl Error for Boom {}
 
 fn deep() throws Boom -> i64 {
     io::println("deep entered");
@@ -35,7 +36,7 @@ fn top() throws Boom -> i64 {
 
 fn main() {
     let result = try top() catch (e) {
-        io::println(string::concat("main caught: ", message(e)));
+        io::println(string::concat("main caught: ", to_string(e)));
         -1
     };
     io::println(to_string(result));

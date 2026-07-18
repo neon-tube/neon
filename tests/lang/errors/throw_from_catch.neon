@@ -8,13 +8,15 @@ use std::string;
 record LowError { msg: str }
 record HighError { msg: str }
 
-impl Error for LowError {
-    fn message(error: LowError) -> str { error.msg }
+impl Display for LowError {
+    fn to_string(error: LowError) -> str { error.msg }
 }
+impl Error for LowError {}
 
-impl Error for HighError {
-    fn message(error: HighError) -> str { error.msg }
+impl Display for HighError {
+    fn to_string(error: HighError) -> str { error.msg }
 }
+impl Error for HighError {}
 
 fn low() throws LowError -> i64 {
     throw LowError { msg: "cable unplugged" }
@@ -23,13 +25,13 @@ fn low() throws LowError -> i64 {
 fn high() throws HighError -> i64 {
     try low() catch (e) {
         io::println("translating");
-        throw HighError { msg: string::concat("wrapped: ", message(e)) }
+        throw HighError { msg: string::concat("wrapped: ", to_string(e)) }
     }
 }
 
 fn main() {
     let v = try high() catch (e) {
-        io::println(message(e));
+        io::println(to_string(e));
         -1
     };
     io::println(to_string(v));

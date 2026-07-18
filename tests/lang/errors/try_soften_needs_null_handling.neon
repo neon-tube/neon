@@ -10,9 +10,10 @@ use std::string;
 
 record Boom { msg: str }
 
-impl Error for Boom {
-    fn message(error: Boom) -> str { error.msg }
+impl Display for Boom {
+    fn to_string(error: Boom) -> str { error.msg }
 }
+impl Error for Boom {}
 
 fn go() throws Boom -> i64 {
     throw Boom { msg: "no" }

@@ -1,7 +1,7 @@
 //@ exit: 101
 //
 // `try! expr` asserts: on success it is a plain `T`, on error it panics. The
-// panic message names the error's type and its `Error::message()`, goes to
+// panic message names the error's type and its `Error::to_string()`, goes to
 // stderr, and the process exits non-zero.
 //
 // The successful `try!` runs first and prints, so the golden proves the program
@@ -13,9 +13,10 @@ use std::string;
 
 record Boom { msg: str }
 
-impl Error for Boom {
-    fn message(error: Boom) -> str { error.msg }
+impl Display for Boom {
+    fn to_string(error: Boom) -> str { error.msg }
 }
+impl Error for Boom {}
 
 fn maybe(fail: bool) throws Boom -> i64 {
     if fail { throw Boom { msg: "detonated" } } else { 7 }

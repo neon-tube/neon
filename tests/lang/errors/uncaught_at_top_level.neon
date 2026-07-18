@@ -1,7 +1,7 @@
 //@ exit: 101
 //
 // An error that reaches the top of `main` uncaught terminates the process: the
-// error's type and its `Error::message()` go to stderr and the exit code is
+// error's type and its `Error::to_string()` go to stderr and the exit code is
 // non-zero. Never exit 0.
 //
 // `main` declares no `throws` here and does not need to: it carries an implicit
@@ -17,9 +17,10 @@ use std::io;
 
 record Boom { msg: str }
 
-impl Error for Boom {
-    fn message(error: Boom) -> str { error.msg }
+impl Display for Boom {
+    fn to_string(error: Boom) -> str { error.msg }
 }
+impl Error for Boom {}
 
 fn go() throws Boom -> i64 {
     throw Boom { msg: "unhandled" }

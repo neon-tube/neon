@@ -15,13 +15,15 @@ use std::io;
 record Boom { msg: str }
 record OtherError { msg: str }
 
-impl Error for Boom {
-    fn message(error: Boom) -> str { error.msg }
+impl Display for Boom {
+    fn to_string(error: Boom) -> str { error.msg }
 }
+impl Error for Boom {}
 
-impl Error for OtherError {
-    fn message(error: OtherError) -> str { error.msg }
+impl Display for OtherError {
+    fn to_string(error: OtherError) -> str { error.msg }
 }
+impl Error for OtherError {}
 
 fn go() throws Boom -> i64 {
     throw Boom { msg: "no" }

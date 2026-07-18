@@ -84,6 +84,10 @@ pub enum TypeErrorKind {
     NotIterable(String),
     /// `e[i]` where `e` cannot be indexed.
     NotIndexable(String),
+    /// A call to a throwing function outside any `try`.
+    BareThrowingCall,
+    /// `throw e` of a type the enclosing function does not declare in `throws`.
+    Throws { thrown: String, declared: String },
     /// `impl Sub for X` without the `impl Super for X` that Sub's `where` requires.
     MissingSupertrait { sub: String, required: String, ty: String },
     /// A value-position name nothing declares. Distinct from `Unknown`, which is a
@@ -174,6 +178,14 @@ impl fmt::Display for TypeError {
                 write!(f, "`{t}` is not a collection and cannot be iterated")
             }
             TypeErrorKind::NotIndexable(t) => write!(f, "`{t}` cannot be indexed"),
+            TypeErrorKind::BareThrowingCall => write!(
+                f,
+                "this call can throw, so it must be a `try` -- `try`, `try?` or `try!`"
+            ),
+            TypeErrorKind::Throws { thrown, declared } => write!(
+                f,
+                "this throws `{thrown}`, but the function only declares `throws {declared}`"
+            ),
             TypeErrorKind::MissingField(n) => {
                 write!(f, "this record is missing the required field `{n}`")
             }
@@ -1003,13 +1015,6 @@ impl Env {
         self.solver.t.nominal(n, args, fields)
     }
 
-    fn fields_visible(&self, decl_module: &[String], from: &[String], opaque: bool) -> bool {
-        if !opaque || from == decl_module {
-            return true;
-        }
-        // Module-scoped, not absolute: the declaring module and one parent.
-        matches!(decl_module.split_last(), Some((_, parent)) if from == parent)
-    }
 }
 
 fn decl_name(k: &ast::DeclKind) -> &str {
@@ -1095,7 +1100,6 @@ struct Contract<'a> {
     /// *other* `mu` on the way back is mutual recursion.
     key: &'a str,
     name: String,
-    module: Vec<String>,
     foreign: Vec<String>,
     path: Vec<(String, Vec<ast::TypeSpec>)>,
     errors: Vec<TypeError>,
@@ -1109,7 +1113,6 @@ fn contractivity(env: &Env, key: &str) -> (Vec<TypeError>, bool) {
         env,
         key,
         name: decl.name().to_string(),
-        module: decl.module.clone(),
         foreign: vec![],
         path: vec![],
         errors: vec![],
@@ -1242,16 +1245,13 @@ impl Contract<'_> {
             }
             // A data constructor with one field.
             Sort::Newtype(a) => self.walk(&a.value, &inner, Pos { guarded: true, ..pos }),
-            Sort::Record(r) => {
-                // Judged where the `mu` is declared: the same record is a data
-                // constructor with a guardable field in its own module, and an
-                // opaque atom with no position to guard outside it.
-                if self.env.fields_visible(&decl.module, &self.module, r.opaque) {
-                    for f in &r.fields {
-                        self.walk(&f.ty, &inner, Pos { guarded: true, ..pos });
-                    }
-                }
-            }
+            // A nominal record is opaque here. The recursive variable must occur in
+            // the `mu`'s own body -- as a generic argument, a tuple element, an arrow
+            // -- not by reaching into a separate record's fields. A record that
+            // references the variable is recursive on its own account, and records
+            // recurse without a `mu`. `mu type Inner = Rng` where `Rng` has a field
+            // of type `Inner` is not a recursive `mu`: `Inner` never names itself.
+            Sort::Record(_) => {}
         }
         self.path.pop();
     }

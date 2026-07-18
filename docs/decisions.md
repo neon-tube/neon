@@ -16,24 +16,22 @@ Well-formed iff all of:
 1. Recursive references occur **beneath a structural constructor**. `mu type T = T | i64`
    is an error.
 
-   A guard is a position **visible in the type**, in a covariant slot. Two forms qualify:
-   - a **generic argument**: `List[A]`, `Map[str, A]`. This is what guards
-     `mu type A = :ok | List[A]` — `A` is visible in the type expression, and List's
-     representation is irrelevant.
-   - a **declared field of a data constructor**: with `record Node { next: T | null }`,
-     `mu type T = Node` is well-formed.
+   The occurrence must be **in the `mu`'s own body**, guarded by a constructor written
+   there: a **generic argument** (`List[A]`, `Map[str, A]`), a **tuple element**, or an
+   **arrow return**. `mu type A = :ok | List[A]` guards `A` as List's argument.
 
-   An **opaque nominal atom does not qualify** — `opaque record Bytes {}` has neither a
-   generic argument nor a visible field, so there is no position for a recursive
-   occurrence to sit in. The test is visible type structure, not whether the checker can
-   unfold the representation.
+   The recursion is **not** discovered by reaching into a separate nominal record's
+   fields. `mu type Inner = Rng` where `record Rng { seed: Inner | null }` is **rejected**:
+   `Inner` never appears in its own body (`Rng`). The recursion there belongs to `Rng`,
+   and a record recurses on its own account without a `mu` — `record Rng { seed: Rng |
+   null }` needs no binder. Conflating "Rng is recursive" with "Inner is recursive"
+   also corrupts the reserve/define machinery, since the alias-to-a-back-referencing-record
+   drives a deferred union through an undefined id. So the rule is syntactic and local: the
+   variable in the body, or nothing.
 
-   **`opaque` is module-scoped, not absolute.** An opaque record's fields are visible
-   inside its own module and to a single parent module; only beyond that is it an atom. So
-   contractivity is judged **where the `mu type` is declared**: `opaque record Rng { seed: i64 }`
-   declared in `std::rand` is a data constructor with a guardable field inside `std::rand`
-   *and* inside `std`, its one parent — and an unguardable atom anywhere beyond that. The
-   same `mu type` can be well-formed in one module and rejected in another.
+   *(An earlier draft had `opaque` module-scoping affect this — a record's visible field
+   counting as a guard. Removed: it made `mu type Inner = Rng` well-formed, which it is
+   not, and `opaque` no longer bears on contractivity at all.)*
 
 2. Recursive references occur **only in covariant positions**. A function parameter is
    contravariant and therefore excluded; a return is covariant and allowed.

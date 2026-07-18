@@ -17,13 +17,15 @@ use std::string;
 record Boom { msg: str }
 record Fizz { msg: str }
 
-impl Error for Boom {
-    fn message(error: Boom) -> str { error.msg }
+impl Display for Boom {
+    fn to_string(error: Boom) -> str { error.msg }
 }
+impl Error for Boom {}
 
-impl Error for Fizz {
-    fn message(error: Fizz) -> str { error.msg }
+impl Display for Fizz {
+    fn to_string(error: Fizz) -> str { error.msg }
 }
+impl Error for Fizz {}
 
 fn go(fail: bool) throws Boom -> i64 {
     if fail { throw Boom { msg: "boom" } } else { 7 }

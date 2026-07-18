@@ -42,7 +42,7 @@ fn main() {
     io::println(to_string(list::len(grown)));
 
     // set on the outer list leaves the old outer list pointing at the old row.
-    let replaced = list::set(outer, 0, grown);
+    let replaced = try! list::set(outer, 0, grown);
     dump("outer: ", outer);
     dump("replaced: ", replaced);
 }

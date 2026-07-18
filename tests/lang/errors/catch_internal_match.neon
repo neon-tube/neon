@@ -12,13 +12,15 @@ use std::string;
 record IoError { msg: str }
 record ParseError { msg: str }
 
-impl Error for IoError {
-    fn message(error: IoError) -> str { error.msg }
+impl Display for IoError {
+    fn to_string(error: IoError) -> str { error.msg }
 }
+impl Error for IoError {}
 
-impl Error for ParseError {
-    fn message(error: ParseError) -> str { error.msg }
+impl Display for ParseError {
+    fn to_string(error: ParseError) -> str { error.msg }
 }
+impl Error for ParseError {}
 
 fn load(which: i64) throws IoError | ParseError -> str {
     if which == 0 { throw IoError { msg: "disk gone" } }

@@ -14,9 +14,10 @@ use std::io;
 
 record IoError { msg: str }
 
-impl Error for IoError {
-    fn message(error: IoError) -> str { error.msg }
+impl Display for IoError {
+    fn to_string(error: IoError) -> str { error.msg }
 }
+impl Error for IoError {}
 
 fn main() throws IoError -> i64 {
     io::println("unreachable");
