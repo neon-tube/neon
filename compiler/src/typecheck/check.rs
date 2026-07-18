@@ -396,9 +396,21 @@ impl Checker<'_> {
             }
             ExprKind::For { pat, iter, body } => {
                 let t = self.expr(module, iter, None);
+                let elem = match self.element_type(t) {
+                    Some(e) => e,
+                    None => {
+                        if !self.env.is_error(t) {
+                            let on = self.show(t);
+                            self.error(iter.span.clone(), TypeErrorKind::NotIterable(on));
+                        }
+                        self.poison()
+                    }
+                };
                 self.locals.push(vec![]);
-                self.bind_pattern(pat, t);
+                self.bind_pattern(pat, elem);
+                self.loop_breaks.push(vec![]);
                 self.block(module, body, None);
+                self.loop_breaks.pop();
                 self.locals.pop();
                 self.env.solver.t.tuple(vec![])
             }
@@ -431,11 +443,34 @@ impl Checker<'_> {
                 self.record_lit(module, e, path, fields, spread, expected)
             }
 
-            // Not yet: each needs something that does not exist. A guess here is
-            // exactly the fallback this design has no room for.
-            ExprKind::Index { .. } | ExprKind::Try { .. } => {
-                expected.unwrap_or_else(|| self.poison())
+            ExprKind::Index { base, index } => {
+                let t = self.expr(module, base, None);
+                // A two-argument collection -- `Map[K, V]` -- is keyed by K (#0) and
+                // yields V (#1). A one-argument `List[T]` is keyed by i64 and yields T.
+                let arg1 = self.arg_type(t, 1);
+                let (key, value) = match arg1 {
+                    Some(v) => (self.arg_type(t, 0), Some(v)),
+                    None => (Some(self.env.solver.t.i64()), self.element_type(t)),
+                };
+                if let Some(k) = key {
+                    self.expr(module, index, Some(k));
+                } else {
+                    self.expr(module, index, None);
+                }
+                match value {
+                    Some(v) => v,
+                    None => {
+                        if !self.env.is_error(t) {
+                            let on = self.show(t);
+                            self.error(e.span.clone(), TypeErrorKind::NotIndexable(on));
+                        }
+                        self.poison()
+                    }
+                }
             }
+
+            // Not yet: `try` needs the throws machinery it desugars into.
+            ExprKind::Try { .. } => expected.unwrap_or_else(|| self.poison()),
         }
     }
 
@@ -555,6 +590,19 @@ impl Checker<'_> {
 
     fn is_nullable(&self, ty: TyId) -> bool {
         self.env.solver.t.data(ty).base & super::types::B_NULL != 0
+    }
+
+    /// The element of a single-argument collection -- `List[T]` carries it in `#0`.
+    /// `for x in xs` and `xs[i]` both read it.
+    fn element_type(&mut self, ty: TyId) -> Option<TyId> {
+        self.arg_type(ty, 0)
+    }
+
+    /// A generic argument by position: `#0`, `#1`. `None` when the type has no such
+    /// slot, which is how a `Map` (two arguments) is told from a `List` (one).
+    fn arg_type(&mut self, ty: TyId, i: usize) -> Option<TyId> {
+        let label = self.env.solver.t.arg_label(i);
+        narrow::project_field(&mut self.env.solver, ty, label).ty()
     }
 
     /// The declared fields of a record type -- the user-written ones, dropping the

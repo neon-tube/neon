@@ -627,3 +627,35 @@ fn a_record_literal_checks_field_types() {
     let e = check("fn g(o: { a: i64 }) {} fn f() { g({ a: \"s\" }); }");
     assert!(e.iter().any(|k| matches!(k, TypeErrorKind::Mismatch { .. })), "{e:?}");
 }
+
+// ---- iteration and indexing ----
+
+const COLL: &str = "record List[T] {}  record Map[K, V] {}";
+
+#[test]
+fn a_for_loop_binds_the_element_type() {
+    clean(&format!("{COLL} fn f(xs: List[i64]) -> i64 {{ let s = 0; for x in xs {{ s = x; }} s }}"));
+    // The bound variable has the element type, so a str body is a mismatch.
+    mismatch(&format!(
+        "{COLL} fn f(xs: List[i64]) {{ for x in xs {{ let s: str = x; }} }}"
+    ));
+}
+
+#[test]
+fn iterating_a_non_collection_is_rejected() {
+    let e = check(&format!("{COLL} fn f(n: i64) {{ for x in n {{ }} }}"));
+    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::NotIterable(_))), "{e:?}");
+}
+
+#[test]
+fn a_list_index_yields_the_element() {
+    clean(&format!("{COLL} fn f(xs: List[str]) -> str {{ xs[0] }}"));
+    mismatch(&format!("{COLL} fn f(xs: List[i64]) -> str {{ xs[0] }}"));
+}
+
+#[test]
+fn a_map_index_is_keyed_and_yields_the_value() {
+    clean(&format!("{COLL} fn f(m: Map[str, i64]) -> i64 {{ m[\"k\"] }}"));
+    // The key must match: a str-keyed map cannot be indexed by i64.
+    mismatch(&format!("{COLL} fn f(m: Map[str, i64]) -> i64 {{ m[0] }}"));
+}

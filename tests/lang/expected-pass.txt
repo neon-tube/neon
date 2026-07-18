@@ -58,6 +58,7 @@ collections/nested_list_value_semantics.neon
 control/for_break_continue.neon
 control/for_empty_list.neon
 control/for_list.neon
+control/for_range.neon
 control/if_else_value.neon
 control/if_evaluates_one_branch.neon
 control/if_statement_no_else.neon

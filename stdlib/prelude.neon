@@ -10,6 +10,9 @@
 
 type Ordering = :lt | :eq | :gt
 
+// `for i in range(a, b)` — the half-open range [a, b) as a list.
+@native("neon_range") fn range(from: i64, to: i64) -> List[i64]
+
 // The built-in collections, nominal and covariant in their arguments. Opaque: the
 // storage is native, reached only through `std::collections::{list, map}`.
 opaque record List[T] {}
