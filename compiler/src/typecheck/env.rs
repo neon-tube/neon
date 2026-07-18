@@ -345,6 +345,8 @@ pub struct FnSig {
     pub ty: TyId,
     /// `false` for a protocol's required method.
     pub has_body: bool,
+    /// The runtime symbol of an `@native` fn, so lowering emits a native call.
+    pub native: Option<String>,
     pub span: Span,
 }
 
@@ -879,6 +881,11 @@ impl Env {
             let ps = params.iter().map(|p| p.1).collect();
             self.solver.t.arrow(ps, throws, ret)
         };
+        let native = f
+            .annotations
+            .iter()
+            .find(|a| a.name == "native")
+            .and_then(|a| a.arg.clone());
         FnSig {
             name: f.name.clone(),
             module: module.to_vec(),
@@ -889,6 +896,7 @@ impl Env {
             wheres,
             ty,
             has_body: f.body.is_some(),
+            native,
             span: span.clone(),
         }
     }

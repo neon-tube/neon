@@ -62,6 +62,7 @@ fn lower_fn(env: &Env, result: &TypecheckResult, module: &[String], f: &ast::FnD
     let mut lo = Lower {
         env,
         result,
+        module: module.to_vec(),
         b: Builder::new(mangle(module, &f.name), ret_repr.clone()),
         scope: vec![vec![]],
         terminated: false,
@@ -90,6 +91,8 @@ fn lower_fn(env: &Env, result: &TypecheckResult, module: &[String], f: &ast::FnD
 struct Lower<'a> {
     env: &'a Env,
     result: &'a TypecheckResult,
+    /// The module the current function is in, for resolving call targets.
+    module: Vec<String>,
     b: Builder,
     /// Local bindings, innermost last: a name resolves to its SSA value.
     scope: Vec<Vec<(String, Value)>>,
@@ -206,7 +209,7 @@ impl Lower<'_> {
                 self.b.emit(Op::Prim(un_prim(*op), vec![r]), repr, ty)
             }
             ExprKind::Binary { op, lhs, rhs } => self.lower_binary(*op, lhs, rhs, repr, ty),
-            ExprKind::Call { callee, args, .. } => self.lower_call(callee, args, repr, ty),
+            ExprKind::Call { callee, args, .. } => self.lower_call(e.id, callee, args, repr, ty),
             ExprKind::If { cond, then, else_ } => self.lower_if(cond, then, else_.as_deref(), repr, ty),
             ExprKind::Block(b) => self.lower_block(b).unwrap_or_else(|| self.unit(ty)),
             ExprKind::Return(v) => {
@@ -250,22 +253,67 @@ impl Lower<'_> {
         }
     }
 
-    fn lower_call(&mut self, callee: &Expr, args: &[Expr], repr: Repr, ty: TyId) -> Value {
+    fn lower_call(
+        &mut self,
+        id: crate::ast::ExprId,
+        callee: &Expr,
+        args: &[Expr],
+        repr: Repr,
+        ty: TyId,
+    ) -> Value {
         let arg_vs: Vec<Value> = args.iter().map(|a| self.lower_expr(a)).collect();
-        // A direct call to a named module function. Dispatch and closures come later.
+
+        // A dispatched call: the checker already chose the impl.
+        if let Some(res) = self.result.call(id) {
+            return self.lower_dispatch(res, callee, arg_vs, repr, ty);
+        }
+
+        // A call through a local of arrow type is a closure call.
         if let ExprKind::Path(p) = &callee.kind {
-            if p.len() == 1 && self.lookup(&p[0]).is_none() {
-                return self.b.emit(Op::Call { func: p[0].clone(), args: arg_vs }, repr, ty);
+            if let [one] = p.as_slice() {
+                if let Some(callee_v) = self.lookup(one) {
+                    return self.b.emit(Op::CallClosure { callee: callee_v, args: arg_vs }, repr, ty);
+                }
             }
-            if p.len() > 1 {
-                return self.b.emit(
-                    Op::Call { func: p.join("__"), args: arg_vs },
-                    repr,
-                    ty,
-                );
+            // A direct call to a named module function: native symbol or a Neon body.
+            if let Some(sig) = self.env.fn_named(&self.module, p) {
+                let op = match &sig.native {
+                    Some(sym) => Op::Native { symbol: sym.clone(), args: arg_vs },
+                    None => Op::Call { func: mangle(&sig.module, &sig.name), args: arg_vs },
+                };
+                return self.b.emit(op, repr, ty);
             }
         }
-        self.unhandled_note("call (closure/dispatch)", repr, ty)
+        self.unhandled_note("call target", repr, ty)
+    }
+
+    /// Lower a call the checker resolved by protocol dispatch. A `Direct` to a native
+    /// impl (the primitives) becomes a native call; the rest — user impls, switches,
+    /// and generic bounds — are lowered in a later pass and marked for now.
+    fn lower_dispatch(
+        &mut self,
+        res: &crate::typecheck::dispatch::Resolution,
+        callee: &Expr,
+        args: Vec<Value>,
+        repr: Repr,
+        ty: TyId,
+    ) -> Value {
+        use crate::typecheck::dispatch::Resolution;
+        let method = match &callee.kind {
+            ExprKind::Path(p) => p.last().cloned().unwrap_or_default(),
+            _ => return self.unhandled_note("dispatch callee", repr, ty),
+        };
+        match res {
+            Resolution::Direct(impl_id) => {
+                let m = self.env.impls()[impl_id.0].methods.iter().find(|m| m.name == method);
+                match m.and_then(|m| m.native.clone()) {
+                    Some(sym) => self.b.emit(Op::Native { symbol: sym, args }, repr, ty),
+                    None => self.unhandled_note("dispatch to user impl", repr, ty),
+                }
+            }
+            Resolution::Switch(_) => self.unhandled_note("dispatch switch", repr, ty),
+            Resolution::Bound { .. } => self.unhandled_note("dispatch bound", repr, ty),
+        }
     }
 
     fn lower_if(

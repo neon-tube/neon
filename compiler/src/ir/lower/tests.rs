@@ -92,3 +92,16 @@ fn @effectless(%0 i64) -> () {
 "
     );
 }
+
+#[test]
+fn native_calls_and_native_impl_dispatch() {
+    let ir = lower(
+        "protocol Display for T { fn to_string(v: T) -> str }
+         impl Display for i64 { @native(\"neon_i64_to_string\") fn to_string(v: i64) -> str }
+         @native(\"neon_io_println\") fn println(s: str)
+         fn main() { println(to_string(42)); }",
+    );
+    // main lowers to two native calls, the inner dispatched to the i64 impl.
+    assert!(ir.contains("native \"neon_i64_to_string\"(%0)"), "{ir}");
+    assert!(ir.contains("native \"neon_io_println\"(%1)"), "{ir}");
+}
