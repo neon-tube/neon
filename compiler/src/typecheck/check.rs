@@ -44,6 +44,7 @@ pub fn check_all(
         throw_sinks: vec![],
         bounds: vec![],
         rigids: vec![],
+        lambda_returns: vec![],
         capture_floors: vec![],
     };
     for (path, m) in modules {
@@ -99,6 +100,9 @@ struct Checker<'a> {
     /// The current function's generic names, so a type written in its body -- `as T`,
     /// `is T`, `let x: T` -- resolves `T` as the rigid variable it introduced.
     rigids: Vec<String>,
+    /// One frame per enclosing lambda, collecting the types its `return`s produce. A
+    /// lambda declares no return type, so its type is the union of its tail and these.
+    lambda_returns: Vec<Vec<TyId>>,
     /// One entry per enclosing lambda: the `locals` depth where that lambda's own
     /// scope begins. A name found in a frame below the innermost floor was captured,
     /// and assigning to a capture is an error -- the closure holds a private copy.
@@ -519,8 +523,17 @@ impl Checker<'_> {
 
             ExprKind::Return(v) => {
                 let want = self.ret;
-                if let Some(x) = v {
-                    self.expr(module, x, want);
+                let t = match v {
+                    Some(x) => self.expr(module, x, want),
+                    None => self.env.solver.t.tuple(vec![]),
+                };
+                // Inside a lambda, `return` returns from the *lambda* -- that is what
+                // lowering does, since a lambda is lifted to its own function -- so its
+                // type joins the lambda's, not the enclosing function's. Checking it
+                // against the enclosing function was unsound: a `str` returned through an
+                // `i64` slot compiled clean and was reinterpreted.
+                if let Some(frame) = self.lambda_returns.last_mut() {
+                    frame.push(t);
                 }
                 self.env.solver.t.never()
             }
@@ -539,12 +552,20 @@ impl Checker<'_> {
                     Some(x) => self.expr(module, x, None),
                     None => self.env.solver.t.null(),
                 };
-                if let Some(breaks) = self.loop_breaks.last_mut() {
-                    breaks.push(t);
+                match self.loop_breaks.last_mut() {
+                    Some(breaks) => breaks.push(t),
+                    // No enclosing loop -- either there is genuinely none, or a lambda
+                    // sits between here and it, which is the same thing at run time.
+                    None => self.error(e.span.clone(), TypeErrorKind::OutsideLoop("break".into())),
                 }
                 self.env.solver.t.never()
             }
-            ExprKind::Continue => self.env.solver.t.never(),
+            ExprKind::Continue => {
+                if self.loop_breaks.is_empty() {
+                    self.error(e.span.clone(), TypeErrorKind::OutsideLoop("continue".into()));
+                }
+                self.env.solver.t.never()
+            }
 
             ExprKind::While { cond, body } => {
                 let b = self.env.solver.t.bool();
@@ -683,15 +704,40 @@ impl Checker<'_> {
             param_tys.push(t);
         }
 
-        // A lambda has no `throws` clause, so it cannot throw. Check its body in a
-        // context that says so, and restore the enclosing one after.
+        // A lambda body is a new *function* context, and every function-scoped thing has
+        // to be reset for it -- not just `throws`. Leaving the rest in place let control
+        // flow escape a boundary it cannot actually cross at run time, because the lambda
+        // is lifted into its own function:
+        //
+        //   `return`      was checked against the enclosing function's return type, so a
+        //                 `str` could be returned through an `i64` slot. Unsound.
+        //   `throw`       was absorbed by an enclosing `try`, so the checker called an
+        //                 error handled that escapes uncaught at run time.
+        //   `break`       resolved to an enclosing loop, and reached `unreachable`.
+        //
+        // A lambda has no `throws` clause, so it still cannot throw; that part was already
+        // right.
         let want_ret = want.as_ref().map(|a| a.ret);
         let never = self.env.solver.t.never();
-        let saved = self.throws.replace(Throws::Declared(never));
-        let ret = self.expr(module, body, want_ret);
-        self.throws = saved;
+        let saved_throws = self.throws.replace(Throws::Declared(never));
+        let saved_ret = self.ret.take();
+        let saved_sinks = std::mem::take(&mut self.throw_sinks);
+        let saved_breaks = std::mem::take(&mut self.loop_breaks);
+        self.ret = want_ret;
+        self.lambda_returns.push(vec![]);
+
+        let tail = self.expr(module, body, want_ret);
+
+        let returned = self.lambda_returns.pop().unwrap_or_default();
+        self.throws = saved_throws;
+        self.ret = saved_ret;
+        self.throw_sinks = saved_sinks;
+        self.loop_breaks = saved_breaks;
         self.locals.pop();
         self.capture_floors.pop();
+
+        // The lambda's return type is its tail unioned with whatever its `return`s give.
+        let ret = returned.into_iter().fold(tail, |acc, t| self.union_branches(acc, t));
 
         let arrow = self.env.solver.t.arrow(param_tys, never, ret);
         self.result.set_lambda(e.id, arrow);
@@ -1067,7 +1113,18 @@ impl Checker<'_> {
         }
         let joined = p.join("::");
         if let Some(sig) = self.env.fn_named(module, p) {
-            return sig.ty;
+            // Using a *throwing* function as a value would lose its calling convention:
+            // `Repr::Closure` records parameters and result but not `throws`, so the
+            // tagged result it actually returns is read as its declared type. That
+            // produced invalid C, and once the thunk was corrected, a garbage value.
+            // Refuse it until the representation carries the throws.
+            let (ty, throws) = (sig.ty, sig.throws);
+            let never = self.env.solver.t.never();
+            if throws != never && !self.env.is_error(throws) {
+                self.error(e.span.clone(), TypeErrorKind::ThrowingFnAsValue(joined));
+                return self.poison();
+            }
+            return ty;
         }
         // A name that exists but is fenced off reports why, rather than "not in scope".
         if let Some(owner) = self.env.hidden_by_internal(module, p) {

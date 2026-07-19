@@ -90,6 +90,12 @@ pub enum TypeErrorKind {
     Unordered { ty: String },
     /// `a == b` on a type the backend cannot compare structurally.
     Unequatable { ty: String },
+    /// A *throwing* function used as a value. Its throws is not in the closure
+    /// representation, so the tagged-result convention would be lost.
+    ThrowingFnAsValue(String),
+    /// `break` or `continue` with no enclosing loop -- including one that only *looks*
+    /// enclosing, because a lambda sits in between.
+    OutsideLoop(String),
     /// A required (non-nullable) field the record literal did not provide.
     MissingField(String),
     /// `for x in e` where `e` is not a collection.
@@ -229,6 +235,20 @@ impl fmt::Display for TypeError {
             TypeErrorKind::Incomparable { left, right } => write!(
                 f,
                 "`{left}` and `{right}` share no common type, so they cannot be compared"
+            ),
+            TypeErrorKind::ThrowingFnAsValue(n) => write!(
+                f,
+                "`{n}` throws, so it cannot be used as a value yet. A closure's \
+                 representation records its parameters and result but not its `throws`, \
+                 so the tagged result a throwing function returns would be read as its \
+                 plain return type. Wrap it in a lambda that handles the error, or call \
+                 it directly"
+            ),
+            TypeErrorKind::OutsideLoop(kw) => write!(
+                f,
+                "`{kw}` has no loop to act on. A lambda is a function of its own, so a \
+                 loop *outside* it is not enclosing -- the lambda is lifted and called \
+                 later, and there is no frame left to jump out of"
             ),
             TypeErrorKind::Unequatable { ty } => write!(
                 f,

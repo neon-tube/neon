@@ -45,6 +45,8 @@ closures/capture_local.neon
 closures/closure_outlives_its_scope.neon
 closures/closure_type_mismatch.neon
 closures/closure_types.neon
+closures/lambda_is_its_own_function.neon
+closures/lambda_local_return.neon
 closures/lambda_basics.neon
 closures/rebind_captured_name_is_an_error.neon
 closures/shadowing_a_captured_name_is_fine.neon

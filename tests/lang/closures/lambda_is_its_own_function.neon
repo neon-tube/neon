@@ -1,0 +1,28 @@
+//@ compile-fail
+//@ error-contains: has no loop to act on
+//
+// A lambda is lifted into its own function, so control flow cannot cross out of it —
+// and the checker has to agree, because at run time there is no enclosing frame left
+// to jump to. Every one of these compiled before, and each escaped differently:
+//
+//   `return`   was checked against the *enclosing function's* return type, so a `str`
+//              could be returned through an `i64` slot. It compiled clean and printed
+//              garbage — the only memory-unsafe one.
+//   `throw`    was absorbed by an enclosing `try`, so the checker called the error
+//              handled while it escaped uncaught at run time.
+//   `break`    resolved to an enclosing loop and reached `unreachable`.
+//
+// `return` from a lambda is still fine — it returns from the *lambda*, which is what
+// lowering does. See closures/lambda_local_return.neon.
+
+use std::io;
+
+fn run(f: (i64) -> i64) -> i64 { f(1) }
+
+fn main() {
+    let total = 0;
+    for i in range(0, 3) {
+        total = total + run((x: i64) => { break; 0 });
+    };
+    io::println("#{total}");
+}

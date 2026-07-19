@@ -133,30 +133,32 @@ corpus programs run leak-free under ASan.
   diagnostic list is deduplicated by (span, kind), which is cheaper than threading a
   "probing, stay quiet" mode through every expression form.
 
-- **`return` inside a lambda is unsound.** The worst bug on this list: it compiles cleanly
-  and reinterprets a value at the wrong type. Pre-existing -- verified identical on
-  `7fbd131`.
+- ~~**Control flow escaped a lambda.**~~ **Fixed 2026-07-19.** A lambda is lifted into its
+  own function, but the checker did not reset the function-scoped context when descending
+  into one -- so `return`, `throw` and `break` were all checked against the *enclosing*
+  function. Three escapes, one cause, all pre-existing (verified on `7fbd131`):
 
-  The checker types `return` against the **enclosing function's** return type; lowering
-  lifts the lambda into its own function, where `return` returns from the *lambda*. When
-  those two types differ, a value crosses a typed boundary and is reinterpreted:
+  - **`return` was unsound.** Typed against the enclosing function's return type while
+    lowering returned from the lambda, so `apply((x: i64) => { return "not an i64"; 7 })`
+    compiled clean and read a `neon_str` as an `int64_t`. Memory-unsafe in general.
+  - **`throw` was absorbed by an enclosing `try`**, so the checker called an error handled
+    that escaped uncaught: the program printed `neon: uncaught error` and exited 101 from a
+    `try`/`catch` the checker had accepted.
+  - **`break` resolved to an enclosing loop** and reached `unreachable` at run time.
 
-  ```neon
-  fn apply(f: (i64) -> i64) -> i64 { f(1) }
-  fn outer() -> str {
-      let n = apply((x: i64) => { if x > 0 { return "not an i64"; }; 7 });
-      "got #{n}"                      // prints `got 0` -- a neon_str read as an int64_t
-  }
-  ```
+  `lambda()` now saves and resets `ret`, `throw_sinks` and `loop_breaks` alongside the
+  `throws` it already handled, and a lambda's return type is the union of its tail and its
+  `return`s. Separately, `break`/`continue` with *no* enclosing loop was silently accepted
+  anywhere -- `fn main() { break; }` compiled -- and is now a diagnostic.
 
-  Here it prints a harmless 0, but the same shape can read a pointer as an integer or an
-  integer as a pointer, so it is memory-unsafe, not merely wrong. Two candidate fixes: type
-  `return` against the lambda (making it lambda-local, matching what lowering does), or
-  reject `return` inside a lambda outright until non-local return is genuinely implemented.
-  The second is the smaller change and loses nothing anyone can currently rely on.
-
-  It also blocks the `using` combinator in `docs/design/resources.md`, whose body is a
-  lambda a caller would naturally want to `return` out of.
+- **A throwing function cannot be used as a value.** Now a clean diagnostic; it was invalid
+  C. `Repr::Closure` records parameters and result but **not `throws`**, so the tagged
+  result a throwing function returns is read as its declared type. Correcting `emit_thunks`
+  (which built the adapter from the declared type) only moved the failure: it then compiled
+  and returned garbage, because the *call site* has no idea to unpack a tagged result. The
+  real fix is for `Repr::Closure` to carry the throws; until then the checker refuses it,
+  which also blocks the point-free `resource::new(fd, close)` shape in
+  `docs/design/resources.md`.
 
 - **A protocol method call inside an interpolation hole miscompiles.** Accepted by the
   checker, rejected by the C compiler -- so it is a miscompile, and the shape is one

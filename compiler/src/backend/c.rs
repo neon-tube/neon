@@ -488,8 +488,13 @@ fn emit_thunks(out: &mut String, types: &TypeTable, program: &Program) {
         let args: Vec<String> = (0..target.params.len()).map(|i| format!("_a{i}")).collect();
         let sig_params = std::iter::once("neon_header* _env".to_string()).chain(params).collect::<Vec<_>>().join(", ");
         let call = format!("{}({})", mangle(name), args.join(", "));
-        let ret = c_ret_type(types, &target.ret);
-        let body = if matches!(target.ret, Repr::Unit) {
+        // A *throwing* function returns its tagged result, not its declared type -- the
+        // whole calling convention. Building the thunk from `target.ret` typed the
+        // adapter as returning `int64_t` while the call handed back an `nu1`, which the C
+        // compiler rejected; `fn_ret_type` is the function that already knows this.
+        let ret = fn_ret_type(types, target);
+        let returns_void = target.result_repr().is_none() && matches!(target.ret, Repr::Unit);
+        let body = if returns_void {
             format!("(void)_env; {call};")
         } else {
             format!("(void)_env; return {call};")

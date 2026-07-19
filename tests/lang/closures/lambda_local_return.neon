@@ -1,0 +1,26 @@
+// `return` inside a lambda returns from the *lambda*, not the enclosing function —
+// which is what lowering does, since a lambda is lifted into its own function.
+//
+// The checker used to type it against the enclosing function instead. When the two
+// return types differed, a value crossed a typed boundary and was reinterpreted: a
+// `str` returned through an `i64` slot compiled clean and printed garbage. The golden
+// here proves the value survives the round trip, not merely that it compiles.
+
+use std::io;
+use std::string;
+
+fn apply(f: (i64) -> str) -> str { f(1) }
+
+fn outer() -> str {
+    let n = apply((x: i64) => { if x > 0 { return "from the lambda"; }; "fell through" });
+    string::concat("outer got: ", n)
+}
+
+// The lambda's type is the union of its tail and its returns, so both arms count.
+fn pick(which: bool) -> i64 { apply2((x: i64) => { if which { return 10; }; 20 }) }
+fn apply2(f: (i64) -> i64) -> i64 { f(0) }
+
+fn main() {
+    io::println(outer());
+    io::println("#{pick(true)} #{pick(false)}");
+}
