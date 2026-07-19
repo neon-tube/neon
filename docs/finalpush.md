@@ -182,6 +182,9 @@ corpus programs run leak-free under ASan.
   - `emit_thunks` was fixed on the way and kept: it built the adapter from the declared
     return type rather than the tagged result. Correct on its own, and needed by any fix.
 
+  `docs/tasks/throwing-closures.md` is a self-contained brief for picking this up: every
+  call site, the failed approach with its exact symptom, and the cases that must work.
+
 - **A protocol method call inside an interpolation hole miscompiles.** Accepted by the
   checker, rejected by the C compiler -- so it is a miscompile, and the shape is one
   everybody writes:
