@@ -133,6 +133,38 @@ corpus programs run leak-free under ASan.
   diagnostic list is deduplicated by (span, kind), which is cheaper than threading a
   "probing, stay quiet" mode through every expression form.
 
+- **A protocol method call inside an interpolation hole miscompiles.** Accepted by the
+  checker, rejected by the C compiler -- so it is a miscompile, and the shape is one
+  everybody writes:
+
+  ```neon
+  let e = KeyError { message: "x" };
+  io::println("failed: #{message(e)}");   // 'neon_unit' has no member named 'fn'
+  ```
+
+  Interpolation desugars to `to_string(hole)`, so this is nested dispatch, and the inner
+  call's resolution appears to be lost -- codegen emits a closure call on a unit. A plain
+  function call in a hole is fine; it is specifically a protocol method. `try`/`catch` is
+  not involved, despite where it was first noticed.
+
+- **A named throwing function used as a value miscompiles.** `emit_thunks` builds the
+  closure-ABI adapter from the function's *declared* return type, but a throwing function
+  returns the tagged result, so the thunk returns `nu1` from a slot typed `int64_t`:
+
+  ```neon
+  fn boom(n: i64) throws IndexError -> i64 { ... }
+  fn run(f: (i64) throws IndexError -> i64) throws IndexError -> i64 { try f(1) }
+  run(boom)                                // gcc: incompatible types when returning 'nu1'
+  ```
+
+  A lambda in the same position is fine, which is why this went unnoticed. It blocks the
+  point-free `resource::new(fd, close)` shape in `docs/design/resources.md`.
+
+- **An error in a stdlib module is reported against the *user's* file, with a nonsense
+  span.** A broken stdlib file poisons every compile -- expected -- but the diagnostic
+  points at the closing brace of whatever the user was compiling, naming a call that is not
+  there. Cost real time during the `std::fs` work; would badly confuse anyone hitting it.
+
 - ~~**A list used as a map key leaks.**~~ **Fixed 2026-07-19.** The map natives never had
   a stated ownership rule for their *key*, only for the map. `contains` released the map
   and dropped the key on the floor, and `set` discharged it only on the path where it

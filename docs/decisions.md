@@ -394,6 +394,67 @@ Ordering recurses, so a type is ordered only when every part of it is. `Map` has
 reaches itself is a pointer with nothing to walk. All three read as one ordered shape at
 the top level, and all three are diagnostics.
 
+### Cleanup is a value, not a keyword
+
+*(Decided 2026-07-19. Designed, not yet implemented — `docs/design/resources.md` is the
+spec.)*
+
+    opaque record File { r: Resource[i64, IoError] }
+
+A value that owns something outside the program -- a descriptor, a socket, a lock -- is held
+in a `Resource[T, E]`: a refcounted runtime object carrying a payload, a cleanup function,
+and an armed flag. It is an ordinary stdlib type in `std::resource`, not a language
+construct.
+
+Cleanup needs *identity*, and that is forced rather than chosen. Neon is ARC with value
+semantics, so an inline record is copied freely and "the last reference dies" is undefined
+for one. The refcount pass does hook a record's last use -- that is how a `str` field gets
+released -- but it fires once per copy, which for a user-supplied cleanup means a double
+close. Rust escapes this with affine types (`Copy` and `Drop` are mutually exclusive);
+Swift, which is ARC with copyable values exactly as Neon is, allows `deinit` only on
+classes. Neon takes Swift's answer, because linearity would split the type system into
+copyable and non-copyable and every generic, container and closure would then have to say
+which it accepts.
+
+Both paths work and neither is the fallback:
+
+    try fs::close(file)     // explicit: disarms, closes, and you see the error
+    // or just stop using it: cleanup runs at its last use
+
+`E` is the error cleanup may throw, carried on the arrow type. That choice pays three
+times: `release` composes with `try`; infallible cleanup is `Resource[T, never]` whose
+`release` needs no `try` at all; and double-release needs no sentinel, because `release`
+disarms first and a second call has nothing left to run.
+
+*Consequences, stated because they bite:*
+
+**Only the explicit path can observe failure.** Drop has no error channel, so automatic
+cleanup discards the error. That is the answer to "why have `close` when it closes itself" --
+a question Rust never answered well, since its `File` has no `close` at all.
+
+**Cleanup fires at the last *use*, not at scope exit.** Earlier than RAII, which is good for
+a descriptor and fatal for a lock guard: `let g = lock(m)` whose handle is never touched
+again releases immediately, before the section it was meant to protect. Scope-lifetime
+resources are not expressible under last-use ARC.
+
+**A resource in a cycle is not prompt.** It closes when the collector runs. Every other path
+is deterministic; this one is the exception, and it is a property of having a collector at
+all.
+
+**A trap skips cleanup entirely** -- `neon_trap` calls `_exit` with no unwinding, by design,
+so buffered writes are lost on the way out.
+
+### The compiler learns a type's representation from an annotation, not a name
+
+`record_repr` matched the literal strings `"List"` and `"Map"` to give them runtime
+representations, and adding `File` to that table was what made file handles magic.
+`@runtime("neon_list")` on the declaration replaces it: the marker travels with the type,
+so nothing is hardcoded, `File` becomes an ordinary record holding a `Resource`, and the
+special-case count goes from three to zero.
+
+Stdlib-only, like markers. It names a C type the backend must already know, and pointing it
+at one that does not match the expected ABI is the same hazard `@native` carries.
+
 ### Markers: a bound with no methods
 
 *(Decided 2026-07-19, alongside structural comparison.)*
