@@ -225,6 +225,13 @@ fn emit_inst(out: &mut String, types: &TypeTable, f: &Func, inst: &crate::ir::ss
         Op::Native { symbol, args } if is_list_builder(symbol) => {
             emit_list_builder(out, types, f, inst.result, symbol, args)
         }
+        // A native whose Neon signature returns a tuple takes the extra slots as C
+        // out-parameters. See `emit_native_out`.
+        Op::Native { symbol, args }
+            if inst.result.is_some_and(|v| matches!(f.value_repr(v), Repr::Tuple(_))) =>
+        {
+            emit_native_out(out, types, f, inst.result, symbol, args)
+        }
         Op::MakeClosure { func, captures } => {
             emit_make_closure(out, types, f, inst.result, func, captures)
         }
@@ -326,6 +333,7 @@ fn is_list_builder(symbol: &str) -> bool {
             | "neon_map_new"
             | "neon_map_set"
             | "neon_map_contains"
+            | "neon_map_remove"
             | "neon_map_keys"
             | "neon_map_values"
     )
@@ -337,6 +345,62 @@ fn map_kv(f: &Func, v: Value) -> (Repr, Repr) {
         Repr::Map(k, val) => ((**k).clone(), (**val).clone()),
         _ => (Repr::Any, Repr::Any),
     }
+}
+
+/// A native that returns several values.
+///
+/// A C function returns one value, and a native can build neither a record nor a tuple --
+/// codegen owns those layouts, and they differ per program. So an operation that produces
+/// data *and* can fail had nowhere to put the status, which is what pushed an earlier
+/// draft of `std::fs` into an errno-style global.
+///
+/// The fix is a calling convention rather than a language feature. A `@native` whose Neon
+/// return type is a tuple takes the tail of that tuple as C out-parameters:
+///
+///     @native("neon_io_read_all") fn read_all(fd: i64) -> (str, i64)
+///     // calls: neon_str neon_io_read_all(int64_t fd, int64_t* out_1)
+///
+/// Nothing new appears in the language: the caller sees an ordinary tuple and destructures
+/// it. No annotation is needed either, and that is not a heuristic -- a native can never
+/// return a tuple *by value*, since it cannot name the generated struct, so a tuple return
+/// on a native means out-parameters and nothing else.
+fn emit_native_out(
+    out: &mut String,
+    types: &TypeTable,
+    f: &Func,
+    result: Option<Value>,
+    symbol: &str,
+    args: &[Value],
+) {
+    let Some(r) = result else { return };
+    let Repr::Tuple(elems) = f.value_repr(r).clone() else { return };
+    let Some((first, rest)) = elems.split_first() else { return };
+
+    let mut call_args: Vec<String> = args.iter().map(|&v| prim_operand(f, v)).collect();
+    let slot = |i: usize| format!("{}_out{i}", var(r));
+
+    let _ = writeln!(out, "{{");
+    for (i, e) in rest.iter().enumerate() {
+        let _ = writeln!(out, "{} {};", types.c_type(e), slot(i));
+        call_args.push(format!("&{}", slot(i)));
+    }
+    let call = format!("{symbol}({})", call_args.join(", "));
+
+    // The direct return is the tuple's first element; a `()` there means the native
+    // returns nothing and every result travels through an out-parameter.
+    let mut fields: Vec<String> = Vec::new();
+    if matches!(first, Repr::Unit) {
+        let _ = writeln!(out, "{call};");
+        fields.push("._0 = neon_unit_v()".to_string());
+    } else {
+        let _ = writeln!(out, "{} {}_ret = {call};", types.c_type(first), var(r));
+        fields.push(format!("._0 = {}_ret", var(r)));
+    }
+    for i in 0..rest.len() {
+        fields.push(format!("._{} = {}", i + 1, slot(i)));
+    }
+    let _ = writeln!(out, "{} = ({}){{ {} }};", var(r), types.c_type(f.value_repr(r)), fields.join(", "));
+    let _ = writeln!(out, "}}");
 }
 
 fn emit_list_builder(out: &mut String, types: &TypeTable, f: &Func, result: Option<Value>, symbol: &str, args: &[Value]) {
@@ -360,6 +424,13 @@ fn emit_list_builder(out: &mut String, types: &TypeTable, f: &Func, result: Opti
             )
         }
         "neon_map_contains" => format!("neon_map_contains({}, &{})", var(args[0]), var(args[1])),
+        "neon_map_remove" => {
+            // The key crosses by address and must be coerced to the map's key repr first,
+            // exactly as `set` does -- a narrower argument would otherwise be read at the
+            // wrong width through the void pointer.
+            let (k, _) = map_kv(f, r);
+            format!("neon_map_remove({}, {})", var(args[0]), addr_of(types, f, args[1], &k))
+        }
         "neon_map_keys" | "neon_map_values" => {
             let elem = list_elem(types, f, r);
             format!("{symbol}({}, {})", var(args[0]), types.witness_ref(&elem))
@@ -629,6 +700,10 @@ fn eq_expr(types: &TypeTable, r: &Repr, a: &str, b: &str) -> String {
         Repr::List(_) => format!("neon_list_eq({a}, {b})"),
         // Same keys with equal values, regardless of slot order.
         Repr::Map(_, _) => format!("neon_map_eq({a}, {b})"),
+        // A handle has no content to compare; two of them are the same file only when they
+        // are the same handle. `is_equatable` rejects it, so this is unreachable in a
+        // checked program and exists to keep the match honest.
+        Repr::File => format!("({a} == {b})"),
         // A self-referencing record is a pointer, and comparing it means walking through
         // that pointer -- which a nested expression cannot do, since the walk recurses.
         // `emit_boxed_eq` generates one function per boxed record for exactly this.
@@ -1209,7 +1284,7 @@ fn rc_parts_rec(
     match repr {
         Repr::Str => out.push(format!("{func}({expr}.owner)")),
         Repr::Closure { .. } => out.push(format!("{func}({expr}.env)")),
-        Repr::List(_) | Repr::Map(_, _) | Repr::Any => {
+        Repr::List(_) | Repr::Map(_, _) | Repr::File | Repr::Any => {
             out.push(format!("{func}((neon_header*){expr})"))
         }
         // A union is an inline `{tag, payload}`, so only the live variant's counted parts

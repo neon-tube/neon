@@ -1,6 +1,6 @@
 // There is exactly one `catch` clause — no multi-catch. Discriminating between
 // error kinds is done with an ordinary `match` inside the catch body, over `e`,
-// which the checker types as the callee's error union (`IoError | DecodeError`
+// which the checker types as the callee's error union (`ReadError | DecodeError`
 // here). No new syntax is involved: the catch body is just an expression.
 //
 // Because `e` is the declared union and nothing wider, the internal match is
@@ -9,21 +9,21 @@
 use std::io;
 use std::string;
 
-record IoError { msg: str }
+record ReadError { msg: str }
 record DecodeError { msg: str }
 
-impl Display for IoError {
-    fn to_string(error: IoError) -> str { error.msg }
+impl Display for ReadError {
+    fn to_string(error: ReadError) -> str { error.msg }
 }
-impl Error for IoError { fn message(e: IoError) -> str { e.msg } }
+impl Error for ReadError { fn message(e: ReadError) -> str { e.msg } }
 
 impl Display for DecodeError {
     fn to_string(error: DecodeError) -> str { error.msg }
 }
 impl Error for DecodeError { fn message(e: DecodeError) -> str { e.msg } }
 
-fn load(which: i64) throws IoError | DecodeError -> str {
-    if which == 0 { throw IoError { msg: "disk gone" } }
+fn load(which: i64) throws ReadError | DecodeError -> str {
+    if which == 0 { throw ReadError { msg: "disk gone" } }
     else if which == 1 { throw DecodeError { msg: "bad byte" } }
     else { "loaded" }
 }
@@ -31,7 +31,7 @@ fn load(which: i64) throws IoError | DecodeError -> str {
 fn attempt(which: i64) -> str {
     try load(which) catch (e) {
         match e {
-            is IoError => string::concat("io: ", e.msg),
+            is ReadError => string::concat("io: ", e.msg),
             is DecodeError => string::concat("parse: ", e.msg),
         }
     }

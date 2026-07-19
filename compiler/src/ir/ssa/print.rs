@@ -166,6 +166,7 @@ pub fn repr(r: &Repr) -> String {
         Repr::Null => "null".into(),
         Repr::Unit => "()".into(),
         Repr::Tag => "tag".into(),
+        Repr::File => "File".into(),
         Repr::BoxedRec(a) => format!("box#{a}"),
         Repr::Record { name, fields } => {
             let fs: Vec<String> = fields.iter().map(|(n, r)| format!("{n}: {}", repr(r))).collect();

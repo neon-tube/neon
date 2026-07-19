@@ -92,3 +92,84 @@ fn merge[T](a: List[T], b: List[T], cmp: (T, T) -> Ordering) -> List[T] {
     };
     out
 }
+
+// ---- queries ----
+//
+// `contains` and `index_of` compare with `==`, which is structural on every type but a
+// closure and needs no bound (equality is total by design -- see docs/decisions.md), so
+// neither takes a `where`.
+
+fn is_empty[T](xs: List[T]) -> bool {
+    len(xs) == 0
+}
+
+// `null` rather than a throw: asking for the first element of a possibly-empty list is
+// ordinary, and the caller usually has something to do in the empty case. `get` throws
+// because an out-of-range *index* is a mistake; an empty list is not.
+fn first[T](xs: List[T]) -> T | null {
+    if is_empty(xs) { null } else { xs[0] }
+}
+
+fn last[T](xs: List[T]) -> T | null {
+    if is_empty(xs) { null } else { xs[len(xs) - 1] }
+}
+
+fn contains[T](xs: List[T], v: T) -> bool {
+    let found = false;
+    for x in xs {
+        if x == v {
+            found = true;
+        };
+    };
+    found
+}
+
+// The first index holding `v`, or `null`. Mirrors `string::find`, which answers the same
+// question about bytes and returns the same shape.
+fn index_of[T](xs: List[T], v: T) -> i64 | null {
+    let at: i64 | null = null;
+    let i = 0;
+    for x in xs {
+        if x == v and at is null {
+            at = i;
+        };
+        i = i + 1;
+    };
+    at
+}
+
+// ---- transformations ----
+
+fn reverse[T](xs: List[T]) -> List[T] {
+    let out: List[T] = [];
+    let i = len(xs);
+    while i > 0 {
+        i = i - 1;
+        out = push(out, xs[i]);
+    };
+    out
+}
+
+// Half-open `[from, to)`, matching `string::slice` and `range`.
+fn slice[T](xs: List[T], from: i64, to: i64) throws IndexError -> List[T] {
+    if from < 0 or from > to or to > len(xs) {
+        throw IndexError { message: "slice #{from}..#{to} out of range for length #{len(xs)}" };
+    };
+    let out: List[T] = [];
+    let i = from;
+    while i < to {
+        out = push(out, xs[i]);
+        i = i + 1;
+    };
+    out
+}
+
+// Monomorphic because there is no numeric bound to write and no overloading: `sum` over
+// `i64` is the case that comes up.
+fn sum(xs: List[i64]) -> i64 {
+    let total = 0;
+    for x in xs {
+        total = total + x;
+    };
+    total
+}

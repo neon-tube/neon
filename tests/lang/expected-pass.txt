@@ -48,6 +48,7 @@ closures/closure_types.neon
 closures/lambda_basics.neon
 closures/rebind_captured_name_is_an_error.neon
 closures/shadowing_a_captured_name_is_fine.neon
+collections/iolist_and_files.neon
 collections/list_construction.neon
 collections/list_element_type_is_checked.neon
 collections/list_generics_are_covariant.neon
@@ -66,6 +67,7 @@ collections/map_iteration.neon
 collections/map_list_key.neon
 collections/map_set_does_not_mutate_base.neon
 collections/nested_list_value_semantics.neon
+collections/stdlib_breadth.neon
 control/for_break_continue.neon
 control/for_empty_list.neon
 control/for_list.neon

@@ -14,3 +14,18 @@ fn get[K, V](m: Map[K, V], k: K) throws KeyError -> V {
 @native("neon_map_contains") fn contains[K, V](m: Map[K, V], k: K) -> bool
 @native("neon_map_keys") fn keys[K, V](m: Map[K, V]) -> List[K]
 @native("neon_map_values") fn values[K, V](m: Map[K, V]) -> List[V]
+
+fn is_empty[K, V](m: Map[K, V]) -> bool {
+    len(m) == 0
+}
+
+// `remove` on an absent key is not an error: it says "this key is not in the result",
+// which is already true. Returning the map unchanged keeps it usable in a chain.
+@native("neon_map_remove") fn remove[K, V](m: Map[K, V], k: K) -> Map[K, V]
+
+// The value for `k`, or `fallback`. `get` throws because a missing key is often a
+// mistake; when it is not, this is the shape that says so at the call site rather than
+// through a `try`.
+fn get_or[K, V](m: Map[K, V], k: K, fallback: V) -> V {
+    if contains(m, k) { m[k] } else { fallback }
+}

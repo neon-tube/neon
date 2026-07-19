@@ -46,3 +46,109 @@ fn find(s: str, needle: str) -> i64 | null {
 @native("neon_str_to_lower") fn to_lower(s: str) -> str
 @native("neon_str_repeat") fn repeat(s: str, n: i64) -> str
 @native("neon_str_is_empty") fn is_empty(s: str) -> bool
+
+// ---- splitting and trimming ----
+//
+// Written here rather than as natives: each returns a `List[str]` or builds one, and a C
+// function cannot construct a list without the element's value-witness, which codegen
+// generates per program. Same reason `range` lives in the prelude.
+
+// The parts of `s` between each occurrence of `sep`, left to right. Adjacent separators
+// yield empty parts, and a separator at either end yields an empty part there, so
+// `split(",a,", ",")` is `["", "a", ""]` -- the inverse of `join`, which is the property
+// worth preserving.
+//
+// An empty separator returns `[s]`. Splitting on nothing has no meaningful answer, and the
+// alternatives are worse: a loop that never advances, or a silent per-byte split that
+// would cut a multi-byte character in half.
+fn split(s: str, sep: str) -> List[str] {
+    if is_empty(sep) {
+        [s]
+    } else {
+        let out: List[str] = [];
+        let rest = s;
+        let at = raw::index_of(rest, sep);
+        while at >= 0 {
+            out = std::collections::list::push(out, raw::slice_unchecked(rest, 0, at));
+            rest = raw::slice_unchecked(rest, at + byte_len(sep), byte_len(rest));
+            at = raw::index_of(rest, sep);
+        };
+        std::collections::list::push(out, rest)
+    }
+}
+
+// Split on newlines, dropping a trailing `\r` so a CRLF file does not leave one on every
+// line. A trailing newline does not produce a final empty line: `"a\n"` is `["a"]`, which
+// is what reading a text file line by line should give.
+fn lines(s: str) -> List[str] {
+    let out: List[str] = [];
+    if is_empty(s) {
+        out
+    } else {
+        // Drop one trailing newline before splitting, so `"a\n"` is `["a"]` rather than
+        // `["a", ""]`. Doing it here rather than after avoids depending on a list slice.
+        let body = trim_end_of(s, "\n");
+        for part in split(body, "\n") {
+            out = std::collections::list::push(out, trim_end_of(part, "\r"));
+        };
+        out
+    }
+}
+
+internal mod raw_ws {
+    // Space, tab, newline, carriage return. Byte-oriented, like everything else here: a
+    // Unicode space is not trimmed, and the name would have to say so if it were.
+    fn is_space(c: str) -> bool {
+        c == " " or c == "\t" or c == "\n" or c == "\r"
+    }
+}
+
+fn trim_start(s: str) -> str {
+    let i = 0;
+    let n = byte_len(s);
+    while i < n and raw_ws::is_space(raw::char_at_unchecked(s, i)) {
+        i = i + 1;
+    };
+    raw::slice_unchecked(s, i, n)
+}
+
+fn trim_end(s: str) -> str {
+    let n = byte_len(s);
+    while n > 0 and raw_ws::is_space(raw::char_at_unchecked(s, n - 1)) {
+        n = n - 1;
+    };
+    raw::slice_unchecked(s, 0, n)
+}
+
+fn trim(s: str) -> str {
+    trim_start(trim_end(s))
+}
+
+// Drop one trailing occurrence of `suffix`, if present. Not general trimming -- `lines`
+// wants exactly this for `\r` and for the final newline.
+fn trim_end_of(s: str, suffix: str) -> str {
+    if !is_empty(suffix) and ends_with(s, suffix) {
+        raw::slice_unchecked(s, 0, byte_len(s) - byte_len(suffix))
+    } else {
+        s
+    }
+}
+
+// Every occurrence of `from` replaced by `to`, left to right and non-overlapping. An empty
+// `from` matches nothing, for the same reason it does not split.
+fn replace(s: str, from: str, to: str) -> str {
+    if is_empty(from) {
+        s
+    } else {
+        let out = "";
+        let rest = s;
+        let at = raw::index_of(rest, from);
+        while at >= 0 {
+            out = concat(out, raw::slice_unchecked(rest, 0, at));
+            out = concat(out, to);
+            rest = raw::slice_unchecked(rest, at + byte_len(from), byte_len(rest));
+            at = raw::index_of(rest, from);
+        };
+        concat(out, rest)
+    }
+}

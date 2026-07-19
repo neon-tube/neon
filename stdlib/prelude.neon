@@ -31,6 +31,26 @@ fn range(from: i64, to: i64) -> List[i64] {
 opaque record List[T] {}
 opaque record Map[K, V] {}
 
+// An open file. Here rather than in `std::fs` for the same mechanical reason as the two
+// above: the compiler recognises the name and gives it a runtime representation. Being
+// refcounted is the point -- the descriptor closes when the last reference dies, so
+// cleanup rides on ARC instead of on the caller remembering, and leaving through a `throw`
+// leaks nothing. `opaque` keeps its innards invisible; there is nothing to see anyway.
+opaque record File {}
+
+// Bytes that are not text. `str` already holds arbitrary bytes -- slicing it may split a
+// UTF-8 sequence and nothing validates -- so this is a *nominal* distinction rather than a
+// new representation: it costs nothing at run time, and it stops a PNG being typed as
+// something you would call `to_upper` on. Cross over with `as` in either direction, and
+// reach the whole `std::string` API by casting.
+newtype Bytes = str
+
+// What can be written in one go. A tree rather than a buffer: building it costs no copying
+// and no concatenation, and `fs::write_all` turns the leaves into an `iovec` array for a
+// single `writev`. This is Erlang's iodata, and it is the reason immutable strings do not
+// make output quadratic.
+mu type IoList = str | Bytes | List[IoList]
+
 // ---- markers ----
 
 // A bound with no methods: `where T: Ord` says T can be ordered, and the compiler
@@ -75,14 +95,17 @@ protocol Mappable for C[_] {
 record IndexError { message: str }
 record ParseError { message: str }
 record KeyError { message: str }
+record IoError { message: str }
 
 impl Display for IndexError { fn to_string(v: IndexError) -> str { v.message } }
 impl Display for ParseError { fn to_string(v: ParseError) -> str { v.message } }
 impl Display for KeyError { fn to_string(v: KeyError) -> str { v.message } }
+impl Display for IoError { fn to_string(v: IoError) -> str { v.message } }
 
 impl Error for IndexError { fn message(v: IndexError) -> str { v.message } }
 impl Error for ParseError { fn message(v: ParseError) -> str { v.message } }
 impl Error for KeyError { fn message(v: KeyError) -> str { v.message } }
+impl Error for IoError { fn message(v: IoError) -> str { v.message } }
 
 // ---- primitive Display ----
 

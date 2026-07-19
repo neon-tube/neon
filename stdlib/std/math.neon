@@ -1,0 +1,30 @@
+// Numbers.
+//
+// `f64` keeps IEEE semantics here as everywhere else in the language: nothing traps and
+// nothing throws. `sqrt(-1.0)` is NaN, `1.0 / 0.0` is infinity, and a caller who cares
+// asks with `is_nan`/`is_infinite`. That is the same answer `==` and `<` already give for
+// NaN — see "Comparison is structural" in docs/decisions.md.
+//
+// `i64` is the opposite, and stays so: `abs(min_i64)` has no representable answer, so it
+// traps exactly as division by zero does. Two types, two contracts, each stated.
+//
+// There is no overloading, so the two `abs` are two names.
+
+@native("neon_f64_sqrt") fn sqrt(x: f64) -> f64
+@native("neon_f64_pow") fn pow(base: f64, exp: f64) -> f64
+@native("neon_f64_floor") fn floor(x: f64) -> f64
+@native("neon_f64_ceil") fn ceil(x: f64) -> f64
+@native("neon_f64_round") fn round(x: f64) -> f64
+@native("neon_f64_abs") fn abs(x: f64) -> f64
+@native("neon_f64_is_nan") fn is_nan(x: f64) -> bool
+@native("neon_f64_is_infinite") fn is_infinite(x: f64) -> bool
+
+// Traps on `min_i64`, whose negation is not an i64.
+@native("neon_i64_abs") fn abs_int(a: i64) -> i64
+
+// Exact only up to 2^53; beyond that it rounds, as in every language with both types.
+@native("neon_i64_to_f64") fn to_f64(a: i64) -> f64
+
+// Truncates toward zero. Traps on NaN or a value outside the i64 range, where the C cast
+// would otherwise be undefined.
+@native("neon_f64_to_i64") fn to_int(x: f64) -> i64

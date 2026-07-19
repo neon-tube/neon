@@ -9,13 +9,13 @@
 
 use std::io;
 
-record IoError {}
+record OpenError {}
 
-type Risky = (i64) throws IoError -> i64
+type Risky = (i64) throws OpenError -> i64
 type Pure = (i64) -> i64
 
 // A thrown type is a type, so it unions like one.
-type Fussy = (i64) throws IoError | :timeout -> i64
+type Fussy = (i64) throws OpenError | :timeout -> i64
 
 fn main() {
     io::println("ok");

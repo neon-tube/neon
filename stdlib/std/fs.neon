@@ -1,0 +1,165 @@
+// Files.
+//
+// A `File` is a handle: open once, read or write many times, close when done. `opaque`
+// means its field is visible only inside this module, so nothing outside can read a
+// descriptor out of it or forge one from an integer.
+//
+// Failure is a value at the boundary and a throw above it. Every native returns `-errno`,
+// and `read_all` -- which returns data *and* can fail -- uses a native out-parameter,
+// which codegen hands back as a tuple. Nothing is stashed in a global for the caller to
+// read afterwards.
+//
+// Text only for now: there is no buffer type, so `read` hands back a `str` and
+// `read_bytes` the same bytes typed as `Bytes`. Both are the same representation --
+// `str` in this language is already unvalidated bytes.
+//
+// A path is a `str`. A `Path` type would buy separator handling and normalisation, which
+// nothing here needs yet.
+
+use std::string;
+
+internal mod raw {
+    @native("neon_io_open") fn open(path: str, mode: i64) -> i64
+    @native("neon_file_new") fn wrap(fd: i64) -> File
+    @native("neon_io_close") fn close(f: File) -> i64
+    // Returns the contents and the status together: the tuple's tail is a C out-parameter.
+    @native("neon_io_read_all") fn read_all(f: File) -> (str, i64)
+    @native("neon_io_writev") fn writev(f: File, parts: List[str]) -> i64
+    @native("neon_io_remove") fn remove(path: str) -> i64
+    @native("neon_io_strerror") fn strerror(code: i64) -> str
+}
+
+@native("neon_io_exists") fn exists(path: str) -> bool
+
+fn fail(code: i64, what: str, path: str) throws IoError -> null {
+    throw IoError { message: "#{what} `#{path}`: #{raw::strerror(code)}" };
+}
+
+// ---- handles ----
+
+fn open(path: str) throws IoError -> File {
+    let fd = raw::open(path, 0);
+    if fd < 0 {
+        try fail(fd, "cannot open", path);
+    };
+    raw::wrap(fd)
+}
+
+fn create(path: str) throws IoError -> File {
+    let fd = raw::open(path, 1);
+    if fd < 0 {
+        try fail(fd, "cannot create", path);
+    };
+    raw::wrap(fd)
+}
+
+fn open_append(path: str) throws IoError -> File {
+    let fd = raw::open(path, 2);
+    if fd < 0 {
+        try fail(fd, "cannot open", path);
+    };
+    raw::wrap(fd)
+}
+
+// Release the descriptor now rather than whenever the handle dies. Optional -- ARC closes
+// it either way -- and closing twice is a no-op, because a closed handle has nothing left
+// to fail at and an fd number gets reused.
+fn close(f: File) throws IoError -> null {
+    let code = raw::close(f);
+    if code < 0 {
+        try fail(code, "cannot close", "<file>");
+    };
+    null
+}
+
+// ---- reading and writing through a handle ----
+
+fn read_all(f: File) throws IoError -> str {
+    let (data, code) = raw::read_all(f);
+    if code < 0 {
+        try fail(code, "cannot read", "<file>");
+    };
+    data
+}
+
+// Write every piece of `data`, in order, in a single `writev`. The payload bytes are never
+// copied: the tree's leaves become an `iovec` array of pointer/length pairs.
+fn write_all(f: File, data: IoList) throws IoError -> null {
+    let code = raw::writev(f, flatten(data));
+    if code < 0 {
+        try fail(code, "cannot write to", "<file>");
+    };
+    null
+}
+
+// ---- iolists ----
+//
+// `mu type IoList = str | Bytes | List[IoList]` (prelude). Building one costs no copying:
+// nesting a list inside a list is a pointer, not a concatenation. This is Erlang's iodata,
+// and it is why immutable strings do not make output quadratic. Build the tree, write once.
+
+// The leaves, left to right. `Bytes` and `str` share a representation, so a leaf of either
+// kind becomes the same view; only the type told them apart.
+fn flatten(data: IoList) -> List[str] {
+    let out: List[str] = [];
+    collect(data, out)
+}
+
+// Accumulator-passing, because there is nothing to mutate: each call returns the list it
+// was given plus whatever its subtree contributed.
+fn collect(data: IoList, acc: List[str]) -> List[str] {
+    if data is Bytes {
+        std::collections::list::push(acc, (data as Bytes) as str)
+    } else if data is str {
+        std::collections::list::push(acc, data as str)
+    } else {
+        let out = acc;
+        for part in data as List[IoList] {
+            out = collect(part, out);
+        };
+        out
+    }
+}
+
+// ---- one-shot helpers ----
+//
+// Built on the handle API rather than beside it, so there is one implementation of each
+// operation. They open and close per call by definition; reach for a `File` when that
+// matters.
+
+// No explicit close, and no wrapping to close on the error path: the handle is refcounted,
+// so the descriptor closes when `f` dies -- including when `read_all` throws straight past
+// the end of this function. An earlier draft caught, closed and rethrew at every one of
+// these; ARC does it instead.
+fn read(path: str) throws IoError -> str {
+    let f = try open(path);
+    try read_all(f)
+}
+
+fn read_bytes(path: str) throws IoError -> Bytes {
+    (try read(path)) as Bytes
+}
+
+fn read_lines(path: str) throws IoError -> List[str] {
+    string::lines(try read(path))
+}
+
+fn write(path: str, data: IoList) throws IoError -> null {
+    let f = try create(path);
+    try write_all(f, data);
+    null
+}
+
+fn append(path: str, data: IoList) throws IoError -> null {
+    let f = try open_append(path);
+    try write_all(f, data);
+    null
+}
+
+fn remove(path: str) throws IoError -> null {
+    let code = raw::remove(path);
+    if code < 0 {
+        try fail(code, "cannot remove", path);
+    };
+    null
+}

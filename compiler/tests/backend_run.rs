@@ -106,6 +106,8 @@ fn run_one(dir: &Path, rel: &str) -> Result<(), Failed> {
         .arg(runtime_root().join("src/rt.c"))
         .arg("-I")
         .arg(runtime_root().join("include"))
+        // `std::math` bottoms out in libm, separate from libc on Linux.
+        .arg("-lm")
         .output()
         .expect("run cc");
     if !out.status.success() {

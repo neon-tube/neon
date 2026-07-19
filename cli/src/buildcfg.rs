@@ -219,6 +219,9 @@ impl BuildConfig {
             args.push(format!("-fsanitize={s}"));
         }
         args.extend(self.allocator.link_flags());
+        // `std::math` bottoms out in libm, which is a separate library on Linux (it is
+        // folded into libc on macOS, where this is a harmless no-op).
+        args.push("-lm".into());
         args.extend(normalize_cflags(&self.cflags));
         args
     }

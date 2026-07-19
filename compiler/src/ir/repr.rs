@@ -45,6 +45,11 @@ pub enum Repr {
     List(Box<Repr>),
     /// A `Map[K, V]` — an immutable HAMT.
     Map(Box<Repr>, Box<Repr>),
+    /// A `File` — a refcounted handle over an OS descriptor. Like `List` and `Map` it is
+    /// an opaque nominal record the compiler knows by name, and being refcounted is the
+    /// point: the descriptor closes when the last reference dies, so cleanup rides on ARC
+    /// rather than on the caller remembering.
+    File,
     /// A closure: a function pointer plus a boxed environment.
     Closure { params: Vec<Repr>, ret: Box<Repr> },
     /// A tagged union of two or more distinct variants.
@@ -82,6 +87,7 @@ impl Repr {
             Repr::Str
                 | Repr::List(_)
                 | Repr::Map(_, _)
+                | Repr::File
                 | Repr::Closure { .. }
                 | Repr::BoxedRec(_)
         )
@@ -99,6 +105,7 @@ impl Repr {
             Repr::Str
             | Repr::List(_)
             | Repr::Map(_, _)
+            | Repr::File
             | Repr::Closure { .. }
             | Repr::BoxedRec(_)
             | Repr::Any => true,
@@ -515,6 +522,7 @@ fn record_repr(t: &Types, atom_idx: u32, cyclic: &HashSet<TyId>, boxed: &HashSet
             let elem = field_ty(t, atom_idx, "#0").map_or(Repr::Never, |e| repr_rec(t, e, cyclic, boxed, false));
             return Repr::List(Box::new(elem));
         }
+        Some("File") => return Repr::File,
         Some("Map") => {
             let k = field_ty(t, atom_idx, "#0").map_or(Repr::Never, |e| repr_rec(t, e, cyclic, boxed, false));
             let v = field_ty(t, atom_idx, "#1").map_or(Repr::Never, |e| repr_rec(t, e, cyclic, boxed, false));

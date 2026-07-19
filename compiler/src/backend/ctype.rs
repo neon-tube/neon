@@ -326,6 +326,7 @@ impl TypeTable {
             Repr::Tag => "uint64_t".into(),
             Repr::List(_) => "neon_list*".into(),
             Repr::Map(_, _) => "neon_map*".into(),
+            Repr::File => "neon_file*".into(),
             Repr::Closure { .. } => "neon_closure".into(),
             Repr::BoxedRec(atom) => match self.boxed_names.get(atom) {
                 Some(n) => format!("{n}*"),
@@ -529,6 +530,7 @@ fn key_with(r: &Repr, rec: &HashMap<TyId, Repr>) -> String {
         Repr::Null => "n".into(),
         Repr::Unit => "u".into(),
         Repr::Tag => "t".into(),
+        Repr::File => "F".into(),
         Repr::Any => "a".into(),
         Repr::Never => "x".into(),
         Repr::Var(v) => format!("V{v}"),

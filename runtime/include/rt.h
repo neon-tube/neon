@@ -144,6 +144,43 @@ int64_t neon_i64_div(int64_t a, int64_t b);
 int64_t neon_i64_rem(int64_t a, int64_t b);
 int64_t neon_i64_neg(int64_t a);
 
+// ---- files ----
+//
+// Descriptors, not handles: the handle is `opaque record File` on the Neon side, whose
+// field nothing outside `std::fs` can read. Failure is a *value* -- `-errno` -- and the one
+// call that returns data as well uses an out-parameter, which codegen turns into a tuple.
+// A handle is refcounted and its drop closes the descriptor, so a forgotten (or
+// thrown-past) close leaks nothing. The header is first, so a `neon_file*` is also its
+// `neon_header*`.
+typedef struct neon_file {
+    neon_header header;
+    int fd;
+} neon_file;
+
+int64_t neon_io_open(neon_str path, int64_t mode);      // consumes path; fd or -errno
+neon_file* neon_file_new(int64_t fd);
+int64_t neon_file_fd(neon_file* f);                     // consumes f
+int64_t neon_io_close(neon_file* f);                    // consumes f; 0 or -errno
+neon_str neon_io_read_all(neon_file* f, int64_t* err);  // consumes f; *err: 0 or -errno
+int64_t neon_io_writev(neon_file* f, neon_list* parts); // consumes both; 0 or -errno
+int64_t neon_io_remove(neon_str path);                  // consumes path; 0 or -errno
+bool neon_io_exists(neon_str path);                     // consumes path
+neon_str neon_io_strerror(int64_t code);                // pure: a code, not hidden state
+
+// ---- math (IEEE for f64: no traps, NaN and infinity propagate; i64 traps) ----
+double neon_f64_sqrt(double x);
+double neon_f64_pow(double a, double b);
+double neon_f64_floor(double x);
+double neon_f64_ceil(double x);
+double neon_f64_round(double x);
+double neon_f64_abs(double x);
+bool neon_f64_is_nan(double x);
+bool neon_f64_is_infinite(double x);
+int64_t neon_i64_abs(int64_t a);
+double neon_i64_to_f64(int64_t a);
+int64_t neon_f64_to_i64(double x);
+neon_str neon_f64_to_fixed(double x, int64_t places);
+
 // ---- str ----
 neon_str neon_str_lit(const char* data, size_t len); // owner == NULL, static
 bool neon_str_eq(neon_str a, neon_str b);             // borrows both
@@ -196,6 +233,7 @@ neon_map* neon_map_set(neon_map* m, const void* key, const void* val); // consum
 void* neon_map_at(neon_map* m, const void* key);   // borrows both; traps if absent
 void* neon_map_find(neon_map* m, const void* key); // borrows both; NULL when absent
 bool neon_map_eq(neon_map* a, neon_map* b);        // borrows both; same keys, equal values
+neon_map* neon_map_remove(neon_map* m, const void* key); // consumes m and key
 neon_list* neon_map_keys(neon_map* m, const neon_witness* w);   // consumes m
 neon_list* neon_map_values(neon_map* m, const neon_witness* w); // consumes m
 

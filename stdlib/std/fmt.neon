@@ -1,0 +1,42 @@
+// Formatting is functions, not format-string syntax.
+//
+// Interpolation (`#{x}`) renders a value through `Display`, which answers "how does this
+// value read". Anything beyond that — width, alignment, a fixed number of decimal places —
+// is a call inside the hole: `"#{fmt::pad(name, 8)}"`. That keeps one rendering mechanism
+// and puts the knobs where they can be named and tested, rather than in a mini-language
+// inside a string. See "String interpolation" in docs/decisions.md.
+//
+// Widths are in *bytes*, like every other length in the language (`string::byte_len`), so
+// a multi-byte character counts for more than one column. A name that promised otherwise
+// would be lying — see "Names count what they say".
+
+use std::string;
+
+// Pad on the right to at least `width` bytes. Longer input is returned unchanged: padding
+// never truncates, because silently losing data to a layout decision is worse than a
+// ragged column.
+fn pad(s: str, width: i64) -> str {
+    let n = string::byte_len(s);
+    if n >= width { s } else { string::concat(s, string::repeat(" ", width - n)) }
+}
+
+// Pad on the left, which is what numbers in a column want.
+fn pad_left(s: str, width: i64) -> str {
+    let n = string::byte_len(s);
+    if n >= width { s } else { string::concat(string::repeat(" ", width - n), s) }
+}
+
+// Pad on the left with `fill` rather than spaces: `zero_pad("7", 3)` is `"007"`.
+fn pad_with(s: str, width: i64, fill: str) -> str {
+    let n = string::byte_len(s);
+    if n >= width or string::is_empty(fill) {
+        s
+    } else {
+        string::concat(string::repeat(fill, width - n), s)
+    }
+}
+
+// A float with exactly `places` digits after the point. `to_string` uses `%g`, which is
+// right for "show me this number" and wrong for a column, where every row must be the same
+// width. Clamped to [0, 17]: beyond 17 the digits are noise from the binary representation.
+@native("neon_f64_to_fixed") fn fixed(x: f64, places: i64) -> str

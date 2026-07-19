@@ -157,6 +157,7 @@ fn repr_key(r: &Repr) -> String {
         Repr::Null => "null".into(),
         Repr::Unit => "unit".into(),
         Repr::Tag => "tag".into(),
+        Repr::File => "file".into(),
         Repr::Record { name: Some(n), .. } => n.clone(),
         Repr::Record { .. } => "rec".into(),
         Repr::List(e) => format!("list_{}", repr_key(e)),

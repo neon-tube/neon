@@ -1,0 +1,54 @@
+// Files and iolists.
+//
+// A `File` is a refcounted handle: open once, use many times. Cleanup rides on ARC -- the
+// descriptor closes when the last reference dies -- so nothing here calls `close`, and
+// leaving through a `throw` leaks nothing either. That is why the one-shot helpers have no
+// error-path plumbing.
+//
+// An `IoList` (`mu type IoList = str | Bytes | List[IoList]`) is a tree of pieces. Building
+// one copies nothing: nesting a list inside a list is a pointer, not a concatenation.
+// `write_all` flattens it to the leaves' views and hands them to one `writev`, so the
+// payload bytes never move. This is Erlang's iodata, and it is why immutable strings do not
+// make output quadratic.
+//
+// `Bytes` is a newtype over `str`: same representation, different type, so a PNG is not
+// something you would call `to_upper` on.
+
+use std::io;
+use std::string;
+use std::fs;
+use std::collections::list;
+
+fn write_via_handle(p: str, doc: IoList) throws IoError -> null {
+    let f = try fs::create(p);
+    try fs::write_all(f, doc);
+    try fs::write_all(f, ["more", ["and", "more"]]);
+    try fs::close(f);
+    null
+}
+
+fn main() {
+    let p = "/tmp/neon-iolist.txt";
+    let head: IoList = "HEAD:";
+    let body: IoList = ["a", "b", "c"];
+    let doc: IoList = [head, body, "\n", ["nested", ["deep"]]];
+
+    io::println("#{list::len(fs::flatten(doc))}");
+    io::println(string::join(fs::flatten(doc), "|"));
+
+    // One handle, two writes.
+    try write_via_handle(p, doc) catch (e) { io::println(message(e)) };
+    let back = try fs::read(p) catch (e) { "FAILED" };
+    io::println(string::replace(back, "\n", "/"));
+
+    // One-shot, and Bytes as a leaf.
+    let raw = try fs::read_bytes(p) catch (e) { "" as Bytes };
+    let doc2: IoList = ["<", raw, ">"];
+    try fs::write(p, doc2) catch (e) { io::println("write failed") };
+    io::println(string::replace(try fs::read(p) catch (e) { "?" }, "\n", "/"));
+
+    try fs::remove(p) catch (e) { io::println("rm failed") };
+    io::println("#{fs::exists(p)}");
+    let missing = try fs::read("/tmp/definitely-not-here-9271") catch (e) { message(e) };
+    io::println(missing);
+}
