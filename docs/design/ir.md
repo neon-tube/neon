@@ -261,7 +261,23 @@ A backend-independent pass inserts `Retain`/`Release` so every counted value's c
 balanced. It is **last-use-driven (Perceus-style)**, not naive-insert-then-elide: the
 pass computes each value's last use and, where a value is *consumed* at its last use,
 **moves** it (hands over the existing reference) rather than emitting a retain/release
-pair. Two analyses ride on this. **Reuse (FBIP):** when a value has `rc == 1` at its last
+pair.
+
+Placement follows from one split and one analysis. Every counted value is an **owner**
+(holds one reference from production: call results, aggregates, `Index` reads, block
+parameters) or a **view** (holds nothing: `Field`/`Elem`/`Cast`/`UnwrapOk`/`UnwrapErr`
+results alias what their operand owns). Liveness is computed **over roots** — a use of a
+view is a use of the owner at the bottom of its projection chain, and views never appear
+in a live set. Then: a consuming use of an owner still live afterwards is preceded by a
+retain, at its last use the reference moves; a consumed view is always preceded by a
+retain (it must materialise a reference); an owner is released right after its last use.
+Terminator bookkeeping sits **on the edge**: for each CFG edge, retain the views passed
+as block arguments, then release every owner live at the terminator that is neither
+moved along that edge nor live into the successor — in the block itself for a `jump`, in
+a fresh block on the edge for a `branch`/`switch` (so nothing fires on a path not
+taken), and before the terminator for `ret`/`throw` (where the root of a returned view
+dies). No other rule exists; in particular there is no separate block-boundary release —
+the edge rule *is* the boundary rule, derived from the same liveness as everything else. Two analyses ride on this. **Reuse (FBIP):** when a value has `rc == 1` at its last
 use and a new value of the same shape is being built, its memory is rewritten in place —
 which is what turns `list::set(xs, i, v)` into an O(1) write when `xs` is unshared,
 immutable semantics at mutable speed. **Escape analysis:** a value that never escapes its

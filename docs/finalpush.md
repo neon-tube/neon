@@ -1,7 +1,8 @@
 # Final push: refcount correctness
 
-State as of 2026-07-19. **692/695 suite, 150/153 backend under ASan+UBSan, zero
-use-after-free, zero UB.** Three leaks remain, and they are one bug.
+State as of 2026-07-19. **698/698 suite, 153/153 backend under ASan+UBSan, zero
+use-after-free, zero leaks, zero UB.** The three-leak bug below is fixed; this section
+records how, because the shape of the fix is the lesson.
 
 ## How to measure
 
@@ -24,99 +25,54 @@ neon compile tests/lang/<prog>.neon -o /tmp/x --sanitize address --sanitize unde
 ASAN_OPTIONS=detect_leaks=1 /tmp/x
 ```
 
-`neon ir <file>` is the other half. Every bug below was found by reading the IR or the
-generated C, not by reasoning about the pass.
+`neon ir <file>` is the other half. Every bug in this effort was found by reading the IR
+or the generated C, not by reasoning about the pass.
 
-## The ownership model
+## Resolution (2026-07-19): the redesign, not a sixth patch
 
-The gate into `refcount::insert` is `Repr::is_counted` — true for a counted pointer, or
-an aggregate with one anywhere inside. It used to be `is_pointer`, which left every
-aggregate untracked: a union, record or tuple holding a string or list was never
-released. Its parts were counted when a witness walked them, but a value in a local
-simply leaked.
+The hypothesis held. Rule 8 (release boundary-dying values at the top of every
+successor), the view-consumed-at-terminator retain, and the release-the-root-behind-the-
+views rule were three mechanisms racing over one question, and the five recorded patches
+only shifted work between them. The rebuild replaced all three with one placement
+mechanism derived from one liveness answer. Two ideas carried it:
 
-The concept that was missing is a **view**. `Field`, `Elem`, `Cast`, `UnwrapOk` and
-`UnwrapErr` do not produce a fresh reference — they hand back a look into what their
-operand owns. `base_of` records the derivation. The rules:
+1. **Liveness over roots.** Every use of a view counts as a use of the owner at the
+   bottom of its projection chain; views never appear in a live set. The old design
+   tracked both and patched the gap with `with_bases` — which marked a root live
+   wherever its views were, so "release the root once its last view dies" could never
+   fire for a view consumed at a terminator. That guard's unfireability was recorded in
+   attempt 3 and misread as a dead end instead of the diagnosis.
+2. **All terminator bookkeeping on the edge.** Per CFG edge: retain the views passed as
+   block arguments, then release every owner live at the terminator that is neither
+   moved along that edge nor live into the successor. A `jump` edge is the end of its
+   block; a `branch`/`switch` edge needing code gets a fresh block on the edge (so
+   nothing fires on the path not taken); `ret`/`throw` place the same code before the
+   terminator.
 
-1. A view is **never released** on its own. Releasing one destroys what its base still
-   holds.
-2. **Consuming** a view retains it — it must materialise a reference for whoever takes
-   it. This applies at terminators too: a block argument, a return and a throw all
-   consume.
-3. **Borrowing** a view marks its base live, unconditionally. Guarding that behind the
-   release had `release %0` float above the very calls using a view into `%0`.
-4. The **root** of a projection chain is released once the last view into it dies.
-   Without this a base kept alive only by views is never released at all — `sum(node)`
-   read `value` and `next` out of a node and then leaked the node.
-5. A lambda's **environment parameter is borrowed**, never released. The closure value
-   owns it and may be called again.
-6. `CallClosure` **borrows** its callee. Calling a closure reads it; it does not destroy
-   it. Modelling it as consuming meant the reference was handed to a call that never
-   released it, and every closure leaked its environment.
-7. `Index` is **not** a view — `emit_index` retains what it reads, so that result owns
-   itself.
-8. Values dying on a block boundary are released at the top of the successor, for values
-   live out of *every* predecessor, excluding block arguments (ownership moved to the
-   parameter that received them).
+`docs/design/ir.md`'s refcount section now states this placement spec in full;
+`refcount.rs`'s module doc is the same spec next to the code. The sixth attempt in the
+old table — edge-precise releases, sound but 140/153 — was this design missing its other
+half: it keyed on `live_out` without root-collapsing, and only handled single-successor
+blocks.
 
-Rule 8 is the one under suspicion. See below.
+Reading the generated C also found a leak the IR-level diagnosis had missed, and it, not
+the conditional-edge retain, was the leak actually firing on `throw_from_catch`'s run
+path: `Display$X$to_string(r)` returned a retained view of its parameter and never
+released the parameter itself — a view consumed at `ret` kept its base alive (via
+`with_bases`) and then nobody dropped it. Every function whose parameter's last use is a
+projection leaked one reference per call. The root-liveness model fixes this as a side
+effect: the base dies before the `ret`, after the view's retain.
 
-## What remains
+The wrong-path retain was also latently worse than a leak: `retain %4` above
+`branch %3, block2(%4), block3` read the *err* variant's bytes out of a union whose tag
+said *ok* and retained whatever pointer those bytes spelled. It stayed benign only
+because compound-literal zero-fill left the owner slot NULL. Edge placement removes the
+read entirely on the untaken path.
 
-Three programs leak: `errors/throw_from_catch`,
-`strings/utf8_find_is_byte_offset`, `strings/utf8_slice_splits_sequence`. One cause — a
-view passed as a block argument on a **conditional** edge:
-
-```
-%8 = unwrap_err %6
-retain %8
-branch %7, block2(%8), block3
-```
-
-The retain fires whether or not the handler runs, so the ok path leaks it. `block3`
-correspondingly reaches `%9 = unwrap_ok %6; retain %9; jump block1(%9)` and never
-releases `%6`.
-
-## Five attempts, none better than 150
-
-Recorded so they are not re-walked. Scores are `passing/153` and sanitizer kinds.
-
-| Attempt | Result |
-| --- | --- |
-| Retain at the receiving block's parameter, when every incoming edge fills it with a view | 149, **3 UAF** |
-| Split argument-carrying edges into their own blocks so the retain sits on the edge taken | 150, 3 leaks (no change) |
-| After splitting, also release the view's base where the view escapes | 150, 3 leaks (guard never fired: `with_bases` marks the base live-out) |
-| Same, dropping the liveness guard | 149, **4 UAF** (edge block and handler both free it) |
-| Same, gated on the successor's `live_in` | 149, **4 UAF** (the handler's release comes from rule 8, not from `live_in`) |
-| Replace rule 8 entirely with an edge-precise release at the end of single-successor blocks, keyed on `live_out` | 140, 0 UAF — **sound but catches less** |
-
-Earlier dead ends from the same work:
-
-- Widening the gate to `is_counted` **alone**, without the view concept: 23 leaks became
-  9 use-after-frees.
-- Blanket-retaining every projection result: regressed closures, 12 → 24 failures,
-  because a closure environment's captures get double-counted on unpack.
-
-## The hypothesis
-
-Two mechanisms race to free the same value: the rule-8 boundary release and the view/base
-release. Each of the five attempts shifted work between them instead of removing the
-overlap. The telling result is the last one — replacing rule 8 with an edge-precise rule
-was *sound* (0 UAF) but caught less (140). So rule 8 is load-bearing for cases the edge
-rule cannot see, and the two need **unifying** rather than patching: one placement
-mechanism derived from a single liveness answer, not a last-use rule plus a boundary rule
-plus a base rule interacting.
-
-This is a redesign of release placement, not another patch. Five patches is decent
-evidence of that.
-
-## Next step
-
-Read `docs/design/ir.md`'s Perceus description first and check whether it already
-specifies where releases belong. If it does, the implementation has drifted and the doc
-is the spec to rebuild against. That is a reading task, and it is the right thing to do
-with fresh context rather than at the end of a long session.
+Regression coverage: `refcount/tests.rs` pins both shapes
+(`a_returned_view_retains_itself_and_releases_its_base`,
+`a_view_passed_on_a_conditional_edge_is_retained_on_that_edge_only`), and the three
+corpus programs run leak-free under ASan.
 
 ## Also outstanding, unrelated
 
