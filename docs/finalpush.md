@@ -133,6 +133,31 @@ corpus programs run leak-free under ASan.
   diagnostic list is deduplicated by (span, kind), which is cheaper than threading a
   "probing, stay quiet" mode through every expression form.
 
+- **`return` inside a lambda is unsound.** The worst bug on this list: it compiles cleanly
+  and reinterprets a value at the wrong type. Pre-existing -- verified identical on
+  `7fbd131`.
+
+  The checker types `return` against the **enclosing function's** return type; lowering
+  lifts the lambda into its own function, where `return` returns from the *lambda*. When
+  those two types differ, a value crosses a typed boundary and is reinterpreted:
+
+  ```neon
+  fn apply(f: (i64) -> i64) -> i64 { f(1) }
+  fn outer() -> str {
+      let n = apply((x: i64) => { if x > 0 { return "not an i64"; }; 7 });
+      "got #{n}"                      // prints `got 0` -- a neon_str read as an int64_t
+  }
+  ```
+
+  Here it prints a harmless 0, but the same shape can read a pointer as an integer or an
+  integer as a pointer, so it is memory-unsafe, not merely wrong. Two candidate fixes: type
+  `return` against the lambda (making it lambda-local, matching what lowering does), or
+  reject `return` inside a lambda outright until non-local return is genuinely implemented.
+  The second is the smaller change and loses nothing anyone can currently rely on.
+
+  It also blocks the `using` combinator in `docs/design/resources.md`, whose body is a
+  lambda a caller would naturally want to `return` out of.
+
 - **A protocol method call inside an interpolation hole miscompiles.** Accepted by the
   checker, rejected by the C compiler -- so it is a miscompile, and the shape is one
   everybody writes:

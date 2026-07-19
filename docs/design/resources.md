@@ -170,12 +170,41 @@ Immutability closes the hole that makes resurrection a real hazard in Rust and S
 drop should still assert `rc == 0` afterwards: one comparison on a path that just made a
 syscall, and it fails loudly if the language ever grows mutable shared state.
 
+## Scope-lifetime resources: `using`
+
+A lock guard's last use is the `lock` call itself, so under last-use ARC it releases *before*
+the section it was meant to protect. The fix needs no language change -- only a function that
+touches the resource on the far side of the body:
+
+    fn using[T, E, R](r: Resource[T, E], body: (T) -> R) throws E -> R {
+        let out = body(try get(r))
+        try release(r)                  // <- the last use of `r` is HERE
+        out
+    }
+
+    using(lock::new(m), (l) => {
+        // the lock is held for exactly this region
+    })
+
+Because `r` is used *after* `body(...)` returns, the refcount pass must keep it alive across
+the whole call. That is the entire trick: the combinator owns a region, and the region is
+visible as a lambda rather than implied by a brace.
+
+The failure path is right for free. If `body` throws, `release` never runs explicitly, but
+ARC releases `r` on the throwing edge and cleanup fires anyway -- so the normal path observes
+the cleanup error and the throwing path still cleans up silently, which is the two-path rule
+already stated above.
+
+This is deliberately **not** `defer`: nothing is registered and nothing is deferred. The cost
+is the ordinary one for a scope combinator -- the body is a lambda, so control flow cannot
+cross it. See the `return` note below, which makes that worse than it should be.
+
 ## Open
 
-- **Scope-lifetime resources are inexpressible.** A lock guard's last use is the `lock`
-  call itself, so it releases before the critical section it was meant to protect. Files are
-  fine because the handle is always touched again; locks are not. This is a property of
-  last-use ARC, not of this API, and no arrangement of `Resource` fixes it.
+- **`return` inside a lambda is unsound**, which this pattern runs straight into: the checker
+  types `return` against the *enclosing function*, while lowering lifts the lambda and
+  returns from the lambda. See `docs/finalpush.md`. Until it is fixed, a `using` body must not
+  contain `return`.
 - **Cycles.** A resource reachable only through a cycle closes when the collector runs.
   Every other path here is deterministic; this one is not, and it is the single guarantee
   this design cannot make.
