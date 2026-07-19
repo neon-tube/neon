@@ -157,11 +157,14 @@ made covariance sound.
 - **On disk, path-mapped.** `stdlib/std/io.neon` is `std::io`; see `decisions.md`. The
   loader derives the module prefix from the path and declares each file before the user
   module. Chosen so an LSP can open real stdlib files.
-- **`==`/`!=` desugar to `Eq::eq`; `<`/`<=`/`>`/`>=` to `Ord::cmp`.** No primitive
-  operator beside a protocol. The prelude ships `impl Eq`/`impl Ord` for every primitive,
-  bottoming out in `@native` intrinsics (the leaf cannot be `a == b`). A record needs
-  `impl Eq` to use `==`; no impl is a diagnostic, not a structural default. This is the
-  `to_string` shape: one mechanism, `impl`-or-error. See `decisions.md`.
+- **Comparison is structural, not dispatched** *(revised 2026-07-19; this section
+  previously said the opposite)*. `==` and `<` are primitives the backend expands per
+  type, and there is no `Eq` protocol and no `Ord` protocol to implement. `==` compares by
+  content on every type but a closure; `<` orders lexicographically and is total *within*
+  a type, never across one. A generic says `where T: Ord` -- a **marker**, a bound with no
+  methods, answered from the type's structure. `Ordering` survives as the return type for
+  the `_by` functions (`sort_by`, `max_by`), which take the comparison as an argument and
+  need no bound at all. See "Comparison is structural" and "Markers" in `decisions.md`.
 
 ## The build order
 
