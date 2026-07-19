@@ -23,6 +23,8 @@ pub fn emit(program: &Program) -> String {
 
     // Aggregate struct definitions, before any function that uses them.
     types.emit_defs(&mut out);
+    // Before the witnesses: an element witness for a boxed record calls into these.
+    emit_boxed_eq(&mut out, &types);
     emit_witnesses(&mut out, &types);
     emit_key_witnesses(&mut out, &types);
     emit_env_drops(&mut out, &types);
@@ -481,7 +483,7 @@ fn emit_key_witnesses(out: &mut String, types: &TypeTable) {
         let _ = writeln!(
             out,
             "static bool {name}_eq(const void* pa, const void* pb) {{ const {ty}* a = (const {ty}*)pa; const {ty}* b = (const {ty}*)pb; return {}; }}",
-            eq_expr(repr, "(*a)", "(*b)"),
+            eq_expr(types, repr, "(*a)", "(*b)"),
         );
         let _ = writeln!(
             out,
@@ -547,7 +549,7 @@ fn has_order(r: &Repr) -> bool {
     }
 }
 
-fn cmp_expr(r: &Repr, a: &str, b: &str) -> String {
+fn cmp_expr(types: &TypeTable, r: &Repr, a: &str, b: &str) -> String {
     match r {
         Repr::Str => format!("neon_str_cmp({a}, {b})"),
         Repr::Record { fields, .. } => fields
@@ -557,13 +559,13 @@ fn cmp_expr(r: &Repr, a: &str, b: &str) -> String {
                 (fr, format!("{a}.{f}"), format!("{b}.{f}"))
             })
             .rev()
-            .fold("0".to_string(), |rest, (fr, fa, fb)| lex_then(fr, &fa, &fb, &rest)),
+            .fold("0".to_string(), |rest, (fr, fa, fb)| lex_then(types, fr, &fa, &fb, &rest)),
         Repr::Tuple(elems) => elems
             .iter()
             .enumerate()
             .map(|(i, er)| (er, format!("{a}._{i}"), format!("{b}._{i}")))
             .rev()
-            .fold("0".to_string(), |rest, (er, ea, eb)| lex_then(er, &ea, &eb, &rest)),
+            .fold("0".to_string(), |rest, (er, ea, eb)| lex_then(types, er, &ea, &eb, &rest)),
         // A list walks its elements through its witness, so one runtime function covers
         // every element type.
         Repr::List(_) => format!("neon_list_cmp({a}, {b})"),
@@ -585,8 +587,8 @@ fn cmp_expr(r: &Repr, a: &str, b: &str) -> String {
 /// The obvious form, `(c = cmp(x)) != 0 ? c : rest`, cannot bind `c` inside a C
 /// expression, so it has to repeat `cmp(x)` — and a record nested `d` deep would then
 /// emit `2^d` copies of its innermost compare.
-fn lex_then(r: &Repr, a: &str, b: &str, rest: &str) -> String {
-    format!("({} ? {rest} : {})", eq_expr(r, a, b), cmp_expr(r, a, b))
+fn lex_then(types: &TypeTable, r: &Repr, a: &str, b: &str, rest: &str) -> String {
+    format!("({} ? {rest} : {})", eq_expr(types, r, a, b), cmp_expr(types, r, a, b))
 }
 
 /// Whether an expression of nullable repr `r` holds null, as a C condition. Mirrors
@@ -604,21 +606,21 @@ fn null_test(r: &Repr, e: &str) -> String {
 }
 
 /// Content equality, matching `hash_expr`: equal keys must hash equal.
-fn eq_expr(r: &Repr, a: &str, b: &str) -> String {
+fn eq_expr(types: &TypeTable, r: &Repr, a: &str, b: &str) -> String {
     match r {
         Repr::Str => format!("neon_str_eq({a}, {b})"),
         Repr::Record { fields, .. } => fields
             .iter()
             .map(|(n, fr)| {
                 let f = field_name(n);
-                eq_expr(fr, &format!("{a}.{f}"), &format!("{b}.{f}"))
+                eq_expr(types, fr, &format!("{a}.{f}"), &format!("{b}.{f}"))
             })
             .reduce(|x, y| format!("({x} && {y})"))
             .unwrap_or_else(|| "true".into()),
         Repr::Tuple(elems) => elems
             .iter()
             .enumerate()
-            .map(|(i, er)| eq_expr(er, &format!("{a}._{i}"), &format!("{b}._{i}")))
+            .map(|(i, er)| eq_expr(types, er, &format!("{a}._{i}"), &format!("{b}._{i}")))
             .reduce(|x, y| format!("({x} && {y})"))
             .unwrap_or_else(|| "true".into()),
         Repr::F64 | Repr::I64 | Repr::Bool | Repr::Tag => format!("({a} == {b})"),
@@ -627,6 +629,13 @@ fn eq_expr(r: &Repr, a: &str, b: &str) -> String {
         Repr::List(_) => format!("neon_list_eq({a}, {b})"),
         // Same keys with equal values, regardless of slot order.
         Repr::Map(_, _) => format!("neon_map_eq({a}, {b})"),
+        // A self-referencing record is a pointer, and comparing it means walking through
+        // that pointer -- which a nested expression cannot do, since the walk recurses.
+        // `emit_boxed_eq` generates one function per boxed record for exactly this.
+        Repr::BoxedRec(_) => match types.boxed_shape(r) {
+            Some((name, _)) => format!("{name}_eq({a}, {b})"),
+            None => "false".to_string(),
+        },
         // One inhabitant: two of them are equal without reading anything. Reading would in
         // fact be wrong -- a `neon_unit` in a union payload is never written, so `memcmp`
         // would decide on uninitialised bytes.
@@ -637,7 +646,7 @@ fn eq_expr(r: &Repr, a: &str, b: &str) -> String {
         // two equal-but-distinct lists came back unequal.
         Repr::Nullable(inner) => {
             let (na, nb) = (null_test(r, a), null_test(r, b));
-            format!("({na} ? {nb} : (!{nb} && {}))", eq_expr(inner, a, b))
+            format!("({na} ? {nb} : (!{nb} && {}))", eq_expr(types, inner, a, b))
         }
         // Same tag, then the payload that tag selects. The `memcmp` fallback below is
         // *wrong* here and was reachable as soon as records compared fieldwise: a union's
@@ -646,11 +655,41 @@ fn eq_expr(r: &Repr, a: &str, b: &str) -> String {
         Repr::Union(variants) => {
             let arms = variants.iter().enumerate().rev().fold("true".to_string(), |rest, (i, v)| {
                 let (pa, pb) = (format!("{a}.u._{i}"), format!("{b}.u._{i}"));
-                format!("({a}.tag == {i} ? {} : {rest})", eq_expr(v, &pa, &pb))
+                format!("({a}.tag == {i} ? {} : {rest})", eq_expr(types, v, &pa, &pb))
             });
             format!("({a}.tag == {b}.tag && {arms})")
         }
         _ => format!("(memcmp(&{a}, &{b}, sizeof {a}) == 0)"),
+    }
+}
+
+/// Structural equality for each boxed (self-referencing) record.
+///
+/// A generated function rather than an expression, because the walk recurses through the
+/// pointer and a C expression cannot. Forward-declared first so that mutually recursive
+/// records -- `A` holding a `B` holding an `A` -- can call each other.
+///
+/// The recursion terminates without a visited set: records are immutable (field and index
+/// assignment are *parse* errors), so a value cannot be made to point at itself and the
+/// graph is always a DAG. Shared substructure is compared once per path rather than once
+/// per node, which is the price of not carrying a visited set.
+fn emit_boxed_eq(out: &mut String, types: &TypeTable) {
+    let boxed = types.boxed_records();
+    for (name, _) in &boxed {
+        let _ = writeln!(out, "static bool {name}_eq(const {name}* a, const {name}* b);");
+    }
+    for (name, shape) in &boxed {
+        let _ = writeln!(out, "static bool {name}_eq(const {name}* a, const {name}* b) {{");
+        // The same pointer is the same value; one null and one not cannot be equal. A
+        // boxed field that is `T | null` arrives here as a null pointer.
+        let _ = writeln!(out, "if (a == b) return true;");
+        let _ = writeln!(out, "if (a == NULL || b == NULL) return false;");
+        // The record sits behind the header in a `value` member, not inline.
+        let _ = writeln!(out, "return {};", eq_expr(types, shape, "(a->value)", "(b->value)"));
+        let _ = writeln!(out, "}}");
+    }
+    if !boxed.is_empty() {
+        out.push('\n');
     }
 }
 
@@ -666,13 +705,13 @@ fn emit_witnesses(out: &mut String, types: &TypeTable) {
         let _ = writeln!(
             out,
             "static bool {name}_eq(const void* pa, const void* pb) {{ {cast} return {}; }}",
-            eq_expr(repr, "(*a)", "(*b)"),
+            eq_expr(types, repr, "(*a)", "(*b)"),
         );
         let cmp = if has_order(repr) {
             let _ = writeln!(
                 out,
                 "static int {name}_cmp(const void* pa, const void* pb) {{ {cast} return {}; }}",
-                cmp_expr(repr, "(*a)", "(*b)"),
+                cmp_expr(types, repr, "(*a)", "(*b)"),
             );
             format!("{name}_cmp")
         } else {
@@ -781,7 +820,7 @@ fn op_rhs(types: &TypeTable, f: &Func, result: Option<Value>, op: &Op) -> String
         Op::ConstNull => "neon_null()".into(),
         Op::ConstUnit => "neon_unit_v()".into(),
         Op::ConstAtom(a) => format!("neon_atom({})", atom_hash(a)),
-        Op::Prim(p, args) => prim(f, *p, args),
+        Op::Prim(p, args) => prim(types, f, *p, args),
         Op::Call { func, args } => {
             let params = types.param_reprs(func);
             let coerced: Vec<String> = args
@@ -982,7 +1021,7 @@ fn scalar_repr(r: &Repr) -> &Repr {
 
 /// Equality between a union and a scalar variant: matches only when the tag selects that
 /// variant and the payloads are equal. `None` when neither operand is a union.
-fn union_compare(f: &Func, op: PrimOp, args: &[Value]) -> Option<String> {
+fn union_compare(types: &TypeTable, f: &Func, op: PrimOp, args: &[Value]) -> Option<String> {
     let (a, b) = (*args.first()?, *args.get(1)?);
     let (variants, u, other_repr, other) = match (f.value_repr(a), f.value_repr(b)) {
         (Repr::Union(vs), other) => (vs, a, other, b),
@@ -996,7 +1035,7 @@ fn union_compare(f: &Func, op: PrimOp, args: &[Value]) -> Option<String> {
     let eq = format!(
         "({}.tag == {i} && {})",
         var(u),
-        eq_expr(other_repr, &format!("{}.u._{i}", var(u)), &prim_operand(f, other)),
+        eq_expr(types, other_repr, &format!("{}.u._{i}", var(u)), &prim_operand(f, other)),
     );
     Some(match op {
         PrimOp::Ne => format!("(!{eq})"),
@@ -1223,11 +1262,11 @@ fn rel_op(op: PrimOp) -> &'static str {
     }
 }
 
-fn prim(f: &Func, op: PrimOp, args: &[Value]) -> String {
+fn prim(types: &TypeTable, f: &Func, op: PrimOp, args: &[Value]) -> String {
     // Comparing a union against one of its variants must check the tag: a `null` value has
     // a zero-initialised payload, so a bare `payload == 0` would wrongly match `0`.
     if matches!(op, PrimOp::Eq | PrimOp::Ne) {
-        if let Some(s) = union_compare(f, op, args) {
+        if let Some(s) = union_compare(types, f, op, args) {
             return s;
         }
         // A nullable against a literal `null`: the two sides have different reprs -- a
@@ -1254,7 +1293,7 @@ fn prim(f: &Func, op: PrimOp, args: &[Value]) -> String {
         if let (Some(&x), Some(&y)) = (args.first(), args.get(1)) {
             let (rx, ry) = (f.value_repr(x), f.value_repr(y));
             if matches!(rx, Repr::Union(_)) && rx == ry {
-                let eq = eq_expr(rx, &var(x), &var(y));
+                let eq = eq_expr(types, rx, &var(x), &var(y));
                 return match op {
                     PrimOp::Ne => format!("(!{eq})"),
                     _ => eq,
@@ -1282,6 +1321,7 @@ fn prim(f: &Func, op: PrimOp, args: &[Value]) -> String {
                     | Repr::Tuple(_)
                     | Repr::List(_)
                     | Repr::Map(_, _)
+                    | Repr::BoxedRec(_)
                     | Repr::Nullable(_)
                     | Repr::Null
                     | Repr::Unit
@@ -1290,9 +1330,9 @@ fn prim(f: &Func, op: PrimOp, args: &[Value]) -> String {
         if let Some(r) = r {
             if aggregate {
                 return match op {
-                    PrimOp::Eq => eq_expr(r, &a, &b),
-                    PrimOp::Ne => format!("(!{})", eq_expr(r, &a, &b)),
-                    _ => format!("({} {} 0)", cmp_expr(r, &a, &b), rel_op(op)),
+                    PrimOp::Eq => eq_expr(types, r, &a, &b),
+                    PrimOp::Ne => format!("(!{})", eq_expr(types, r, &a, &b)),
+                    _ => format!("({} {} 0)", cmp_expr(types, r, &a, &b), rel_op(op)),
                 };
             }
             if matches!(r, Repr::Str) && !matches!(op, PrimOp::Eq | PrimOp::Ne) {

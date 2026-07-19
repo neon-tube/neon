@@ -1,0 +1,44 @@
+// A self-referencing record compares by structure, walking through the pointer.
+//
+// It is a pointer at runtime (a record whose cycle closes by value has no finite inline
+// layout), so `==` used to compare two *addresses* — two separately built lists of the
+// same values were unequal, silently.
+//
+// The walk needs a generated function per boxed record rather than a nested expression,
+// because it recurses. It needs no visited set: records are immutable — field and index
+// assignment are parse errors — so a value cannot be made to point at itself and the
+// graph is always a DAG.
+
+use std::io;
+
+record N { v: i64, next: N | null }
+
+// Mutual recursion too, which is why the generated functions are forward-declared.
+record Branch { label: str, leaf: Leaf | null }
+record Leaf { n: i64, up: Branch | null }
+
+fn main() {
+    let a = N { v: 1, next: N { v: 2, next: N { v: 3, next: null } } };
+    let b = N { v: 1, next: N { v: 2, next: N { v: 3, next: null } } };
+
+    // Equal chains, separately allocated.
+    io::println("#{a == b}");
+
+    // A difference at the deepest link still decides.
+    io::println("#{a == N { v: 1, next: N { v: 2, next: N { v: 9, next: null } } }}");
+
+    // Different lengths: one runs out where the other continues.
+    io::println("#{a == N { v: 1, next: null }}");
+
+    // The degenerate end, and identity.
+    let leaf = N { v: 1, next: null };
+    io::println("#{leaf == N { v: 1, next: null }}");
+    io::println("#{a == a}");
+
+    // Mutually recursive records.
+    let x = Branch { label: "b", leaf: Leaf { n: 1, up: null } };
+    let y = Branch { label: "b", leaf: Leaf { n: 1, up: null } };
+    let z = Branch { label: "b", leaf: Leaf { n: 2, up: null } };
+    io::println("#{x == y}");
+    io::println("#{x == z}");
+}

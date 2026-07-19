@@ -448,6 +448,65 @@ out of the gap and are fixed with this: `record == record`, `record < record` an
 `tuple == tuple` each emitted C comparing two structs, which is not valid C; and
 `list == list` compiled and returned pointer equality, so `[1,2,3] == [1,2,3]` was false.
 
+*One exception, and it is permanent:* a **closure** cannot be compared. There is no
+structural answer to whether two functions are equal, so `f == g` is a diagnostic rather
+than a guess. Everything else compares by content -- primitives, `str`, records, tuples,
+lists, unions, maps, and self-referencing records, which walk through their pointer.
+
+### Markers: a bound with no methods
+
+*(Decided 2026-07-19, alongside structural comparison.)*
+
+    marker Ord
+
+    fn max[T](a: T, b: T) -> T where T: Ord { if a < b { b } else { a } }
+
+A **marker** is a bound carrying no methods, satisfied by a rule the compiler knows rather
+than by an impl. `where T: Ord` says "this parameter can be ordered"; the compiler answers
+it from `T`'s structure. There is nothing to write and no way to override it.
+
+This exists because a generic body is checked *once*, with `T` abstract. There is no
+concrete type there to test, so `a < b` on a bare `T` has no answer — and the old compiler,
+which allowed it, monomorphised `max(map, map)` into a comparison of two addresses. The
+bound supplies the missing information at the boundary where it exists: the body is checked
+against the bound, and each call site is checked against the type actually supplied.
+
+A marker is not a protocol wearing a hat. A protocol is a *choice* a type makes about how to
+answer something — that is why `Display` is one. A marker is a *fact* about a type that the
+type does not get a say in: `Ord` follows from structure, and letting a type claim it while
+holding a `Map` would be a lie the backend cannot honour. So `impl Ord for X` is not merely
+unnecessary, it is unwritable, and markers are prelude-only — only the compiler can supply
+a rule, so a marker it does not recognise is a diagnostic at the declaration.
+
+**Order is infectious, and the bound threads through the recursion.** A record is ordered
+when every field is, `List[T]` when `T` is. That means a *bound* variable must count as
+ordered inside a container too, or the marker would be useless past the first one:
+`Box[T]` under `where T: Ord` is ordered precisely because `T` is bound there. Ask the same
+question without that context and the answer is no.
+
+The ceremony is real and was weighed: nearly every type is ordered, so the bound excludes
+few types while appearing on many signatures. It buys a general mechanism rather than a tax
+on one operator — `Send` and friends land here later — and the alternative, inferring the
+requirement, makes a function body silently change its public contract and needs a fixpoint
+over the call graph to propagate. For a type whose meaningful order is not its structural
+one, nothing here is a dead end: `max_by`/`sort_by` take the comparison as an argument and
+need no bound at all, which is also why `Ordering` stayed in the prelude.
+
+`f64` makes "total" a slight lie at the leaf. NaN compares false against everything
+including itself, so `NaN == NaN` is false, `{x: NaN} == {x: NaN}` is false — a record
+that is not equal to itself — and **`sort` on a list containing NaN returns an unspecified
+permutation**, not merely NaN in an odd position. IEEE-754 defines a `totalOrder` that
+would fix sorting, and it was declined: it makes `0.0 == -0.0` false and `NaN == NaN` true,
+trading a rare surprise for a common one. The operators do what the hardware does, which
+is what every other language has taught people to expect. `sort` is where it shows.
+
+*What moved:* the implementation never did dispatch — `check.rs` did an overlap test and
+lowering emitted a primitive compare, while the prelude's `Eq`/`Ord` impls named seven
+runtime symbols that do not exist and would not have linked. The doc lost. Four bugs fell
+out of the gap and are fixed with this: `record == record`, `record < record` and
+`tuple == tuple` each emitted C comparing two structs, which is not valid C; and
+`list == list` compiled and returned pointer equality, so `[1,2,3] == [1,2,3]` was false.
+
 *Where the code has not caught up yet, stated so this section does not drift ahead of it a
 second time:* `==` is structural on primitives, `str`, records, tuples, lists and unions —
 including two union operands, which compare by tag and then by payload. Four shapes it

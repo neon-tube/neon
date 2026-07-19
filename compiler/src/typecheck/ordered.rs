@@ -41,7 +41,6 @@ pub(super) fn is_ordered(env: &Env, ty: TyId, bound: &HashSet<String>) -> bool {
 ///
 /// - a **closure**: no structural answer exists, and C cannot `==` a `neon_closure`. This
 ///   one is permanent; the rest are gaps to be closed.
-/// - a **self-referencing record**: pointer-backed, same as `Map`.
 ///
 /// Unlike ordering there is no bound to escape through, because equality takes none: a bare
 /// type variable is *allowed* and deferred. Equality is total by design, so requiring a
@@ -68,8 +67,10 @@ fn equatable_rec(env: &Env, ty: TyId, seen: &mut Vec<TyId>) -> bool {
         return true; // primitives, `str`, atoms, `null`
     }
     if seen.contains(&ty) {
-        // A cycle means a pointer, which compares by address rather than by content.
-        return false;
+        // A self-referencing record: equatable, and the *backend* handles the recursion
+        // with a generated function. Answering `true` here only stops this type-level walk
+        // from following the cycle forever.
+        return true;
     }
     seen.push(ty);
     let ok = if d.tuples != bdd::FALSE {

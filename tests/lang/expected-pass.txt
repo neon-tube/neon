@@ -178,6 +178,7 @@ records/declare_construct_access.neon
 records/generic.neon
 records/nested.neon
 records/nullable_field.neon
+records/recursive_equality.neon
 records/recursive_mutual.neon
 records/recursive_self.neon
 records/structural_param_accepts_nominal.neon

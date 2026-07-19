@@ -84,25 +84,16 @@ corpus programs run leak-free under ASan.
   `record == record`, `record < record` and `tuple == tuple` emitted C comparing two
   structs (not valid C — the *C compiler* failed, not Neon), and `list == list` compiled
   and returned pointer equality, so `[1,2,3] == [1,2,3]` was false.
-- **`==` is not yet structural on two reprs.** All three are now *diagnostics* rather
-  than wrong answers (`is_equatable` in `typecheck/ordered.rs`), so nothing silently
-  compares addresses and nothing reaches the C compiler. Each is an opaque pointer today:
+- ~~**`==` is not structural on every type.**~~ **Closed 2026-07-19.** Maps compare by
+  content (`neon_map_eq`: same length, then each key looked up in the other -- an
+  open-addressed table has no canonical slot order), and a self-referencing record walks
+  through its pointer via a generated function per boxed type, forward-declared so mutually
+  recursive records can call each other. That walk needs no visited set: records are
+  immutable, since field and index assignment are *parse* errors, so a value cannot point
+  at itself and the graph is always a DAG.
 
-  | expression | why | fix |
-  | --- | --- | --- |
-  | `Map == Map` | opaque container | same length, then every key's value |
-  | self-referencing record `==` | `BoxedRec` is a pointer | walk the fields through the pointer |
-
-  `closure == closure` is also rejected, and that one is permanent -- there is no structural
-  answer. Nullable equality *was* on this list and is now fixed: `eq_expr` grew a
-  `Repr::Nullable` arm that null-tests each side before comparing the payload.
-
-  Fixed on the way, both pinned by `operators/union_vs_union_equality.neon`: two *union*
-  operands used to project each side to its first variant and compare those, so
-  `(i64 | bool)` compared an i64 against a bool and `1 == true` was true; and
-  `union_compare` compared a union against a bare variant with a raw C `==` on the payload,
-  which is not valid C once the variant is a record, a tuple or a `str`. Both now compare
-  tag first, then the payload through `eq_expr`.
+  A **closure** remains rejected, permanently -- there is no structural answer for two
+  functions. `operators/unequatable_is_rejected.neon` pins it.
 
 - ~~**A `let` with a union annotation keeps the narrow repr.**~~ **Fixed 2026-07-19.** The
   checker always bound the annotation's type; lowering saw only the initialiser and used

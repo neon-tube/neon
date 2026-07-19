@@ -290,6 +290,18 @@ impl TypeTable {
         }
     }
 
+    /// Every boxed record: its wrapper name and pointee layout. Ordered by the name, so
+    /// emission is deterministic.
+    pub fn boxed_records(&self) -> Vec<(String, Repr)> {
+        let mut out: Vec<(String, Repr)> = self
+            .boxed_names
+            .iter()
+            .filter_map(|(atom, name)| self.boxed.get(atom).map(|r| (name.clone(), r.clone())))
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
     /// Whether a repr is a pointer to a heap-allocated recursive record.
     pub fn is_boxed(&self, r: &Repr) -> bool {
         matches!(r, Repr::BoxedRec(_))
