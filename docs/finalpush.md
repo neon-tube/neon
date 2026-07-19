@@ -151,14 +151,36 @@ corpus programs run leak-free under ASan.
   `return`s. Separately, `break`/`continue` with *no* enclosing loop was silently accepted
   anywhere -- `fn main() { break; }` compiled -- and is now a diagnostic.
 
-- **A throwing function cannot be used as a value.** Now a clean diagnostic; it was invalid
-  C. `Repr::Closure` records parameters and result but **not `throws`**, so the tagged
-  result a throwing function returns is read as its declared type. Correcting `emit_thunks`
-  (which built the adapter from the declared type) only moved the failure: it then compiled
-  and returned garbage, because the *call site* has no idea to unpack a tagged result. The
-  real fix is for `Repr::Closure` to carry the throws; until then the checker refuses it,
-  which also blocks the point-free `resource::new(fd, close)` shape in
-  `docs/design/resources.md`.
+- **Throwing closures do not exist, and the arrow type that describes one is uninhabited.**
+  `Repr::Closure` records parameters and result but **not `throws`**, so the tagged result a
+  throwing function returns would be read as its declared type. Both ways of producing such
+  a value are therefore closed: a lambda cannot throw (`lambda()` pins its sink to `never`),
+  and a named throwing function used as a value is a diagnostic. So
+  `(i64) throws E -> i64` parses, and nothing can inhabit it —
+  `types/arrow_type_throws.neon` passes only because it declares such types without
+  building one.
+
+  This blocks `Resource[T, E]` in `docs/design/resources.md`: cleanup is specified as
+  `(T) throws E -> ()`, which cannot currently be written. Non-throwing cleanup works today,
+  so `Resource[T, never]` is buildable and `resource::new(fd, close)` compiles.
+
+  **An attempt was made 2026-07-19 and reverted.** Recorded so it is not re-walked:
+
+  - The approach: fold the throws into the closure's return, `ret = Union([ret, throws])`,
+    matching `Func::result_repr`. No new field, and `CallClosure`'s C cast is built from the
+    result value's repr, which lowering controls — so it needs only `wrap_throwing` after
+    the call (reusing what direct calls already do) and a `set_throws` in
+    `lower_lambda_job`, which was simply never called.
+  - It works for the flat case and **breaks recursive arrow types**:
+    `mu type F = null | (i64) throws :err -> F`. The tagged-result union's C struct gets
+    `neon_value` for the boxed `F`, while its *witness* is generated from a repr whose
+    variant is still a `Closure`, so the witness emits `.env` on a `void*`. The recursive
+    back-edge resolves differently in the two paths.
+  - So the next attempt should probably give `Repr::Closure` a real `throws` field rather
+    than folding, leaving the type graph unchanged and combining the two only where the C
+    signature is built. That keeps the recursion structure identical to today's.
+  - `emit_thunks` was fixed on the way and kept: it built the adapter from the declared
+    return type rather than the tagged result. Correct on its own, and needed by any fix.
 
 - **A protocol method call inside an interpolation hole miscompiles.** Accepted by the
   checker, rejected by the C compiler -- so it is a miscompile, and the shape is one

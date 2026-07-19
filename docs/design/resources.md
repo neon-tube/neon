@@ -201,10 +201,12 @@ cross it. See the `return` note below, which makes that worse than it should be.
 
 ## Open
 
-- **`return` inside a lambda is unsound**, which this pattern runs straight into: the checker
-  types `return` against the *enclosing function*, while lowering lifts the lambda and
-  returns from the lambda. See `docs/finalpush.md`. Until it is fixed, a `using` body must not
-  contain `return`.
+- **Prerequisite: throwing closures.** Cleanup is specified as `(T) throws E -> ()`, and no
+  value of that type can currently be built — a lambda cannot throw and a named throwing
+  function cannot be used as a value, so throwing arrow types are uninhabited. Until that is
+  fixed only `Resource[T, never]` is constructible, which means `release` cannot report a
+  failure and `fs::close` cannot surface a close error — the whole point of the explicit
+  path. See `docs/finalpush.md` for the attempt that was made and reverted, and why.
 - **Cycles.** A resource reachable only through a cycle closes when the collector runs.
   Every other path here is deterministic; this one is not, and it is the single guarantee
   this design cannot make.
