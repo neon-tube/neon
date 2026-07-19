@@ -10,6 +10,7 @@ pub mod empty;
 pub mod generic;
 pub mod env;
 pub mod narrow;
+pub mod ordered;
 pub mod print;
 pub mod resolve;
 pub mod result;

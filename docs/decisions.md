@@ -394,14 +394,44 @@ Ordering recurses, so a type is ordered only when every part of it is. `Map` has
 reaches itself is a pointer with nothing to walk. All three read as one ordered shape at
 the top level, and all three are diagnostics.
 
-*Generic ordering is not expressible yet.* `fn max[T](a: T, b: T) -> T { if a < b ... }` is
-refused, because a generic body is checked once with `T` abstract and nothing re-checks the
-instantiation — so `max(map, map)` would reach the backend as a comparison of two
-addresses. Structurally it ought to work; saying so needs the ordered check to run per
-instantiation at monomorphisation, where there is no diagnostic channel today. This is the
-open question `sort` will force: with no `Ord` protocol there is no bound to write, so
-either `sort` is a native that reads the element's compare off its value-witness (and the
-call is checked at the call site), or monomorphisation grows diagnostics.
+### Markers: a bound with no methods
+
+*(Decided 2026-07-19, alongside structural comparison.)*
+
+    marker Ord
+
+    fn max[T](a: T, b: T) -> T where T: Ord { if a < b { b } else { a } }
+
+A **marker** is a bound carrying no methods, satisfied by a rule the compiler knows rather
+than by an impl. `where T: Ord` says "this parameter can be ordered"; the compiler answers
+it from `T`'s structure. There is nothing to write and no way to override it.
+
+This exists because a generic body is checked *once*, with `T` abstract. There is no
+concrete type there to test, so `a < b` on a bare `T` has no answer — and the old compiler,
+which allowed it, monomorphised `max(map, map)` into a comparison of two addresses. The
+bound supplies the missing information at the boundary where it exists: the body is checked
+against the bound, and each call site is checked against the type actually supplied.
+
+A marker is not a protocol wearing a hat. A protocol is a *choice* a type makes about how to
+answer something — that is why `Display` is one. A marker is a *fact* about a type that the
+type does not get a say in: `Ord` follows from structure, and letting a type claim it while
+holding a `Map` would be a lie the backend cannot honour. So `impl Ord for X` is not merely
+unnecessary, it is unwritable, and markers are prelude-only — only the compiler can supply
+a rule, so a marker it does not recognise is a diagnostic at the declaration.
+
+**Order is infectious, and the bound threads through the recursion.** A record is ordered
+when every field is, `List[T]` when `T` is. That means a *bound* variable must count as
+ordered inside a container too, or the marker would be useless past the first one:
+`Box[T]` under `where T: Ord` is ordered precisely because `T` is bound there. Ask the same
+question without that context and the answer is no.
+
+The ceremony is real and was weighed: nearly every type is ordered, so the bound excludes
+few types while appearing on many signatures. It buys a general mechanism rather than a tax
+on one operator — `Send` and friends land here later — and the alternative, inferring the
+requirement, makes a function body silently change its public contract and needs a fixpoint
+over the call graph to propagate. For a type whose meaningful order is not its structural
+one, nothing here is a dead end: `max_by`/`sort_by` take the comparison as an argument and
+need no bound at all, which is also why `Ordering` stayed in the prelude.
 
 `f64` makes "total" a slight lie at the leaf. NaN compares false against everything
 including itself, so `NaN == NaN` is false, `{x: NaN} == {x: NaN}` is false — a record
@@ -435,10 +465,11 @@ mean.
 
 ### There is a prelude, and it holds only what syntax needs
 
-`Display` and `Error`. Nothing else.
+`Display` and `Error`, plus the `Ord` marker. Nothing else.
 
-`Eq` and `Ord` were here while `==` and `<` were meant to dispatch. Comparison is
-structural now, so nothing in the language names them and they are gone.
+`Eq` and `Ord` were *protocols* here while `==` and `<` were meant to dispatch. Comparison
+is structural now, so `Eq` is gone entirely and `Ord` survives only as a marker — a bound a
+generic writes, with no methods and nothing to implement.
 
 Interpolation is syntax and desugars to a protocol call, so without a prelude every file
 containing a string hole needs an import before a language feature works. The rule: **if

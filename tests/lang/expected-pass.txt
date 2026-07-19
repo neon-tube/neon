@@ -135,7 +135,10 @@ operators/comparison.neon
 operators/float_arith.neon
 operators/float_special_values.neon
 operators/int_arith.neon
+operators/marker_ord_bound.neon
+operators/marker_ord_unsatisfied.neon
 operators/nan_propagates_through_structure.neon
+operators/ordering_generic_needs_the_bound.neon
 operators/orelse_chain.neon
 operators/orelse_union.neon
 operators/orelse_zero_is_not_null.neon

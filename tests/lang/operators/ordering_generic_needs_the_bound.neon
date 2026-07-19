@@ -1,0 +1,20 @@
+//@ compile-fail
+//@ error-contains: has no order
+//
+// A generic body is typechecked once, with `T` abstract, so there is no concrete type
+// to ask whether it can be ordered. Allowing `<` anyway is what the old compiler did,
+// and it monomorphised into a comparison of two pointers for any type without a
+// structural order — a silent wrong answer.
+//
+// So the bound is required: write `where T: Ord` and the body is allowed, with each
+// call site checking the type actually supplied. See marker_ord_bound.neon.
+
+use std::io;
+
+fn max[T](a: T, b: T) -> T {
+    if a < b { b } else { a }
+}
+
+fn main() {
+    io::println("#{max(1, 2)}");
+}

@@ -108,6 +108,28 @@ corpus programs run leak-free under ASan.
   `prim_operand` projects the first non-null variant of each and compares those, so
   `(i64 | bool)` operands compare an `i64` against a `bool` — `1 == true` is `true`.
 
+- **A generic cannot call a generic.** Pre-existing and unrelated to comparison —
+  verified identical on `7fbd131`. Passing an argument whose type is the caller's own
+  rigid type variable solves *nothing*: `solve_generics` returns an empty substitution, so
+  the callee's type parameters are never bound and lowering emits `neon_value` where the
+  concrete type belongs.
+
+  ```neon
+  fn id[T](x: T) -> T { x }
+  fn relay[T](x: T) -> T { id(x) }        // gcc: assignment to 'int64_t' from 'neon_value'
+  ```
+
+  This is worth fixing early: it blocks any layered generic code, and it is also why a
+  `where T: Ord` marker bound cannot yet be *propagated*. The bound is discharged from the
+  call site's substitution, and when that substitution is empty there is nothing to check —
+  so `fn relay[T](a: T, b: T) { max(a, b) }` with no bound of its own is accepted, and
+  `relay(map, map)` reaches the backend. Direct calls are checked correctly; it is only the
+  generic-to-generic hop that escapes, and it escapes because the hop is broken anyway.
+
+- **Bound failures inside a generic call report twice.** Pre-existing; a protocol bound
+  does it too. Arguments are checked once while solving the callee's generics and again
+  under the solution, so any diagnostic in an argument position is emitted twice.
+
 - **A list used as a map key leaks.** Pre-existing, and unrelated to comparison — it
   reproduces identically on `7fbd131`, before that work. One list object plus its data
   buffer (72 bytes for `[1, 2]`) is never released:

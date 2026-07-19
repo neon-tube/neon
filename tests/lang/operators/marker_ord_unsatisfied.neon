@@ -1,0 +1,23 @@
+//@ compile-fail
+//@ error-contains: Ord
+//
+// The bound is checked at the call site, against the type the parameter was actually
+// bound to. `Map` has no structural order — it is an opaque pointer with no elements
+// to compare — so it cannot satisfy `Ord`, and the error lands on the call rather
+// than inside `max`'s body.
+//
+// There is no way to force it: a marker is answered from structure, so there is no
+// `impl Ord for Map` to write. A type whose ordering the caller wants to supply goes
+// through `max_by`, which takes a comparator and needs no bound at all.
+
+use std::io;
+use std::collections::map;
+
+fn max[T](a: T, b: T) -> T where T: Ord {
+    if a < b { b } else { a }
+}
+
+fn main() {
+    let m: Map[str, i64] = map::new();
+    io::println("#{map::len(max(m, m))}");
+}

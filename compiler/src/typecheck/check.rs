@@ -889,120 +889,25 @@ impl Checker<'_> {
             && d.arrows == super::bdd::FALSE
     }
 
-    /// A type with a structural order: exactly one shape, that shape not a name, and
-    /// every part of it ordered too.
+    /// A type with a structural order, given whatever `where T: Ord` bounds are in scope.
     ///
-    /// Ordering a union is the case this exists to reject. `(i64 | :none) < ...` passes
-    /// the overlap test -- it is the same type on both sides -- but answering it needs an
-    /// invented rank between the arms, which is the cross-type order this language
-    /// declines (see "Comparison is structural" in docs/decisions.md). Atoms are names
-    /// rather than magnitudes, so they have no order either, and `null` is a unit.
-    ///
-    /// This is the checker's half of `has_order` in `backend/c.rs`, and the two must agree
-    /// exactly: the backend has no diagnostic to emit, so where it cannot order a repr it
-    /// panics. Three shapes make the recursion necessary rather than a one-level test, and
-    /// each was a crash or a silent wrong answer before it was written:
-    ///
-    /// - `Map` is opaque and pointer-backed, with no element order to appeal to. As a
-    ///   nominal record it would otherwise read as one ordered shape, and `<` on it
-    ///   compiled to a *pointer* comparison.
-    /// - `List[T]` is ordered exactly when `T` is. `List[i64 | str]` read as ordered and
-    ///   the emitted `neon_list_cmp` called the element witness's null `cmp`: a segfault.
-    /// - A record that reaches itself is pointer-backed for the same reason a `Map` is, so
-    ///   the `seen` set answers "no" on a cycle rather than recursing forever.
+    /// The rule itself lives in `typecheck::ordered`, because the `marker Ord` bound needs
+    /// the same answer when it is discharged at a call site. See that module for why order
+    /// is infectious and why the bound set is threaded through the recursion.
     fn is_ordered(&self, ty: TyId) -> bool {
-        self.ordered_rec(ty, &mut Vec::new())
+        super::ordered::is_ordered(self.env, ty, &self.ord_bound_vars())
     }
 
-    fn ordered_rec(&self, ty: TyId, seen: &mut Vec<TyId>) -> bool {
-        let d = self.env.solver.t.data(ty);
-        // A bare type variable is refused rather than deferred. Letting it through was
-        // the last silent-wrong-answer hole: a generic body is checked once with `T`
-        // abstract, so nothing re-checks the instantiation, and `smaller(map, map)`
-        // monomorphised to a comparison of two `neon_map*` addresses that returned `true`.
-        //
-        // The cost is that generic ordering (`fn max[T](a: T, b: T)`) cannot be written
-        // yet. Structurally it *should* work -- every concrete type this could be
-        // instantiated at either has an order or does not -- but saying so needs the check
-        // to run per instantiation, at monomorphisation, where there is no diagnostic
-        // channel today. Refusing is the honest half of that until there is one.
-        if !self.env.solver.t.atomset_of(d.vars).is_empty_set() {
-            return false;
-        }
-        if d.base & super::types::B_NULL != 0
-            || !self.env.solver.t.atomset_of(d.atoms).is_empty_set()
-            || d.arrows != super::bdd::FALSE
-        {
-            return false;
-        }
-        let bases = (d.base & (super::types::B_I64
-            | super::types::B_F64
-            | super::types::B_STR
-            | super::types::B_BOOL))
-            .count_ones();
-        let has_records = d.records != super::bdd::FALSE;
-        let has_tuples = d.tuples != super::bdd::FALSE;
-        if bases + u32::from(has_records) + u32::from(has_tuples) != 1 {
-            return false;
-        }
-        if !has_records && !has_tuples {
-            return true; // a single primitive base
-        }
-        // A cycle means a pointer-backed value, which has no structural order.
-        if seen.contains(&ty) {
-            return false;
-        }
-        seen.push(ty);
-        let ordered = if has_tuples {
-            match self.tuple_elems(ty) {
-                Some(elems) => elems.iter().all(|&e| self.ordered_rec(e, seen)),
-                None => false,
-            }
-        } else {
-            match super::nominal_head_of(self.env, ty).as_deref() {
-                // Opaque and pointer-backed: no fields to walk, no order to derive.
-                Some("Map") => false,
-                Some("List") => match self.arg_of(ty, 0) {
-                    Some(elem) => self.ordered_rec(elem, seen),
-                    None => false,
-                },
-                _ => match self.record_fields(ty) {
-                    Some(fields) => fields.iter().all(|&(_, ft)| self.ordered_rec(ft, seen)),
-                    None => false,
-                },
-            }
-        };
-        seen.pop();
-        ordered
-    }
-
-    /// The element types of a single tuple atom; `None` when `ty` is not exactly one.
-    fn tuple_elems(&self, ty: TyId) -> Option<Vec<TyId>> {
-        let t = &self.env.solver.t;
-        let d = t.data(ty);
-        match t.tup_bdd.paths(d.tuples).as_slice() {
-            [(pos, neg)] if neg.is_empty() && pos.len() == 1 => {
-                Some(t.tup_atoms[pos[0] as usize].elems.clone())
-            }
-            _ => None,
-        }
-    }
-
-    /// Generic argument `i` of a nominal type, read from its reserved `#i` slot.
-    fn arg_of(&self, ty: TyId, i: usize) -> Option<TyId> {
-        let t = &self.env.solver.t;
-        let d = t.data(ty);
-        match t.rec_bdd.paths(d.records).as_slice() {
-            [(pos, neg)] if neg.is_empty() && pos.len() == 1 => {
-                let want = format!("#{i}");
-                t.rec_atoms[pos[0] as usize]
-                    .fields
-                    .iter()
-                    .find(|&&(l, _)| t.name_str(l) == want)
-                    .map(|&(_, ft)| ft)
-            }
-            _ => None,
-        }
+    /// The type parameters this signature declared `where T: Ord` for.
+    fn ord_bound_vars(&self) -> std::collections::HashSet<String> {
+        self.bounds
+            .iter()
+            .filter(|(_, p)| {
+                let proto = self.env.protocol(*p);
+                proto.is_marker && proto.name == "Ord"
+            })
+            .map(|(n, _)| n.clone())
+            .collect()
     }
 
     /// Record that something throws `throws`. Inside a `try` it lands in the sink to
@@ -1549,14 +1454,33 @@ impl Checker<'_> {
         for (param, proto_path) in &sig.wheres {
             let pn = self.env.solver.t.name(param);
             let Some(&concrete) = subst.get(&pn) else { continue };
-            if self.env.is_error(concrete) || super::generic::is_var(&self.env.solver.t, concrete) {
+            if self.env.is_error(concrete) {
                 continue;
             }
-            if let Some(pid) = self.env.lookup_protocol(module, proto_path) {
-                if !self.env.type_satisfies(concrete, pid) {
-                    let (ty, protocol) = (self.show(concrete), proto_path.join("::"));
-                    self.error(e.span.clone(), TypeErrorKind::UnsatisfiedBound { ty, protocol });
-                }
+            let Some(pid) = self.env.lookup_protocol(module, proto_path) else { continue };
+            // A marker is answered from structure, so it is checked *here* rather than
+            // through `type_satisfies`: this is the only place that knows the enclosing
+            // signature's own bounds, and they are what make a still-generic argument
+            // satisfiable. `sort[T](xs: List[T]) where T: Ord` calling `max(xs, xs)` passes
+            // `List[T]`, which is ordered exactly because `T` is bound here -- ask without
+            // that context and it is not.
+            let satisfied = if self.env.protocol(pid).is_marker {
+                self.is_ordered(concrete)
+            } else if super::generic::is_var(&self.env.solver.t, concrete) {
+                // A protocol bound on a still-abstract argument is the caller's own bound
+                // to discharge, checked where that caller is called.
+                continue;
+            } else {
+                self.env.type_satisfies(concrete, pid)
+            };
+            if !satisfied {
+                let (ty, name) = (self.show(concrete), proto_path.join("::"));
+                let kind = if self.env.protocol(pid).is_marker {
+                    TypeErrorKind::UnsatisfiedMarker { ty, marker: name }
+                } else {
+                    TypeErrorKind::UnsatisfiedBound { ty, protocol: name }
+                };
+                self.error(e.span.clone(), kind);
             }
         }
         for (a, (_, template)) in args.iter().zip(&sig.params) {

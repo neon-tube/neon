@@ -47,7 +47,7 @@ where
 
 /// Where recovery stops skipping: a new declaration, or the `}` that ends the
 /// enclosing module.
-const DECL_STOP: [Token; 13] = [
+const DECL_STOP: [Token; 14] = [
     Token::Fn,
     Token::Test,
     Token::Bench,
@@ -57,6 +57,7 @@ const DECL_STOP: [Token; 13] = [
     Token::Mu,
     Token::Newtype,
     Token::Protocol,
+    Token::Marker,
     Token::Impl,
     Token::Use,
     Token::Const,
@@ -105,6 +106,7 @@ where
             fn_like(ty.clone(), throws.clone(), block.clone(), false).map(DeclKind::Fn),
             record_decl(ty.clone()).map(DeclKind::Record),
             protocol_decl(ty.clone(), throws.clone(), block.clone()).map(DeclKind::Protocol),
+            marker_decl().map(DeclKind::Protocol),
             impl_decl(ty.clone(), throws.clone(), block.clone()).map(DeclKind::Impl),
             mu_type_decl(ty.clone()),
             type_alias_decl(ty.clone()),
@@ -294,6 +296,31 @@ where
         .boxed()
 }
 
+/// `marker Ord` — a bound carrying no methods. It becomes a `ProtocolDecl` with an
+/// empty method set, so every path that already handles a protocol (resolution, the
+/// `where T: P` bound, the formatter) handles a marker unchanged; only satisfaction
+/// differs, and that is decided in the checker.
+fn marker_decl<'t, I>() -> impl P<'t, I, ProtocolDecl>
+where
+    I: ValueInput<'t, Token = Token, Span = Span>,
+{
+    annotations()
+        .then_ignore(just(Token::Marker))
+        .then(ident())
+        .map(|(annotations, name)| ProtocolDecl {
+            name,
+            // A marker constrains one type and names no methods, so the subject name is
+            // never written and never referenced; `T` is a placeholder for the arity-0 case.
+            subject: "T".to_string(),
+            subject_arity: 0,
+            wheres: vec![],
+            methods: vec![],
+            annotations,
+            is_marker: true,
+        })
+        .boxed()
+}
+
 fn protocol_decl<'t, I>(
     ty: impl P<'t, I, TypeSpec> + 't,
     throws: impl P<'t, I, TypeSpec> + 't,
@@ -334,6 +361,7 @@ where
             wheres,
             methods,
             annotations,
+            is_marker: false,
         })
         .boxed()
 }

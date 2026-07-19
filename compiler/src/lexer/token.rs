@@ -31,6 +31,9 @@ pub enum Token {
     /// `mu type A = ...` — an explicit recursive-type binder.
     Mu,
     Protocol,
+    /// `marker Ord` — a bound with no methods, satisfied by a compiler rule
+    /// rather than by an impl.
+    Marker,
     Impl,
     Where,
     Use,
@@ -154,6 +157,7 @@ impl Token {
             "type" => Token::Type,
             "mu" => Token::Mu,
             "protocol" => Token::Protocol,
+            "marker" => Token::Marker,
             "impl" => Token::Impl,
             "where" => Token::Where,
             "use" => Token::Use,
@@ -217,6 +221,7 @@ impl fmt::Display for Token {
             Token::Type => "type",
             Token::Mu => "mu",
             Token::Protocol => "protocol",
+            Token::Marker => "marker",
             Token::Impl => "impl",
             Token::Where => "where",
             Token::Use => "use",

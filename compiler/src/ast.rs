@@ -108,6 +108,10 @@ pub struct ProtocolDecl {
     pub wheres: Vec<WhereClause>,
     pub methods: Vec<FnDecl>,
     pub annotations: Vec<Annotation>,
+    /// `marker Ord` rather than `protocol Ord for T { .. }`: no methods, no impls,
+    /// satisfied by a rule the compiler knows. Shares this node because a marker *is*
+    /// a protocol with an empty method set -- only satisfaction differs.
+    pub is_marker: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

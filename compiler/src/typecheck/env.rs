@@ -105,6 +105,13 @@ pub enum TypeErrorKind {
     MissingSupertrait { sub: String, required: String, ty: String },
     /// A generic call whose `where T: P` bound the argument type does not satisfy.
     UnsatisfiedBound { ty: String, protocol: String },
+    /// A `where T: M` marker bound the type does not have. Distinct from
+    /// `UnsatisfiedBound` because a marker cannot be implemented, so "write an impl" is
+    /// not advice a reader can act on.
+    UnsatisfiedMarker { ty: String, marker: String },
+    /// `marker Foo` where the compiler has no rule for `Foo`. A marker is satisfied by a
+    /// compiler-known property, so one it does not recognise could never be satisfied.
+    UnknownMarker(String),
     /// An impl that does not provide a method its protocol requires.
     ImplMissingMethod { protocol: String, method: String },
     /// `main` with an explicit return type or throws clause -- both are fixed.
@@ -237,6 +244,21 @@ impl fmt::Display for TypeError {
             TypeErrorKind::ImplMissingMethod { protocol, method } => write!(
                 f,
                 "this impl of `{protocol}` is missing the method `{method}`"
+            ),
+            TypeErrorKind::UnsatisfiedMarker { ty, marker } => write!(
+                f,
+                "`{ty}` does not satisfy `{marker}`, and cannot be made to: a marker is \
+                 answered from a type's structure, so there is nothing to implement. \
+                 `Ord` in particular is infectious -- a container is ordered only when \
+                 its contents are, and a `Map`, a closure, a union or a self-referencing \
+                 record has no order at all. To order one anyway, pass the comparison in \
+                 (`max_by`, `sort_by`), which needs no bound"
+            ),
+            TypeErrorKind::UnknownMarker(n) => write!(
+                f,
+                "no rule for marker `{n}`. A marker names a property the compiler tests \
+                 from a type's structure, so it cannot be declared by a program -- only \
+                 the markers the compiler knows exist (`Ord`)"
             ),
             TypeErrorKind::UnsatisfiedBound { ty, protocol } => write!(
                 f,
@@ -388,6 +410,9 @@ pub struct Protocol {
     pub supertraits: Vec<Vec<String>>,
     pub methods: Vec<FnSig>,
     pub span: Span,
+    /// Declared as `marker P` -- no methods, no impls, satisfied by a compiler rule
+    /// keyed on the name rather than by an impl search. See `marker_rule`.
+    pub is_marker: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -763,7 +788,11 @@ impl Env {
                         supertraits,
                         methods: vec![],
                         span: d.span.clone(),
+                        is_marker: p.is_marker,
                     });
+                    if p.is_marker && !Self::is_known_marker(&p.name) {
+                        self.error(d.span.clone(), TypeErrorKind::UnknownMarker(p.name.clone()));
+                    }
                 }
                 ast::DeclKind::Use(u) => {
                     let scope = module.join("::");
@@ -1113,6 +1142,14 @@ impl Env {
     }
 
     pub fn type_satisfies(&mut self, ty: TyId, protocol: ProtocolId) -> bool {
+        // A marker has no impls to search: it names a property the compiler can test, and
+        // the type either has it or does not. `bound` is empty here because this is the
+        // *call site* -- whatever the callee's signature required, the argument's type is
+        // concrete by now, and a variable still standing means the caller is itself
+        // generic, which its own bound has to have covered.
+        if self.protocols[protocol.0].is_marker {
+            return self.satisfies_marker(ty, protocol);
+        }
         if self.protocols[protocol.0].subject_arity > 0 {
             let Some(head) = crate::typecheck::nominal_head_of(self, ty) else { return false };
             return self.impls.iter().any(|i| {
@@ -1130,6 +1167,22 @@ impl Env {
         }
         let covered = self.solver.t.union_all(&targets);
         self.solver.is_subtype(ty, covered)
+    }
+
+    /// A marker's rule, keyed on its name. Markers are prelude-only by construction:
+    /// only the compiler can supply a rule, so a marker it does not recognise is satisfied
+    /// by nothing, and `Env::build` reports the declaration rather than letting every use
+    /// fail mysteriously at the call site.
+    fn satisfies_marker(&mut self, ty: TyId, protocol: ProtocolId) -> bool {
+        match self.protocols[protocol.0].name.as_str() {
+            "Ord" => super::ordered::is_ordered(self, ty, &std::collections::HashSet::new()),
+            _ => false,
+        }
+    }
+
+    /// Whether the compiler has a rule for a marker of this name.
+    pub fn is_known_marker(name: &str) -> bool {
+        matches!(name, "Ord")
     }
 
     pub fn imported_method(&self, module: &[String], name: &str) -> Option<ProtocolId> {

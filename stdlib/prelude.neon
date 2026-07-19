@@ -3,9 +3,11 @@
 // Declared at the root, so `Display`, `Ordering` and the protocol names resolve by
 // their short names from any module. `#{x}` desugars to `to_string(x)`.
 //
-// Comparison is *not* here: `==` and `<` are structural primitives the backend
-// expands per type, not protocol calls, so there is no `Eq` and no `Ord`. See
-// "Comparison is structural" in docs/decisions.md.
+// Comparison is *not* dispatched: `==` and `<` are structural primitives the backend
+// expands per type, not protocol calls, so there is no `Eq` protocol and nothing to
+// implement. `Ord` survives only as a *marker* — a bound a generic writes to say its
+// parameter can be ordered, answered from structure. See "Comparison is structural"
+// in docs/decisions.md.
 
 // Still useful as a return type for hand-written comparison functions, e.g. the
 // callback `sort_by` takes. Nothing in the language depends on it.
@@ -28,6 +30,18 @@ fn range(from: i64, to: i64) -> List[i64] {
 // storage is native, reached only through `std::collections::{list, map}`.
 opaque record List[T] {}
 opaque record Map[K, V] {}
+
+// ---- markers ----
+
+// A bound with no methods: `where T: Ord` says T can be ordered, and the compiler
+// answers that from T's structure. There is nothing to implement and no way to
+// override it -- see "Comparison is structural" in docs/decisions.md.
+//
+// Order is infectious. A record is ordered when every field is, `List[T]` when T is;
+// a Map, a closure, a union and a self-referencing record are not. For a type whose
+// meaningful order is not its structural one, pass the order in: `max_by`/`sort_by`
+// take a comparator and need no bound at all.
+marker Ord
 
 // ---- the protocols ----
 

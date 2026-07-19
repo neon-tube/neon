@@ -666,6 +666,12 @@ impl<'a> Fmt<'a> {
 
     fn protocol_decl(&mut self, p: &ProtocolDecl, span: &Span) {
         self.annotations(&p.annotations);
+        // A marker shares this node but has no subject, no wheres and no body to print.
+        if p.is_marker {
+            self.push("marker ");
+            self.push(&p.name);
+            return;
+        }
         self.push("protocol ");
         self.push(&p.name);
         self.push(" for ");
