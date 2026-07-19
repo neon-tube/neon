@@ -1980,6 +1980,23 @@ fn prim(types: &TypeTable, f: &Func, op: PrimOp, args: &[Value]) -> String {
 
 /// `nl_` + an injective escape of the IR name into a valid C identifier. Runtime symbols
 /// (`neon_*`) are never mangled.
+///
+/// INJECTIVITY OBLIGATION: this is an identity — it is the C symbol, so a collision here
+/// is two Neon functions becoming one linker name, which is the `repr_key` bug arriving
+/// at the very last step. It is injective over ASCII, and only over ASCII.
+///
+/// The argument: `_` is the sole escape lead and is itself always escaped (`_u`), so an
+/// underscore in the output can only ever begin an escape, and decoding is unambiguous —
+/// `_u`, `_S`, or `_x` plus EXACTLY TWO hex digits. That last clause is where the ASCII
+/// bound comes from: `{:02x}` is a minimum width, not a fixed one, so a character above
+/// `0xff` writes more than two digits and the escape stops being self-delimiting.
+/// `mangle("→")` and `mangle("!92")` would then both be `nl__x2192`.
+///
+/// The bound holds because IR names are built from identifiers, `$` separators and
+/// `repr_key` output, and the lexer admits only `[A-Za-z_][A-Za-z0-9_]*`
+/// (`lexer/mod.rs::is_ident_start`/`is_ident_continue`) — every one of which is ASCII.
+/// The assertion below is what enforces it rather than merely claiming it, so admitting
+/// non-ASCII identifiers fails loudly here instead of silently merging two symbols.
 fn mangle(name: &str) -> String {
     let mut out = String::from("nl_");
     for c in name.chars() {
@@ -1988,6 +2005,13 @@ fn mangle(name: &str) -> String {
             '$' => out.push_str("_S"),
             '_' => out.push_str("_u"),
             other => {
+                debug_assert!(
+                    other.is_ascii(),
+                    "mangle got a non-ASCII character {other:?} in {name:?}; the \
+                     `_x{{:02x}}` escape is only self-delimiting below 0x100, so this \
+                     is no longer injective — `→` and `!92` both mangle to `nl__x2192`. \
+                     Widen the escape to a delimited form before admitting these."
+                );
                 let _ = write!(out, "_x{:02x}", other as u32);
             }
         }

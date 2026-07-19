@@ -1,0 +1,63 @@
+//@ compile-fail
+//@ error-contains: Secret
+//
+// KNOWN BUG — this file currently COMPILES AND RUNS, printing `99`. It is deliberately
+// left out of `expected-pass.txt`: unlisted-and-failing is the harness's way of
+// recording a bug that is not fixed yet, and this file flips green when it is.
+//
+// A record's nominal identity is its BARE NAME. `typecheck/env.rs::record_body` ends
+//
+//     let n = self.solver.t.name(&r.name);
+//     self.solver.t.nominal(n, args, fields)
+//
+// and `r.name` is the written identifier with no module path attached — the `Newtype`
+// arm of `instantiate` does the same with `decl.name()`. So the nominal identity of a
+// record is a projection that drops the declaring module, and two modules that both
+// declare `record Secret { code: i64 }` do not merely LOOK alike to the checker: they
+// are the SAME TYPE. Not a tag collision downstream, a type-identity collision at the
+// source.
+//
+// That defeats `opaque`. `opaque` is what lets a module hold an invariant its callers
+// cannot break — `std::fs` depends on it, where a `File` is a cleanup guard in a field
+// and a reachable guard is the same as no guard. Anyone can forge one by declaring a
+// same-named, same-shaped record in their own module and handing it over. No `any`, no
+// cast, no `is`: the call below type-checks directly.
+//
+// The same collapse is visible one layer down, where it is a memory-safety shape rather
+// than an encapsulation one:
+//
+//     let fake: any = forge::fake(99);
+//     io::println("#{fake is vault::Secret}");   // true
+//     let forged = fake as vault::Secret;        // and `as` trusts `is`
+//
+// because `ctype.rs::tag_name_inner` spells a nominal record `{name}[{fields}]` from
+// that same unqualified name.
+//
+// This is the same class as the closure tag next door (see
+// `erased_closure_is_checks_its_signature.neon`): a lossy projection used as an
+// identity. It is not fixed here because the fix is not local. The nominal name is read
+// back out by `dispatch::nominal_head` and matched against `ir/lower.rs::ast_head`,
+// which is `path.last()` of the *written* path — so qualifying the declaration without
+// also resolving every written path to its declaring module would break protocol
+// dispatch across the whole stdlib. `ordered.rs` additionally matches these names
+// against string literals like `"List"`. Qualifying is the right fix; it is a
+// multi-site change, and asserting the property here without making it true is exactly
+// the failure mode this audit exists to stop.
+
+use std::io;
+
+internal mod vault {
+    opaque record Secret { code: i64 }
+    fn seal(n: i64) -> Secret { Secret { code: n } }
+    fn reveal(s: Secret) -> i64 { s.code }
+}
+
+internal mod forge {
+    record Secret { code: i64 }
+    fn fake(n: i64) -> Secret { Secret { code: n } }
+}
+
+fn main() {
+    // Should be rejected: a `forge::Secret` is not a `vault::Secret`. Today it prints 99.
+    io::println("#{vault::reveal(forge::fake(99))}");
+}

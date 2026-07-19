@@ -1,0 +1,23 @@
+//@ compile-fail
+//@ error-contains: unknown escape
+
+// A bad escape whose character is multi-byte must be reported, not crash the compiler.
+//
+// `escape` consumes the escaped thing with `bump`, which advances one *byte*. For a
+// multi-byte character that left the position inside a UTF-8 sequence, and the string
+// body resumed with `self.text[self.pos..]` — a slice at a non-boundary, which panics.
+// Four bytes were enough: a quote, a backslash, and any non-ASCII character.
+//
+// The lexer deliberately keeps going after a bad escape so one typo does not swallow the
+// rest of the file, which is exactly why it had to resume at a valid offset.
+//
+// The same arm also named the wrong character: `other as char` on a UTF-8 lead byte gives
+// whatever that byte means in Latin-1, so `\é` was reported as `\Ã`. Found by fuzzing —
+// the corpus contains multi-byte text but never a multi-byte *escape*.
+
+use std::io;
+
+fn main() {
+    let s = "a\éb";
+    io::println(s);
+}

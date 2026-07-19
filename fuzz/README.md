@@ -21,21 +21,40 @@ rustup toolchain install nightly
 
 ## Running a target
 
+`lex` is simple:
+
 ```sh
-cargo +nightly fuzz run lex    -- -dict=fuzz/neon.dict -max_total_time=60
-cargo +nightly fuzz run parse  -- -dict=fuzz/neon.dict -max_total_time=60
-cargo +nightly fuzz run format -- -dict=fuzz/neon.dict -max_total_time=300
+cargo +nightly fuzz run lex -- -dict=fuzz/neon.dict -max_total_time=60 -only_ascii=1
 ```
 
-Useful libFuzzer flags: `-max_len=16384` (the largest seed is ~14 KB, so a
-larger cap only buys slower runs), `-jobs=N -workers=N` to fan out,
-`-print_final_stats=1` for the iteration count, `-only_ascii=1` to keep
-mutations inside ASCII.
+`parse` and `format` need three extra things, because `parser::parse` leaks (see
+**Known issues**). Run them through the built binary so the ASan options reach
+the fork children:
 
-`-only_ascii=1` is currently load-bearing for `parse` and `format`: the lexer
-has an open panic on a non-ASCII escape (see **Known crashes**) that both of
-those targets hit within seconds, which masks everything downstream of it.
-Drop the flag once that is fixed.
+```sh
+cargo +nightly fuzz build parse
+
+ASAN_OPTIONS=detect_odr_violation=0:detect_leaks=0 \
+  fuzz/target/x86_64-unknown-linux-gnu/release/parse \
+  fuzz/corpus/parse -artifact_prefix=fuzz/artifacts/parse/ \
+  -dict=fuzz/neon.dict -max_total_time=300 -max_len=16384 \
+  -only_ascii=1 -fork=1
+```
+
+- `detect_leaks=0` — every `parse()` call leaks, so LeakSanitizer fires on the
+  first unit and nothing else ever runs. It must go in `ASAN_OPTIONS` rather
+  than as a `-detect_leaks=0` flag: in fork mode the flag is not passed to the
+  children, and they will report the leak anyway.
+- `-fork=1` — turning the *report* off does not stop the leak, so RSS climbs
+  monotonically and the run dies of OOM at the 2 GB default after a couple of
+  minutes. Fork mode restarts the child periodically and resets it.
+- `-only_ascii=1` — the lexer has an open panic on a non-ASCII escape (see
+  **Known crashes**) that both targets hit within seconds, masking everything
+  downstream. Drop this once that is fixed.
+
+Other useful flags: `-max_len=16384` (the largest seed is ~14 KB, so a bigger cap
+only buys slower runs), `-jobs=N -workers=N` to fan out, `-print_final_stats=1`
+for the iteration count.
 
 ## What each target asserts
 
@@ -150,6 +169,30 @@ path — it just resumes at a bad offset.
 
 The rune path does not reproduce: `'\é'` lexes without panicking, so the fix is
 in the string body's resumption, not in `escape`'s error reporting.
+
+## Known issues
+
+### `parser::parse` leaks its parser on every call
+
+Not a fuzzer finding — it reproduces on any input, including the corpus — but the
+fuzzer is what made it visible, and it is the reason `parse` and `format` need
+`detect_leaks=0` and `-fork=1`.
+
+LeakSanitizer reports roughly 17 KB per `parse()` call (~68 KB for `format()`,
+which parses twice). The allocations are `Rc<RcInner<chumsky::combinator::...>>`
+under `chumsky::recursive::Recursive`, reached from `parser::binary_ops`
+(`parser/mod.rs:1521`) and `parser::module` (`parser/mod.rs:131`). This is
+chumsky's `recursive()` building an `Rc` cycle: the recursive parser holds a
+handle to itself, so its refcount never reaches zero and the whole parser graph
+is freed only by process exit. The parser is rebuilt on every `parse()` call, so
+the leak is per-call rather than one-time — 41,540 fuzz iterations reached 2 GB
+RSS and were killed.
+
+For the batch compiler this is invisible: one parse, then exit. For the **LSP**,
+which reparses on every keystroke, it is unbounded growth in a long-lived
+process, and that is where it is worth fixing. The usual remedy is to build the
+parser once into a `OnceLock`/`Cached` and reuse it, which also removes the
+per-call construction cost.
 
 ## Gitignore policy
 

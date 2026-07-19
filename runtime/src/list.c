@@ -55,7 +55,14 @@ static neon_list* neon_list_ensure_unique(neon_list* l) {
     }
     size_t sz = l->w->size;
     neon_list* c = neon_list_new_with_capacity(l->w, (int64_t)(l->len ? l->len : 1));
-    memcpy(c->data, l->data, l->len * sz);
+    // An empty list has `data == NULL`, and `memcpy` requires valid pointers even for a
+    // count of zero (C17 7.24.1p2). It also carries `nonnull`, from which a compiler may
+    // infer the arguments are non-NULL and delete later checks -- so this is exploitable
+    // UB, not a technicality. Found by the CBMC model; UBSan reports it too, but no corpus
+    // program copies an empty list.
+    if (l->len != 0) {
+        memcpy(c->data, l->data, l->len * sz);
+    }
     c->len = l->len;
     if (l->w->retain) {
         for (size_t i = 0; i < c->len; i++) l->w->retain(c->data + i * sz);
@@ -94,8 +101,14 @@ neon_list* neon_list_set(neon_list* l, int64_t i, const void* elem) {
 neon_list* neon_list_concat(neon_list* a, neon_list* b) {
     size_t sz = a->w->size;
     neon_list* r = neon_list_new_with_capacity(a->w, (int64_t)(a->len + b->len));
-    memcpy(r->data, a->data, a->len * sz);
-    memcpy(r->data + a->len * sz, b->data, b->len * sz);
+    // Same as `ensure_unique`: an empty operand has `data == NULL`, and concatenating two
+    // empty lists additionally forms `NULL + 0`, which is UB in its own right.
+    if (a->len != 0) {
+        memcpy(r->data, a->data, a->len * sz);
+    }
+    if (b->len != 0) {
+        memcpy(r->data + a->len * sz, b->data, b->len * sz);
+    }
     r->len = a->len + b->len;
     if (a->w->retain) {
         for (size_t i = 0; i < r->len; i++) a->w->retain(r->data + i * sz);

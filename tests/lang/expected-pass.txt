@@ -57,6 +57,7 @@ closures/throwing_fn_as_value.neon
 closures/throwing_lambda.neon
 closures/throws_mismatch_needs_adapter.neon
 collections/discarded_index_still_traps.neon
+collections/empty_list_copies_and_concats.neon
 collections/iolist_and_files.neon
 collections/iterating_a_non_collection.neon
 collections/list_construction.neon
@@ -223,6 +224,7 @@ records/value_record_through_any.neon
 resources/resource_cleanup_runs_at_last_use.neon
 resources/resource_lifecycle.neon
 resources/resource_with_refcounted_payload.neon
+strings/unknown_escape_of_a_multibyte_char.neon
 strings/interpolation_basic.neon
 strings/interpolation_display.neon
 strings/interpolation_literal_braces.neon

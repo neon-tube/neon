@@ -879,3 +879,37 @@ fn a_protocol_may_carry_a_where_clause() {
     assert_eq!(p.wheres.len(), 1);
     assert_eq!(p.wheres[0].param, "T");
 }
+
+/// The grammar is built once per thread and reused, not rebuilt per `parse`.
+///
+/// This is a leak test wearing a cheaper disguise. `Recursive::declare` hands
+/// out a strong `Rc`, and the mutually recursive expression grammar defines
+/// `expr`/`cond`/`block`/`unary` in terms of those handles, so the finished
+/// graph contains strong cycles and dropping it frees nothing. Rebuilding it
+/// per call therefore leaked ~25 kB per call — invisible to the batch compiler,
+/// fatal to the language server, which reparses on every edit for the life of a
+/// session. Counting constructions pins that exactly, with no dependence on
+/// RSS, the allocator, or the platform.
+#[test]
+fn the_grammar_is_built_once_per_thread() {
+    // Warm the thread_local, so the count under test excludes first use.
+    let _ = parse_src("fn f() { }");
+    let after_warmup = GRAPH_BUILDS.with(|n| n.get());
+    assert_eq!(after_warmup, 1, "the grammar should be built exactly once");
+
+    for i in 0..200 {
+        let src = format!("fn f{i}(x: int) -> int {{ let y = x + {i} * 2; if y > 0 {{ y }} else {{ -y }} }}");
+        let _ = parse_src(&src);
+    }
+    // `format` goes through `parse` too, so it must share the one graph.
+    for i in 0..200 {
+        let _ = crate::format::format(&format!("fn g{i}() {{ let a = [1, 2, {i}]; }}"));
+    }
+
+    assert_eq!(
+        GRAPH_BUILDS.with(|n| n.get()),
+        after_warmup,
+        "the grammar was rebuilt; every rebuild is a permanent ~25 kB leak, \
+         because its Rc cycles make it unreclaimable"
+    );
+}

@@ -386,6 +386,26 @@ impl TypeTable {
     /// that back into the name the source wrote. It could not, and the old catch-all
     /// answered with the structural key `P3`: `let a: any = Node { .. }; a is Node` was
     /// silently `false` for every self-referencing record while a flat one answered `true`.
+    /// INJECTIVITY OBLIGATION: this is an identity, and the sharpest one in the compiler
+    /// — it is what `is` compares, and `as` is an unchecked reinterpretation that trusts
+    /// `is`. A collision here is not a wrong answer, it is a wrong CAST. Every arm
+    /// therefore spells the whole shape of its variant and elides nothing; three separate
+    /// bugs (`List` without its element, `Runtime` without its arguments, `BoxedRec`
+    /// falling through to a structural key) and later a fourth (`Closure` as the constant
+    /// `"fn"`) were each an arm that had dropped a component.
+    ///
+    /// It is injective over `Repr` EXCEPT for two deliberate collapses, both of which
+    /// identify things that genuinely are one type: `Nullable(T)` is spelled as `T`, so a
+    /// nullable answers to its payload's name; and a `Recursive` back-edge is spelled as
+    /// the type it names, so a `mu` type and its unfolding agree.
+    ///
+    /// It is NOT injective over the source language, and that is an open bug rather than
+    /// a design choice: `Record { name: Some(n), .. }` spells `n`, which
+    /// `typecheck/env.rs::record_body` built from the bare identifier with no module
+    /// path, so two modules declaring the same record name collide here. See
+    /// `tests/lang/types/a_nominal_name_is_not_a_module_identity.neon`, which fails today.
+    /// The fix belongs upstream in the checker, not in this function — by the time a
+    /// `Repr` arrives the module is already gone.
     pub fn type_tag_name(&self, r: &Repr) -> String {
         self.tag_name(r, &mut Vec::new())
     }
@@ -708,20 +728,59 @@ pub fn fnv1a(s: &str) -> u64 {
 
 /// A record field name, escaped so it is always a valid C identifier and never collides
 /// with the tuple element scheme (`_0`) or a C keyword.
+///
+/// INJECTIVITY OBLIGATION: this is an identity — it names a C struct member, and two
+/// fields of one record colliding here would be a duplicate member or a silent alias.
+///
+/// The domain is two disjoint sets. USER field names are identifiers, and the lexer
+/// admits only `[A-Za-z_][A-Za-z0-9_]*` (`lexer/mod.rs::is_ident_start`), every
+/// character of which passes through verbatim. SYNTHESIZED labels are `#`-prefixed —
+/// `#inner` for a newtype's hidden field, `#nominal` for a record's identity tag, `#0`…
+/// for tuple elements — and `#` is not an identifier character, so source can never
+/// write one. The prefix (`f_` vs `fh_`) records which set the name came from, and
+/// within each set the spelling is the identity, so the whole thing is injective.
+///
+/// The prefixes cannot collide either: a user name yields `f_` then the name, a
+/// synthesized one `fh_` then the name, and those differ at position 1 (`_` vs `h`) for
+/// every input, including a user field that itself begins with `h`.
+///
+/// This replaced a `write!(out, "x{:02x}", ..)` escape that was NOT injective — it was
+/// undelimited, so a field named `a-b` and a field literally named `ax2db` both spelled
+/// `f_ax2db`. The doc comment claimed that arm was unreachable; a `debug_assert` put
+/// there to back the claim failed on the first test run, on `#inner`. Which is the
+/// lesson: the assertion below is load-bearing, not decoration, and it is what will
+/// catch the next label scheme that does not fit either set.
 pub fn field_name(name: &str) -> String {
-    let mut out = String::from("f_");
-    for c in name.chars() {
-        match c {
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '_' => out.push(c),
-            other => {
-                let _ = write!(out, "x{:02x}", other as u32);
-            }
-        }
+    let synthesized = name.starts_with('#');
+    let mut out = String::from(if synthesized { "fh_" } else { "f_" });
+    for c in name.chars().skip(usize::from(synthesized)) {
+        debug_assert!(
+            c.is_ascii_alphanumeric() || c == '_',
+            "field_name got {c:?} in {name:?}, which is neither an identifier nor a \
+             `#`-prefixed synthesized label. Both prefix namespaces spell the rest of \
+             the name verbatim, so a character outside `[A-Za-z0-9_]` has no injective \
+             spelling here. Give this a delimited escape before admitting such names."
+        );
+        out.push(c);
     }
     out
 }
 
 /// A canonical structural key: two reprs share a C struct iff their keys match.
+///
+/// INJECTIVITY OBLIGATION: this is an identity — it interns C structs, value-witnesses
+/// and key-witnesses, so two reprs sharing a key get one struct and one witness. It is
+/// injective over `Repr` because every arm is either a distinct one-character constant
+/// or a distinct one-character constructor prefix followed by a bracketed, comma-joined
+/// spelling of every field of that variant; nothing is elided. The separators are safe
+/// because the only free strings are identifiers, and the lexer admits only
+/// `[A-Za-z_][A-Za-z0-9_]*` (`lexer/mod.rs::is_ident_start`/`is_ident_continue`), so no
+/// name can contain `[`, `]`, `,`, `=` or `@` and forge a bracket structure.
+///
+/// The one caveat, and it is deliberate: `Recursive(ty)` and any repr that unfolds to a
+/// type in `rec` both key as `Z<ty>`. That is a COLLAPSE, and the right one — a
+/// recursive type has two faithful spellings and they must share a struct. It means the
+/// key is injective over *types*, not over *reprs*.
 fn key(r: &Repr) -> String {
     key_with(r, &HashMap::new())
 }

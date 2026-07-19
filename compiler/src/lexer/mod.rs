@@ -619,7 +619,16 @@ impl<'a> Lexer<'a> {
                 }
             }
             other => {
-                let ch = other as char;
+                // `bump` advanced one *byte*, but what is being escaped is a
+                // character. For a multi-byte one that leaves `pos` inside a UTF-8
+                // sequence, and the caller resumes with `self.text[self.pos..]`,
+                // which panics on a char boundary — `"a\éb"` crashed the compiler.
+                // Re-read the character whole, which also fixes the diagnostic:
+                // `other as char` on a lead byte names some other character
+                // entirely (`Ã` for `é`).
+                let at = self.pos - 1;
+                let ch = self.text[at..].chars().next().unwrap_or(other as char);
+                self.pos = at + ch.len_utf8();
                 self.err(LexErrorKind::UnknownEscape(ch), backslash..self.pos);
                 return None;
             }

@@ -48,12 +48,13 @@
 //   all keys collide.
 //
 // * capacity is bounded to {4, 8}. `neon_map_new` hardcodes 8, and a resize from 8
-//   would give a 16-slot probe loop -- past `--unwind 12`. So the harness shrinks a
-//   fresh map to cap 4 (freeing its three arrays and installing smaller ones; it does
-//   not reimplement any map logic) and lets the runtime resize it to 8. Consequence:
-//   the resize path is proved for 4->8 only. It is capacity-generic code -- one
-//   `cap * 2` and a mask -- so this is a bound on confidence, not a different code
-//   path, but a bug that only appears above 8 slots would not be seen.
+//   would give a 16-slot probe loop -- past `--unwind 12`. So the harness declares a
+//   fresh map to be cap 4 (its arrays are the ones the runtime allocated, merely
+//   larger than the capacity claims; no map logic is reproduced) and lets the runtime
+//   resize it to 8. Consequence: the resize path is proved for 4->8 only. It is
+//   capacity-generic code -- one `cap * 2` and a mask -- so this is a bound on
+//   confidence, not a different code path, but a bug that only appears above 8 slots
+//   would not be seen.
 //
 // * three distinct keys and four values. Enough that the table both resizes (cap 4
 //   holds at most 2 entries under the 3/4 load factor) and fills with tombstones,
@@ -66,8 +67,7 @@
 //   failure reaches `neon_trap`, which `_exit`s. CBMC does take those branches under
 //   `--malloc-fail-null` and proves nothing is dereferenced before the trap, but the
 //   leak check cannot fire past a trap, so "no leak on OOM" is vacuous by design
-//   rather than proved. The harness's own fixture allocations assume success, since
-//   a fixture that fails to build tests nothing.
+//   rather than proved.
 
 #include "../support/cbmc_support.h"
 #include "libneon_rt.h"
@@ -156,16 +156,11 @@ static const neon_key_witness key_witness = {
 // empty, so swapping its arrays loses nothing; no map logic is reproduced.
 static neon_map* map_new_small(void) {
     neon_map* m = neon_map_new(&key_witness, &box_witness);
-    free(m->ctrl);
-    free(m->keys);
-    free(m->vals);
+    // The arrays `neon_map_new` allocated are sized for 8 slots and stay exactly as
+    // they are; only the declared capacity shrinks, so slots CAP0..7 are simply never
+    // addressed. Nothing is reallocated and no map logic is reproduced -- the map is
+    // empty, so there is no state to migrate.
     m->cap = CAP0;
-    m->ctrl = (unsigned char*)calloc(CAP0, 1);
-    m->keys = (char*)malloc(CAP0 * sizeof(box*));
-    m->vals = (char*)malloc(CAP0 * sizeof(box*));
-    ASSUME(m->ctrl != NULL && m->keys != NULL && m->vals != NULL,
-           "fixture setup, not runtime code: a harness that fails to build its map "
-           "verifies nothing. Allocation failure *inside* map.c is still explored.");
     return m;
 }
 
@@ -198,6 +193,12 @@ static void check_no_tombstones(neon_map* m) {
 int main(void) {
     for (unsigned i = 0; i < KDOM; i++) {
         hash_of[i] = nondet_ulong();
+        // Not a restriction on behaviour: `neon_map_slot` uses the hash only as
+        // `hash & (cap - 1)`, and cap never exceeds 8 here, so a hash of h and one of
+        // h & 7 drive the table identically. Bounding it collapses 64 symbolic bits
+        // the solver would otherwise carry for no additional coverage.
+        ASSUME(hash_of[i] < 8, "sound: only the low log2(cap) bits of a hash are ever "
+                               "read, and cap <= 8 throughout this model");
     }
 
     neon_map* m = map_new_small();

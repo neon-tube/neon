@@ -54,6 +54,54 @@ use chumsky::prelude::*;
 
 type Extra = extra::Err<ParseError>;
 
+/// The one concrete input type `parse` ever instantiates the grammar at: the
+/// owned token buffer, projected to `(&Token, &Span)` with an explicit
+/// end-of-input span. Naming it is what makes the grammar cacheable — `module`
+/// is generic over the input, but only ever used here.
+type ParseInput<'t> = chumsky::input::MappedInput<
+    't,
+    Token,
+    Span,
+    &'t [(Token, Span)],
+    fn(&'t (Token, Span)) -> (&'t Token, &'t Span),
+>;
+
+/// The built grammar, as stored in the cache.
+type CachedParser<'t> = Boxed<'t, 't, ParseInput<'t>, Module, Extra>;
+
+thread_local! {
+    /// The grammar, built once per thread and reused by every `parse`.
+    ///
+    /// Two reasons this is not built per call. It is expensive — the whole
+    /// combinator graph is allocated every time — and, more pressingly, it is
+    /// *unreclaimable*: `Recursive::declare` hands out a strong `Rc`, and
+    /// `expr`/`cond`/`block`/`unary` each `define` themselves in terms of that
+    /// handle, so the graph contains strong cycles and nothing frees it when it
+    /// is dropped. Rebuilding it per call therefore leaked it per call —
+    /// ~25 kB a time, which the batch compiler never noticed (it parses once
+    /// and exits) but the language server did, reparsing on every edit for the
+    /// life of an editing session. Building once turns an unbounded leak into a
+    /// fixed one-off cost.
+    ///
+    /// (`recursive()` is not the culprit: it uses `Rc::new_cyclic` and holds
+    /// its self-reference weakly. The cycles come from the `declare`/`define`
+    /// pairs, which have no such protection and which the mutually recursive
+    /// expression grammar requires.)
+    static PARSER: CachedParser<'static> = {
+        #[cfg(test)]
+        GRAPH_BUILDS.with(|n| n.set(n.get() + 1));
+        module().boxed()
+    };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many times this thread has built the grammar. The leak was one
+    /// unreclaimable graph per `parse`, so "built once per thread" is the exact
+    /// property, and asserting it directly beats watching RSS.
+    pub(crate) static GRAPH_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Parse a token stream. `eoi` is the source's byte length, used as the span of
 /// end-of-input so an error there points past the last byte rather than at
 /// offset 0.
@@ -66,11 +114,28 @@ pub fn parse(tokens: &[Spanned], eoi: usize) -> (Option<Module>, Vec<ParseError>
         .iter()
         .map(|s| (s.token.clone(), s.span.clone()))
         .collect();
-    let input = owned.as_slice().map(eoi..eoi, |(t, s)| (t, s));
-    // Bound rather than inlined: as a temporary the parser outlives `owned`,
-    // which it borrows, and is dropped after it.
-    let parser = module();
-    let (module, errors) = parser.parse(input).into_output_errors();
+    let input: ParseInput<'_> = owned.as_slice().map(eoi..eoi, |(t, s)| (t, s));
+
+    let (module, errors) = PARSER.with(|parser| {
+        // SAFETY: `'t` appears in `CachedParser<'t>` only as the input type's
+        // lifetime parameter. The grammar borrows nothing from any input: every
+        // combinator in it captures owned data (cloned `Token`s, `&'static
+        // str` labels, the `ops` table) and is handed the input by reference
+        // for the duration of a single `go` call. So shortening the cached
+        // `'static` to this call's `'t` cannot create a dangling reference —
+        // it only narrows a phantom. The transmute is needed rather than a
+        // coercion because `Parser` is invariant in `'src` (it occurs in the
+        // `fn` signatures of the trait object), so the compiler will not
+        // perform the shortening itself.
+        //
+        // The other direction would be unsound and is not done: nothing is ever
+        // transmuted *up* to `'static`, and the borrow of `owned` ends with
+        // this call.
+        let parser: &CachedParser<'_> = unsafe {
+            std::mem::transmute::<&CachedParser<'static>, &CachedParser<'_>>(parser)
+        };
+        parser.parse(input).into_output_errors()
+    });
     // Numbered here so no consumer can forget to: an UNSET id is not an absent
     // type, it is a collision with every other UNSET node.
     let module = module.map(|mut m| {

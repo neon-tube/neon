@@ -1,0 +1,39 @@
+// Copying or concatenating an empty list is undefined behaviour if done naively.
+//
+// An empty `neon_list` has `data == NULL`, and `memcpy` requires valid pointers even when
+// the count is zero (C17 7.24.1p2). It also carries `nonnull`, so a compiler may infer the
+// arguments are non-NULL and delete later checks — this is exploitable UB rather than a
+// technicality. Concatenating two empty lists additionally forms `NULL + 0`.
+//
+// Three sites had it: the copy in `neon_list_ensure_unique`, and both copies in
+// `neon_list_concat`. UBSan reports every one of them, and the corpus runs under UBSan —
+// but no corpus program copied or concatenated an empty list, so nothing ever looked.
+//
+// A CBMC model found it, which is the argument for having models at all: the model
+// explores every reachable state, while a corpus explores the states someone thought to
+// write. `runtime/models/list/` is where it lives.
+//
+// Every case below leaves at least one operand empty, including both.
+
+use std::io;
+use std::collections::list;
+
+fn main() {
+    let empty: List[i64] = [];
+    let also: List[i64] = [];
+    let full = [1, 2, 3];
+
+    io::println(to_string(list::len(list::concat(empty, also))));
+    io::println(to_string(list::len(list::concat(empty, full))));
+    io::println(to_string(list::len(list::concat(full, empty))));
+
+    // `push` on a list held elsewhere copies through `ensure_unique`; `empty` is still
+    // live afterwards, so the copy path is the one taken.
+    let grown = list::push(empty, 7);
+    io::println(to_string(list::len(empty)));
+    io::println(to_string(list::len(grown)));
+
+    // A list of a refcounted element, so the witness's retain runs over zero elements too.
+    let no_strs: List[str] = [];
+    io::println(to_string(list::len(list::concat(no_strs, ["a"]))));
+}

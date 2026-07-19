@@ -164,9 +164,55 @@ fn match_repr(template: &Repr, concrete: &Repr, subst: &mut std::collections::Ha
     }
 }
 
-/// A repr for a turbofish type argument, read from its syntax. Only the head is needed
-/// for a generic instance (mangling and bound-dispatch resolution), so a nominal's
-/// fields are left empty -- which is why `describe[X](null)` still finds `X`.
+/// A repr for a turbofish type argument, read from its syntax.
+///
+/// INJECTIVITY OBLIGATION — CURRENTLY VIOLATED. The old comment here read "only the head
+/// is needed for a generic instance (mangling and bound-dispatch resolution)". That is
+/// true of bound-dispatch resolution and FALSE of mangling, and the two were run
+/// together. This result feeds `mangle_instance` → `repr_key` → the `lowered` dedup set,
+/// where it is the IDENTITY of a monomorphisation instance, so two type arguments
+/// colliding here means the second body is dropped and one instance serves call sites
+/// with different layouts.
+///
+/// Three arms are lossy:
+///   * `Named` with args builds `Record { fields: vec![] }` — a generic record carries
+///     its arguments in its FIELDS, so `Box[i64]` and `Box[str]` become one repr.
+///   * `path.last()` drops the module, so `a::Point` and `b::Point` agree.
+///   * `_ => Repr::Any` sends every tuple and arrow typespec to one value.
+///
+/// `repr_key`'s own obligation therefore holds over `Repr` and buys nothing here: an
+/// injective function of an already-collapsed input is still collapsed.
+///
+/// Reproducer — there is no corpus file because the ratchet has no known-bug marker and
+/// this program should eventually PASS, which `expected-pass.txt` cannot express:
+///
+///     record Box[T] { item: T }
+///     fn ident[T](x: T) -> T { x }
+///     fn main() {
+///         let bi = Box { item: 7 };
+///         let bs = Box { item: "hi" };
+///         io::println("#{ident[Box[i64]](bi).item}");
+///         io::println("#{ident[Box[str]](bs).item}");
+///     }
+///
+/// `neon ir` shows the collision directly — two call sites, one body:
+///
+///     %9  = call @ident$Box(%4)      // the Box[i64] call site
+///     %10 = call @ident$Box(%8)      // the Box[str] call site
+///     fn @ident$Box(%0 Box{item: str}) -> Box{item: str}
+///
+/// and it currently dies at `incompatible types when assigning to type 'nr0' from type
+/// 'nr1'`. gcc's nominal struct typing is the only thing standing between this and a
+/// silent miscompile: two `Box` instantiations get separately interned structs even when
+/// their layouts coincide (`Box[List[i64]]` and `Box[List[str]]` are both one pointer,
+/// and are still `nr0`/`nr1`). That backstop holds only while no two instantiations
+/// reach one interned struct — the same footing `repr_key`'s union collision had, where
+/// `i64|bool` and `i64|f64` did coincide and it compiled silently.
+///
+/// The fix is not a cleverer projection: a repr cannot be rebuilt faithfully from a
+/// typespec, because the field names that give a record its identity are not in the
+/// syntax. It is to use the type the checker already resolved, as the non-turbofish path
+/// does, and to stop deriving a third spelling of the type from syntax at all.
 fn repr_from_typespec(spec: &ast::TypeSpec) -> Repr {
     match &spec.kind {
         ast::TypeSpecKind::Null => Repr::Null,
@@ -198,6 +244,24 @@ fn mangle_instance(base: &str, subst: &std::collections::HashMap<String, Repr>) 
 }
 
 /// A short, stable spelling of a repr for a mangled name.
+///
+/// INJECTIVITY OBLIGATION: this is an identity — it is the name of a monomorphisation
+/// instance, and `lower_module`'s `lowered` set dedups on it, so two substitutions
+/// sharing a key means the second body is DROPPED and one emitted instance serves call
+/// sites that agreed with the compiler on a different layout. Every arm spells its
+/// variant's components; nothing is elided. It is injective over `Repr` modulo the
+/// `Recursive`/`BoxedRec` back-edges, which carry an id and are compared by it.
+///
+/// The separator is `_`, which identifiers may also contain, so injectivity here is
+/// WEAKER than `ctype::key`'s bracketed scheme and is the part worth watching: a record
+/// `A_B` with no fields and a record `A` with a single field of type `B`... do not in
+/// fact collide, because the field arm spells `{field}_{type}` and so carries the field
+/// name too — but the margin is thin and it is arity, not structure, that separates
+/// them. If this ever needs to grow an arm, bracket it rather than adding another `_`.
+///
+/// Same caveat as `ctype::type_tag_name` on nominal names: `Record { name: Some(n), .. }`
+/// spells the bare `n`, so two modules declaring one record name collide. See
+/// `tests/lang/types/a_nominal_name_is_not_a_module_identity.neon`.
 fn repr_key(r: &Repr) -> String {
     match r {
         Repr::I64 => "i64".into(),
@@ -527,6 +591,43 @@ fn mangle_impl(protocol: &str, head: &str, method: &str) -> String {
 }
 
 /// The head of an impl's target, for mangling — the nominal or primitive name.
+///
+/// INJECTIVITY OBLIGATION — PARTIAL, and the shortfall is the `_` arm. Collapsing type
+/// ARGUMENTS is correct and deliberate: a protocol is implemented on a type constructor,
+/// so `impl Container for Box` is one impl serving `Box[i64]` and `Box[str]`
+/// (`tests/lang/protocols/generic_impl.neon`). The codomain is meant to be the set of
+/// heads, and over nominals and primitives this is injective.
+///
+/// `_ => String::new()` is not that. A target with no nominal or primitive head — a
+/// tuple, a union — is given the EMPTY STRING as its identity, and the empty string is a
+/// real value in this key space, not an absence. One such impl works, because both sides
+/// derive the same empty head; two mangle to one symbol.
+///
+/// Reproducer — no corpus file, because the ratchet has no known-bug marker and this
+/// program should eventually PASS, which `expected-pass.txt` cannot express:
+///
+///     protocol Show for T { fn show(v: T) -> str }
+///     impl Show for (i64, i64) { fn show(v: (i64, i64)) -> str { "int tuple" } }
+///     impl Show for (str, str) { fn show(v: (str, str)) -> str { "str tuple" } }
+///
+/// Both impls become `Show$$show`, emitted as `nl_Show_S_Sshow`, and gcc reports
+/// `conflicting types for 'nl_Show_S_Sshow'; have 'neon_str(nt1)'` against a previous
+/// declaration `'neon_str(nt0)'`. It survives only because each tuple type gets its own
+/// interned C struct, so the C type system catches the duplicate — the same "correct
+/// only by coincidence" footing the original `repr_key` union collision had.
+///
+/// Two further collapses, both real and both recorded elsewhere rather than fixed here:
+/// a nominal head is the BARE record name, so two modules declaring one record name
+/// share an impl symbol (see
+/// `tests/lang/types/a_nominal_name_is_not_a_module_identity.neon`); and `mangle_impl`
+/// keys the protocol by its bare name too, so two protocols named `Show` in different
+/// modules collide on one head.
+///
+/// Whoever fixes the `_` arm must change `ast_head` and `repr_head` in the same commit.
+/// The three derive one head from three different representations — the checked
+/// `ImplDef`, the written syntax, the receiver's repr — and they must AGREE, or a
+/// dispatch emits a call to a symbol nothing defines and the failure moves from the C
+/// compiler to the linker, which is strictly worse.
 fn impl_head(env: &Env, impl_def: &crate::typecheck::env::ImplDef) -> String {
     if let Some(h) = &impl_def.target_head {
         return h.clone();
