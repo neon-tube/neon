@@ -325,7 +325,7 @@ impl Checker<'_> {
                 if let Some(w) = want {
                     self.result.set_declared(value.id, w);
                 }
-                self.bind_pattern(pat, want.unwrap_or(t));
+                self.bind_pattern(module, pat, want.unwrap_or(t));
             }
             ast::StmtKind::Assign { name, value } => {
                 let Some(want) = self.lookup(name) else {
@@ -354,7 +354,7 @@ impl Checker<'_> {
         }
     }
 
-    fn bind_pattern(&mut self, p: &ast::Pattern, t: TyId) {
+    fn bind_pattern(&mut self, module: &[String], p: &ast::Pattern, t: TyId) {
         match &p.kind {
             ast::PatternKind::Bind(n) => self.bind(n, t, p.span.clone()),
             ast::PatternKind::Wildcard => {}
@@ -362,16 +362,27 @@ impl Checker<'_> {
                 for (i, sub) in ps.iter().enumerate() {
                     let e = narrow::project_elem(&mut self.env.solver, t, i);
                     let et = self.projected(sub.span.clone(), e, &i.to_string(), t);
-                    self.bind_pattern(sub, et);
+                    self.bind_pattern(module, sub, et);
                 }
             }
-            ast::PatternKind::Record { fields, .. } => {
+            ast::PatternKind::Record { fields, path, .. } => {
+                // Destructuring is a field read that looks like a binding. The name comes
+                // from the pattern's own path when it has one, and otherwise from the type
+                // being matched.
+                match path {
+                    Some(q) => self.check_opaque_path(
+                        module, p.span.clone(), q, "it can be destructured"),
+                    None => if let Some(n) = self.nominal_of(t) {
+                        self.check_opaque_name(
+                            module, p.span.clone(), &n, "it can be destructured")
+                    },
+                }
                 for f in fields {
                     let label = self.env.solver.t.name(&f.name);
                     let pj = narrow::project_field(&mut self.env.solver, t, label);
                     let ft = self.projected(p.span.clone(), pj, &f.name, t);
                     match &f.pat {
-                        Some(sub) => self.bind_pattern(sub, ft),
+                        Some(sub) => self.bind_pattern(module, sub, ft),
                         None => self.bind(&f.name, ft, f.span.clone()),
                     }
                 }
@@ -630,7 +641,7 @@ impl Checker<'_> {
                     }
                 };
                 self.locals.push(vec![]);
-                self.bind_pattern(pat, elem);
+                self.bind_pattern(module, pat, elem);
                 self.loop_breaks.push(vec![]);
                 self.block(module, body, None);
                 self.loop_breaks.pop();
@@ -651,6 +662,7 @@ impl Checker<'_> {
 
             ExprKind::Field { base, name } => {
                 let t = self.expr(module, base, None);
+                self.check_opacity(module, e.span.clone(), t, name);
                 let label = self.env.solver.t.name(name);
                 let p = narrow::project_field(&mut self.env.solver, t, label);
                 self.projected(e.span.clone(), p, name, t)
@@ -804,6 +816,10 @@ impl Checker<'_> {
         // arguments inferred from the fields, which is not built yet -- those still
         // flow the expected type unchecked.
         if let Some(p) = path {
+            // Building one — with or without a spread, which is an update and so equally
+            // a way to set a field the module means to control.
+            let what = if spread.is_some() { "it can be updated" } else { "it can be built" };
+            self.check_opaque_path(module, e.span.clone(), p, what);
             let key = self.env.lookup(module, p);
             if let Some(key) = &key {
                 if self.env.is_generic(key) {
@@ -1136,6 +1152,83 @@ impl Checker<'_> {
         narrow::project_field(&mut self.env.solver, ty, label).ty()
     }
 
+    /// The nominal name of a type, when it is exactly one named record atom. This is
+    /// the same question `ir::repr::nominal_name` asks of a lowered type, asked here of
+    /// a checked one.
+    fn nominal_of(&self, ty: TyId) -> Option<String> {
+        let t = &self.env.solver.t;
+        let d = t.data(ty);
+        match t.rec_bdd.paths(d.records).as_slice() {
+            [(pos, neg)] if neg.is_empty() && pos.len() == 1 => {
+                let tag = t.rec_atoms[pos[0] as usize].get(t.nominal_label);
+                let atoms = t.atomset_of(t.data(tag).atoms);
+                (!atoms.neg && atoms.names.len() == 1)
+                    .then(|| t.name_str(atoms.names[0]).to_string())
+            }
+            _ => None,
+        }
+    }
+
+    /// Reject reaching inside an `opaque` record from outside the module that owns it.
+    ///
+    /// The three ways in are reading a field, building a literal, and destructuring a
+    /// pattern; all of them land here. Holding and passing a value are deliberately not
+    /// among them — opacity hides the contents, not the type.
+    ///
+    /// Visible in the declaring module and its immediate parent, which is what
+    /// `RecordDecl::opaque` has always documented and what `std::fs`'s `internal mod raw`
+    /// depends on: the inner module declares the handle, the outer module implements the
+    /// API over it.
+    ///
+    /// Until this landed, `opaque` was parsed, stored, and read only by the formatter —
+    /// so `std::fs`'s claim that "nothing outside can read a descriptor out of it" was
+    /// not true, merely unexercised, because `File` happens to have no fields.
+    fn check_opaque_name(&mut self, module: &[String], span: Span, name: &str, what: &str) {
+        let Some(owner) = self.env.opaque_record_named(module, name) else { return };
+        let owner = owner.to_vec();
+        self.report_opacity(module, span, name, what, owner);
+    }
+
+    /// The same rule for a record the source *names*, where the written path resolves
+    /// unambiguously and no fallback is needed.
+    fn check_opaque_path(&mut self, module: &[String], span: Span, path: &[String], what: &str) {
+        let Some(owner) = self.env.opaque_record_at(module, path) else { return };
+        let owner = owner.to_vec();
+        let name = path.last().cloned().unwrap_or_default();
+        self.report_opacity(module, span, &name, what, owner);
+    }
+
+    fn report_opacity(
+        &mut self,
+        module: &[String],
+        span: Span,
+        name: &str,
+        what: &str,
+        owner: Vec<String>,
+    ) {
+        let visible = module == owner.as_slice()
+            || (owner.len() == module.len() + 1 && owner[..module.len()] == *module);
+        if visible {
+            return;
+        }
+        let shown = if owner.is_empty() { "the prelude".to_string() } else { owner.join("::") };
+        self.error(
+            span,
+            TypeErrorKind::OpaqueRecord {
+                record: name.to_string(),
+                module: shown,
+                what: what.to_string(),
+            },
+        );
+    }
+
+    /// The field-read entry point: the record is whatever the base expression turned out
+    /// to be, so the name has to come from the type rather than from syntax.
+    fn check_opacity(&mut self, module: &[String], span: Span, ty: TyId, field: &str) {
+        let Some(name) = self.nominal_of(ty) else { return };
+        self.check_opaque_name(module, span, &name, &format!("its field `{field}` is readable"));
+    }
+
     /// The declared fields of a record type -- the user-written ones, dropping the
     /// reserved `#nominal` and `#0`, `#1` generic-argument slots. `None` when `ty`
     /// is not a single record atom.
@@ -1335,7 +1428,7 @@ impl Checker<'_> {
             if let Some(v) = &scrut_var {
                 self.bind(v, bound, scrutinee.span.clone());
             }
-            self.bind_pattern(&arm.pat, bound);
+            self.bind_pattern(module, &arm.pat, bound);
             if let Some(g) = &arm.guard {
                 let b = self.env.solver.t.bool();
                 self.expr(module, g, Some(b));

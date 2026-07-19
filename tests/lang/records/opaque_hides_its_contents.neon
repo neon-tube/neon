@@ -1,0 +1,43 @@
+//@ compile-fail
+//@ error-contains: is opaque, so its field
+//@ error-contains: it can be built
+//@ error-contains: it can be destructured
+//
+// `opaque` hides a record's *contents* from other modules. Three ways in — reading a
+// field, building a literal, destructuring a pattern — and all three are closed.
+//
+// Until this was enforced, `opaque` was parsed, stored on the AST, and read only by the
+// formatter. `std::fs`'s claim that "nothing outside can read a descriptor out of it or
+// forge one from an integer" was therefore false; it just never came up, because `File`
+// has no fields to read. Anything holding an invariant in a field — a descriptor, an
+// armed cleanup guard — needs this to be real.
+//
+// `vault` and `thief` are siblings, so neither can see the other's insides. The
+// declaring module and its immediate parent can; see the companion passing test.
+
+use std::io;
+
+internal mod vault {
+    opaque record Secret { code: i64 }
+
+    fn seal(n: i64) -> Secret { Secret { code: n } }
+    fn reveal(s: Secret) -> i64 { s.code }
+}
+
+internal mod thief {
+    // Reading the field.
+    fn peek(s: vault::Secret) -> i64 { s.code }
+
+    // Forging one from an integer, which is what makes a descriptor dangerous.
+    fn forge(n: i64) -> vault::Secret { vault::Secret { code: n } }
+
+    // Destructuring: a field read wearing a binding's clothes.
+    fn unpack(s: vault::Secret) -> i64 {
+        let vault::Secret { code } = s;
+        code
+    }
+}
+
+fn main() {
+    io::println(to_string(thief::peek(vault::seal(1))));
+}

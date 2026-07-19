@@ -1,0 +1,35 @@
+// Cleanup runs when the last reference dies -- and under last-use ARC that is at the
+// resource's last *use*, not at the end of the enclosing scope.
+//
+// The ordering below is the point, and it surprises people: "cleanup ran" prints BEFORE
+// "after the resource", because `r`'s last use is the line that creates it. That is not a
+// bug, it is what last-use ARC means, and it is exactly why a lock guard needs a
+// combinator that touches the resource on the far side of the body rather than relying on
+// a brace to end its life.
+//
+// It also pins an optimiser property. Constructing a resource looks pure -- it allocates
+// and returns -- so dead-code elimination deleted it, and with it the cleanup it existed
+// to schedule. Nothing printed at all. A native is effectful unless it declares `@pure`,
+// and `neon_resource_new` does not.
+
+use std::io;
+use std::resource;
+
+fn unused_resource() {
+    let r = resource::new(7, (n: i64) => { io::println("cleanup ran"); null });
+    io::println("after the resource");
+}
+
+fn held_until_used() -> i64 {
+    let r = resource::new(9, (n: i64) => { io::println("cleanup held"); null });
+    io::println("before the last use");
+    // `r`'s last use, so cleanup runs after this line rather than before it.
+    let live = resource::is_live(r);
+    io::println("after the last use");
+    if live { 1 } else { 0 }
+}
+
+fn main() {
+    unused_resource();
+    io::println(to_string(held_until_used()));
+}

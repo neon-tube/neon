@@ -62,6 +62,10 @@ fn substitute_repr(r: &Repr, subst: &std::collections::HashMap<String, Repr>) ->
             rs.iter().map(|r| substitute_repr(r, subst)).collect(),
         ),
         Repr::List(e) => Repr::List(Box::new(substitute_repr(e, subst))),
+        Repr::Runtime { name, args } => Repr::Runtime {
+            name: name.clone(),
+            args: args.iter().map(|r| substitute_repr(r, subst)).collect(),
+        },
         Repr::Nullable(e) => Repr::Nullable(Box::new(substitute_repr(e, subst))),
         Repr::Map(k, v) => {
             Repr::Map(Box::new(substitute_repr(k, subst)), Box::new(substitute_repr(v, subst)))
@@ -84,6 +88,11 @@ fn match_repr(template: &Repr, concrete: &Repr, subst: &mut std::collections::Ha
         }
         (Repr::List(a), Repr::List(b)) | (Repr::Nullable(a), Repr::Nullable(b)) => {
             match_repr(a, b, subst)
+        }
+        (Repr::Runtime { name: an, args: aa }, Repr::Runtime { name: bn, args: ba })
+            if an == bn =>
+        {
+            aa.iter().zip(ba).for_each(|(x, y)| match_repr(x, y, subst));
         }
         (Repr::Map(ak, av), Repr::Map(bk, bv)) => {
             match_repr(ak, bk, subst);
@@ -162,7 +171,10 @@ fn repr_key(r: &Repr) -> String {
         Repr::Null => "null".into(),
         Repr::Unit => "unit".into(),
         Repr::Tag => "tag".into(),
-        Repr::File => "file".into(),
+        Repr::Runtime { name, args } if args.is_empty() => name.clone(),
+        Repr::Runtime { name, args } => {
+            format!("{name}_{}", args.iter().map(repr_key).collect::<Vec<_>>().join("_"))
+        }
         Repr::Record { name: Some(n), .. } => n.clone(),
         Repr::Record { .. } => "rec".into(),
         Repr::List(e) => format!("list_{}", repr_key(e)),
@@ -284,7 +296,15 @@ pub fn lower_module<'a>(
         crate::ir::repr::recursive_unfoldings(&env.solver.t, ty, &mut recursive);
         crate::ir::repr::boxed_shapes(&env.solver.t, ty, &mut boxed);
     }
-    Program { funcs, recursive, boxed }
+    // Every `@pure` native's symbol, for the effect analysis. Declared purity only:
+    // a native with no annotation is effectful, which is the safe direction.
+    let pure_natives = env
+        .fns()
+        .iter()
+        .filter(|s| s.pure)
+        .filter_map(|s| s.native.clone())
+        .collect();
+    Program { funcs, recursive, boxed, pure_natives }
 }
 
 fn collect_all_fns(

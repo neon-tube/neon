@@ -164,6 +164,14 @@ pub struct Types {
     pending: Vec<(TyId, PendingOp)>,
 
     pub nominal_label: NameId,
+
+    /// Nominal record name to the C type the runtime owns it as, from `@runtime("...")`.
+    ///
+    /// It lives here because `repr_of` — which decides a type's representation — takes
+    /// only a `&Types`, and a type's identity by that point is just its nominal name.
+    /// Putting the map anywhere else would mean threading a second table through every
+    /// caller of the representation map.
+    pub runtime_types: std::collections::HashMap<String, String>,
 }
 
 impl Default for Types {
@@ -194,6 +202,7 @@ impl Types {
             undefined: std::collections::HashSet::new(),
             pending: Vec::new(),
             nominal_label: NameId(0),
+            runtime_types: std::collections::HashMap::new(),
         };
         // `#` is not an identifier character, so these cannot collide with source.
         t.nominal_label = t.name("#nominal");

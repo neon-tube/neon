@@ -1,0 +1,37 @@
+// A resource runs its cleanup exactly once, whichever path gets there first.
+//
+// The two paths must not collide. An explicit `release` lets the caller see the failure;
+// the last reference dying cleans up anyway, with no error channel. Both disarm before
+// acting, so whoever disarms owns the cleanup and there is exactly one of them -- which
+// matters because a double close lands on a reused descriptor, and that is worse than a
+// leak.
+//
+// `get` after release is the third property: a diagnosable error rather than a read of
+// stale state. It costs one flag check on an operation that was about to make a syscall.
+
+use std::io;
+use std::resource;
+
+fn main() {
+    let a = resource::new(1, (n: i64) => { io::println("cleanup a"); null });
+    io::println(to_string(resource::is_live(a)));
+
+    // Explicit release: cleanup runs here, and `a` is no longer live.
+    try resource::release(a) catch (e) { null };
+    io::println(to_string(resource::is_live(a)));
+
+    // Idempotent, and not by holding a sentinel: it disarms first, so a second call
+    // finds nothing to run.
+    try resource::release(a) catch (e) { null };
+    io::println("released twice, ran once");
+
+    // Use after release is an error, not a stale read.
+    let after = try resource::get(a) catch (e) { -99 };
+    io::println(to_string(after));
+
+    // `take` disarms and hands the payload over without running cleanup: the caller is
+    // taking responsibility for it.
+    let b = resource::new(5, (n: i64) => { io::println("cleanup b MUST NOT RUN"); null });
+    let taken = resource::take(b);
+    io::println(to_string(resource::is_live(b)));
+}

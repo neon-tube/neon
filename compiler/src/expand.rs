@@ -27,6 +27,10 @@ pub struct Error {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Meta {
     pub docs: Vec<(String, String)>,
+    /// `@runtime("neon_file")` — record name to the C type the backend must use for it.
+    /// This is what lets a runtime-backed type be declared in a stdlib module instead of
+    /// being a name the compiler recognises.
+    pub runtime: Vec<(String, String)>,
 }
 
 /// The active `@cfg` keys. Empty by default; the driver fills it from the target and
@@ -93,10 +97,14 @@ fn lookup(name: &str) -> Option<&'static dyn Processor> {
     static NATIVE: Native = Native;
     static CFG: Cfg = Cfg;
     static DOC: Doc = Doc;
+    static RUNTIME: Runtime = Runtime;
+    static PURE: Pure = Pure;
     match name {
         "native" => Some(&NATIVE),
         "cfg" => Some(&CFG),
         "doc" => Some(&DOC),
+        "runtime" => Some(&RUNTIME),
+        "pure" => Some(&PURE),
         _ => None,
     }
 }
@@ -198,6 +206,77 @@ impl Processor for Native {
             other => cx.error(
                 ann.span.clone(),
                 format!("`@native` is only for a `fn`, not a `{}`", other.what()),
+            ),
+        }
+        Decision::Keep
+    }
+}
+
+/// `@runtime("neon_file")` — the record is a pointer to a C type the runtime owns, not a
+/// struct laid out from its fields. It is the declaration form of what used to be a name
+/// the compiler recognised (`List`, `Map`, `File` were matched by string in `record_repr`),
+/// so a runtime-backed type can live in an ordinary stdlib module.
+///
+/// The record must declare no fields: its contents are the runtime's business, and a field
+/// would claim a layout that the C type, not the compiler, decides. Generic parameters are
+/// fine and are carried through as the repr's arguments — that is how a payload's type
+/// reaches the backend so a witness can be emitted for it.
+struct Runtime;
+impl Processor for Runtime {
+    fn run(&self, ann: &Annotation, target: &Target, cx: &mut Context) -> Decision {
+        match target {
+            Target::Record(r) => {
+                match &ann.arg {
+                    Some(sym) => cx.meta.runtime.push((r.name.clone(), sym.clone())),
+                    None => cx.error(
+                        ann.span.clone(),
+                        "`@runtime` needs the C type, e.g. `@runtime(\"neon_file\")`",
+                    ),
+                }
+                if !r.fields.is_empty() {
+                    cx.error(
+                        ann.span.clone(),
+                        "`@runtime` record must declare no fields: the runtime owns its \
+                         layout, and a field here would describe one the C type does not have",
+                    );
+                }
+            }
+            other => cx.error(
+                ann.span.clone(),
+                format!("`@runtime` is only for a `record`, not a `{}`", other.what()),
+            ),
+        }
+        Decision::Keep
+    }
+}
+
+/// `@pure` — this native has no effect beyond its return value, so a call whose result is
+/// unused may be deleted.
+///
+/// Only meaningful on a native: a Neon body's purity is *inferred* from its instructions.
+/// It takes no argument, and the absence of it means effectful — the safe direction, since
+/// forgetting it costs an optimisation while wrongly claiming it deletes real work. The
+/// analysis this replaces guessed from the symbol's spelling and defaulted to pure, which
+/// silently removed a resource construction along with the cleanup it existed to schedule.
+struct Pure;
+impl Processor for Pure {
+    fn run(&self, ann: &Annotation, target: &Target, cx: &mut Context) -> Decision {
+        match target {
+            Target::Fn(f) => {
+                if ann.arg.is_some() {
+                    cx.error(ann.span.clone(), "`@pure` takes no argument");
+                }
+                if !f.annotations.iter().any(|a| a.name == "native") {
+                    cx.error(
+                        ann.span.clone(),
+                        "`@pure` is only for an `@native` fn: a Neon body's purity is \
+                         inferred from what it does",
+                    );
+                }
+            }
+            other => cx.error(
+                ann.span.clone(),
+                format!("`@pure` is only for a `fn`, not a `{}`", other.what()),
             ),
         }
         Decision::Keep

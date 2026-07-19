@@ -1,6 +1,7 @@
 #include "rt.h"
 
 #include <stdio.h>
+#include <assert.h>
 #include <errno.h>
 #include <limits.h>
 #include <fcntl.h>
@@ -349,6 +350,88 @@ static char* neon_cstr(neon_str s) {
     p[s.len] = 0;
     return p;
 }
+// ---- resources ----
+//
+// The shared tail of every instantiation's drop. The instantiation's own drop runs
+// cleanup -- it is the only code that knows the payload's type and how to call the
+// closure -- and then lands here.
+//
+// Cleanup's failure is discarded on this path: a drop has no error channel, which is
+// exactly why an explicit `release` exists.
+//
+// Resurrection is unreachable by construction: cleanup receives the *payload*, never the
+// resource, so it has nothing to store, and captures are by value and sealed. The
+// assertion is cheap -- it sits on a path that has just made a syscall -- and would fire
+// loudly if the language ever grew mutable shared state.
+void neon_resource_finish(neon_resource* r) {
+    if (r->w && r->w->release) {
+        r->w->release(neon_resource_payload(r));
+    }
+    if (r->cleanup.env) {
+        neon_release(r->cleanup.env);
+    }
+    assert(r->header.rc == 0 && "a resource was resurrected during cleanup");
+    neon_free(r);
+}
+
+neon_resource* neon_resource_new(const void* payload, const neon_witness* w,
+                                 neon_closure cleanup, void (*drop)(void*)) {
+    size_t extra = sizeof(neon_resource) - sizeof(neon_header) + w->size;
+    neon_resource* r = (neon_resource*)neon_alloc(extra, drop);
+    r->w = w;
+    r->cleanup = cleanup;
+    r->armed = true;
+    memcpy(neon_resource_payload(r), payload, w->size);
+    return r;
+}
+
+// These consume `r`, like every other native taking a counted pointer: the caller's
+// reference moves in, so each releases it before returning. Releasing may be the last
+// reference, in which case the drop runs cleanup right here -- which is what last-use ARC
+// means, and why the payload is retained before that can happen.
+bool neon_resource_get(neon_resource* r, void* out) {
+    bool live = r->armed;
+    if (live) {
+        memcpy(out, neon_resource_payload(r), r->w->size);
+        // The caller receives an owned value, like every other reader in this ABI.
+        if (r->w->retain) {
+            r->w->retain(out);
+        }
+    }
+    neon_release((neon_header*)r);
+    return live;
+}
+
+bool neon_resource_disarm(neon_resource* r, void* out) {
+    bool armed = r->armed;
+    if (armed) {
+        // Disarm *first*: whoever gets `true` owns the cleanup, and there is exactly one
+        // of them. The payload moves out, so the drop must not release it again.
+        r->armed = false;
+        memcpy(out, neon_resource_payload(r), r->w->size);
+        memset(neon_resource_payload(r), 0, r->w->size);
+    }
+    neon_release((neon_header*)r);
+    return armed;
+}
+
+// Hands back an owned closure, so its environment is retained before `r` goes: releasing
+// `r` may be the last reference, and the environment would die with it.
+neon_closure neon_resource_cleanup(neon_resource* r) {
+    neon_closure c = r->cleanup;
+    if (c.env) {
+        neon_retain(c.env);
+    }
+    neon_release((neon_header*)r);
+    return c;
+}
+
+bool neon_resource_is_live(neon_resource* r) {
+    bool live = r->armed;
+    neon_release((neon_header*)r);
+    return live;
+}
+
 
 // ---- files ----
 //
@@ -362,32 +445,6 @@ static char* neon_cstr(neon_str s) {
 //
 // `neon_io_strerror` is a pure function of a code, so rendering a failure needs no state
 // at all.
-
-// A handle is refcounted, and its drop closes the descriptor: cleanup rides on ARC, so a
-// caller that forgets to close -- or that leaves through a `throw` before reaching it --
-// still does not leak an fd. `close` exists for releasing one eagerly, and marks the handle
-// closed so the drop does not close it twice (an fd number is reused, and closing someone
-// else's is far worse than leaking your own).
-static void neon_file_drop(void* p) {
-    neon_file* f = (neon_file*)p;
-    if (f->fd >= 0) {
-        close(f->fd);
-        f->fd = -1;
-    }
-    neon_free(f);
-}
-
-neon_file* neon_file_new(int64_t fd) {
-    neon_file* f = (neon_file*)neon_alloc(sizeof(neon_file) - sizeof(neon_header), neon_file_drop);
-    f->fd = (int)fd;
-    return f;
-}
-
-int64_t neon_file_fd(neon_file* f) {
-    int64_t fd = f->fd;
-    neon_release((neon_header*)f);
-    return fd;
-}
 
 // `mode`: 0 read, 1 write (truncate), 2 append. The flags stay on this side because they
 // are platform constants.
@@ -403,16 +460,10 @@ int64_t neon_io_open(neon_str path, int64_t mode) {
     return r;
 }
 
-// Consumes the handle, like any native. Closing an already-closed handle is a no-op rather
-// than an error: it has nothing left to fail at.
-int64_t neon_io_close(neon_file* f) {
-    int64_t r = 0;
-    if (f->fd >= 0) {
-        if (close(f->fd) != 0) r = -(int64_t)errno;
-        f->fd = -1;
-    }
-    neon_release((neon_header*)f);
-    return r;
+// A bare descriptor: the armed flag that stops a double close now lives in the
+// `Resource` wrapping this, not here.
+int64_t neon_io_close(int64_t fd) {
+    return close((int)fd) != 0 ? -(int64_t)errno : 0;
 }
 
 neon_str neon_io_strerror(int64_t code) {
@@ -422,7 +473,7 @@ neon_str neon_io_strerror(int64_t code) {
 
 // Everything left in the descriptor. `err` is the out-parameter: 0, or `-errno`. The data
 // and the status come back together rather than through hidden state.
-neon_str neon_io_read_all(neon_file* f, int64_t* err) {
+neon_str neon_io_read_all(int64_t fd, int64_t* err) {
     *err = 0;
     size_t cap = 4096, len = 0;
     char* buf = (char*)malloc(cap);
@@ -434,7 +485,7 @@ neon_str neon_io_read_all(neon_file* f, int64_t* err) {
             if (grown == NULL) neon_trap("out of memory");
             buf = grown;
         }
-        ssize_t got = read(f->fd, buf + len, cap - len);
+        ssize_t got = read((int)fd, buf + len, cap - len);
         if (got < 0) {
             if (errno == EINTR) continue;
             *err = -(int64_t)errno;
@@ -445,7 +496,6 @@ neon_str neon_io_read_all(neon_file* f, int64_t* err) {
     }
     neon_str r = neon_str_new(buf, len);
     free(buf);
-    neon_release((neon_header*)f);
     return r;
 }
 
@@ -456,7 +506,7 @@ neon_str neon_io_read_all(neon_file* f, int64_t* err) {
 //
 // Longer lists go in batches, and a short write resumes where it stopped rather than
 // counting as failure -- that is the contract `writev` actually offers.
-int64_t neon_io_writev(neon_file* f, neon_list* parts) {
+int64_t neon_io_writev(int64_t fd, neon_list* parts) {
     const neon_str* items = (const neon_str*)parts->data;
     int64_t status = 0;
     size_t i = 0;
@@ -475,7 +525,7 @@ int64_t neon_io_writev(neon_file* f, neon_list* parts) {
         i += batch;
         size_t done = 0, first = 0;
         while (done < total) {
-            ssize_t got = writev(f->fd, vec + first, (int)(n - first));
+            ssize_t got = writev((int)fd, vec + first, (int)(n - first));
             if (got < 0) {
                 if (errno == EINTR) continue;
                 status = -(int64_t)errno;
@@ -493,7 +543,6 @@ int64_t neon_io_writev(neon_file* f, neon_list* parts) {
             }
         }
     }
-    neon_release((neon_header*)f);
     neon_release((neon_header*)parts);
     return status;
 }

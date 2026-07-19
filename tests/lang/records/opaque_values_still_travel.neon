@@ -1,0 +1,52 @@
+// The other half of opacity: the *type* is public even though the contents are not. A
+// value can be held in a local, passed to a function, returned, stored in a record and
+// put in a list, all from outside the declaring module. Only reaching inside is closed.
+//
+// This is the property that makes the feature usable rather than merely restrictive: a
+// handle travels wherever the program needs it and stays unforgeable the whole way.
+//
+// `vault` also exercises the parent half of the rule — an `internal mod` declares the
+// record and the module around it reaches inside, which is the shape `std::fs` uses. So
+// the rule is "the declaring module and its immediate parent", not "the declaring module
+// alone". Note the nested type is never *named* from the root: `vault::inner::Secret`
+// does not resolve there, which is a separate module-path limitation, so `vault` hands
+// out its own single-level `Token` for the parts that need a type annotation.
+
+use std::io;
+
+internal mod vault {
+    opaque record Token { code: i64 }
+
+    internal mod inner {
+        opaque record Secret { code: i64 }
+        fn seal(n: i64) -> Secret { Secret { code: n } }
+    }
+
+    // The immediate parent reaches inside its child: the `internal mod raw` shape.
+    fn mint(n: i64) -> Token {
+        let s = inner::seal(n);
+        Token { code: s.code }
+    }
+    fn value(t: Token) -> i64 { t.code }
+    fn bump(t: Token) -> Token { mint(value(t) + 1) }
+}
+
+// Holding one in a field is fine: the field is ours, its contents are not.
+record Envelope { held: vault::Token, label: str }
+
+fn main() {
+    // Held, passed, returned.
+    let t = vault::mint(41);
+    io::println(to_string(vault::value(vault::bump(t))));
+
+    // Stored in a record we own, then handed back out.
+    let env = Envelope { held: vault::mint(7), label: "sealed" };
+    io::println(env.label);
+    io::println(to_string(vault::value(env.held)));
+
+    // Carried in a list.
+    let many = [vault::mint(1), vault::mint(2)];
+    for item in many {
+        io::println(to_string(vault::value(item)));
+    };
+}

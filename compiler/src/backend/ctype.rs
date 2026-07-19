@@ -144,6 +144,12 @@ impl TypeTable {
                 self.register(e);
                 self.intern_witness(e);
             }
+            Repr::Runtime { args, .. } => {
+                for a in args {
+                    self.register(a);
+                    self.intern_witness(a);
+                }
+            }
             Repr::Nullable(e) => self.register(e),
             Repr::Map(k, v) => {
                 self.register(k);
@@ -345,7 +351,7 @@ impl TypeTable {
             Repr::Tag => "uint64_t".into(),
             Repr::List(_) => "neon_list*".into(),
             Repr::Map(_, _) => "neon_map*".into(),
-            Repr::File => "neon_file*".into(),
+            Repr::Runtime { name, .. } => format!("{name}*"),
             Repr::Closure { .. } => "neon_closure".into(),
             Repr::BoxedRec(atom) => match self.boxed_names.get(atom) {
                 Some(n) => format!("{n}*"),
@@ -580,7 +586,10 @@ fn key_with(r: &Repr, rec: &HashMap<TyId, Repr>) -> String {
         Repr::Null => "n".into(),
         Repr::Unit => "u".into(),
         Repr::Tag => "t".into(),
-        Repr::File => "F".into(),
+        Repr::Runtime { name, args } if args.is_empty() => format!("N{name}"),
+        Repr::Runtime { name, args } => {
+            format!("N{name}[{}]", args.iter().map(key).collect::<Vec<_>>().join(","))
+        }
         Repr::Any => "a".into(),
         Repr::Never => "x".into(),
         Repr::Var(v) => format!("V{v}"),

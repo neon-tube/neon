@@ -95,6 +95,14 @@ pub enum TypeErrorKind {
     /// a tagged result — and there is no adapter between the two conventions, so
     /// the subtyping the types would allow cannot be realised at run time.
     ArrowThrowsMismatch { expected: String, found: String },
+    /// An `opaque` record's *contents* reached from outside the module that declares it —
+    /// read, built, or destructured. A value of the type may still be held and passed
+    /// around freely; only its insides are private.
+    ///
+    /// Opacity is what lets a module hold an invariant its callers cannot break: a
+    /// descriptor that must not be forged from an integer, a guard that must not be
+    /// disarmed behind the module's back.
+    OpaqueRecord { record: String, module: String, what: String },
     /// `break` or `continue` with no enclosing loop -- including one that only *looks*
     /// enclosing, because a lambda sits in between.
     OutsideLoop(String),
@@ -245,6 +253,11 @@ impl fmt::Display for TypeError {
                  convention -- a throwing function returns a tagged result -- and there \
                  is no adapter between the two yet, so the clauses must match exactly. \
                  Wrap it in a lambda with the expected signature"
+            ),
+            TypeErrorKind::OpaqueRecord { record, module, what } => write!(
+                f,
+                "`{record}` is opaque, so {what} only inside `{module}`. A value of it can \
+                 be held and passed anywhere -- go through a function `{module}` provides"
             ),
             TypeErrorKind::OutsideLoop(kw) => write!(
                 f,
@@ -427,6 +440,9 @@ pub struct FnSig {
     pub has_body: bool,
     /// The runtime symbol of an `@native` fn, so lowering emits a native call.
     pub native: Option<String>,
+    /// `@pure`: this native has no effect beyond its return value, so a call whose
+    /// result is unused may be deleted. Declared, never guessed, and never assumed.
+    pub pure: bool,
     pub span: Span,
 }
 
@@ -795,6 +811,14 @@ impl Env {
         for d in decls {
             match &d.kind {
                 ast::DeclKind::Record(r) => {
+                    // `@runtime("neon_file")`: the backend represents this record as a
+                    // pointer to that C type. Recorded by nominal name, which is the only
+                    // identity that survives into the representation map.
+                    if let Some(sym) =
+                        r.annotations.iter().find(|a| a.name == "runtime").and_then(|a| a.arg.clone())
+                    {
+                        self.solver.t.runtime_types.insert(r.name.clone(), sym);
+                    }
                     self.declare_type(module, d.span.clone(), Sort::Record(r.clone()))
                 }
                 ast::DeclKind::TypeAlias(a) => {
@@ -982,6 +1006,7 @@ impl Env {
             .and_then(|a| a.arg.clone());
         FnSig {
             name: f.name.clone(),
+            pure: f.annotations.iter().any(|a| a.name == "pure"),
             module: module.to_vec(),
             generics: f.generics.clone(),
             params,
@@ -1212,6 +1237,37 @@ impl Env {
             "Ord" => super::ordered::is_ordered(self, ty, &std::collections::HashSet::new()),
             _ => false,
         }
+    }
+
+    /// Where an `opaque` record was declared, for a type *written* as `path` in `module`.
+    /// Used where the source names the record — a literal, a record pattern — so ordinary
+    /// path resolution applies and two same-named records cannot be confused.
+    pub fn opaque_record_at(&self, module: &[String], path: &[String]) -> Option<&[String]> {
+        let key = self.lookup(module, path)?;
+        let d = self.decls.get(&key)?;
+        matches!(&d.sort, Sort::Record(r) if r.opaque).then(|| d.module.as_slice())
+    }
+
+    /// The same question asked of a *value's* type, where all that survives is a bare
+    /// nominal name (`#nominal` holds a string and nothing else).
+    ///
+    /// Resolving in scope first is what keeps a user's own `Secret` legal when some other
+    /// module also has an opaque one — scanning alone rejected exactly that. When the name
+    /// does not resolve here, the value came from elsewhere, and the only candidates are
+    /// opaque records of that name; if more than one exists the name is genuinely
+    /// ambiguous and this declines to guess rather than reject the wrong program.
+    pub fn opaque_record_named(&self, module: &[String], name: &str) -> Option<&[String]> {
+        if let Some(key) = self.lookup(module, std::slice::from_ref(&name.to_string())) {
+            if let Some(d) = self.decls.get(&key) {
+                return matches!(&d.sort, Sort::Record(r) if r.opaque).then(|| d.module.as_slice());
+            }
+        }
+        let mut hits = self
+            .decls
+            .values()
+            .filter(|d| matches!(&d.sort, Sort::Record(r) if r.opaque && r.name == name));
+        let first = hits.next()?;
+        hits.next().is_none().then(|| first.module.as_slice())
     }
 
     /// Whether the compiler has a rule for a marker of this name.

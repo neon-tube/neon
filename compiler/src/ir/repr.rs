@@ -45,11 +45,20 @@ pub enum Repr {
     List(Box<Repr>),
     /// A `Map[K, V]` — an immutable HAMT.
     Map(Box<Repr>, Box<Repr>),
-    /// A `File` — a refcounted handle over an OS descriptor. Like `List` and `Map` it is
-    /// an opaque nominal record the compiler knows by name, and being refcounted is the
-    /// point: the descriptor closes when the last reference dies, so cleanup rides on ARC
-    /// rather than on the caller remembering.
-    File,
+    /// A refcounted object the runtime owns, named by the C type it is a pointer to and
+    /// carrying whatever generic arguments the backend needs to see (a payload's element
+    /// type, so a witness can be emitted for it).
+    ///
+    /// This is what `@runtime("neon_file")` on a record produces. It replaces one
+    /// hardcoded `Repr` variant per runtime type: the C type is `{name}*`, the mangled
+    /// key and the printed form are derived from `name` and `args`, and refcounting,
+    /// pointer-ness and substitution are uniform across all of them — which is why those
+    /// arms collapse rather than multiply. Only equality, ordering and hashing genuinely
+    /// differ per type, and those live in one name-keyed table in the C emitter.
+    ///
+    /// `List` and `Map` are still their own variants; folding them in is mechanical but
+    /// their element reprs feed witness emission, so they move separately.
+    Runtime { name: String, args: Vec<Repr> },
     /// A closure: a function pointer plus a boxed environment. `throws` is part of the
     /// calling convention, not the layout: a throwing closure's function returns the
     /// tagged result `Union([ret, throws])` rather than `ret`, exactly like a named
@@ -92,7 +101,7 @@ impl Repr {
             Repr::Str
                 | Repr::List(_)
                 | Repr::Map(_, _)
-                | Repr::File
+                | Repr::Runtime { .. }
                 | Repr::Closure { .. }
                 | Repr::BoxedRec(_)
         )
@@ -110,7 +119,7 @@ impl Repr {
             Repr::Str
             | Repr::List(_)
             | Repr::Map(_, _)
-            | Repr::File
+            | Repr::Runtime { .. }
             | Repr::Closure { .. }
             | Repr::BoxedRec(_)
             | Repr::Any => true,
@@ -134,6 +143,7 @@ impl Repr {
             Repr::Tuple(rs) | Repr::Union(rs) => rs.iter().all(Repr::is_concrete),
             Repr::List(r) | Repr::Nullable(r) => r.is_concrete(),
             Repr::Map(k, v) => k.is_concrete() && v.is_concrete(),
+            Repr::Runtime { args, .. } => args.iter().all(Repr::is_concrete),
             Repr::Closure { params, throws, ret } => {
                 params.iter().all(Repr::is_concrete) && throws.is_concrete() && ret.is_concrete()
             }
@@ -521,14 +531,27 @@ fn record_intersection(t: &Types, atoms: &[u32], cyclic: &HashSet<TyId>, boxed: 
 fn record_repr(t: &Types, atom_idx: u32, cyclic: &HashSet<TyId>, boxed: &HashSet<u32>) -> Repr {
     let name = nominal_name(t, atom_idx);
 
-    // The runtime containers are opaque nominal records carrying only their generic
-    // arguments as `#0`/`#1`.
+    // A record the runtime owns: `@runtime("neon_file")` names the C type, and the
+    // record's generic arguments — the `#0`, `#1` slots — become the repr's arguments, so
+    // a payload's element type reaches the backend and can get a witness.
+    //
+    // This is the whole of what used to be a hardcoded name match. A new runtime-backed
+    // type is now a stdlib declaration, not a compiler edit.
+    if let Some(sym) = name.as_deref().and_then(|n| t.runtime_types.get(n)) {
+        let args = (0..)
+            .map_while(|i| field_ty(t, atom_idx, &format!("#{i}")))
+            .map(|a| repr_rec(t, a, cyclic, boxed, false))
+            .collect();
+        return Repr::Runtime { name: sym.clone(), args };
+    }
+
+    // `List` and `Map` still have their own reprs: their element types drive witness
+    // emission and the codegen-assisted natives, so they move separately.
     match name.as_deref() {
         Some("List") => {
             let elem = field_ty(t, atom_idx, "#0").map_or(Repr::Never, |e| repr_rec(t, e, cyclic, boxed, false));
             return Repr::List(Box::new(elem));
         }
-        Some("File") => return Repr::File,
         Some("Map") => {
             let k = field_ty(t, atom_idx, "#0").map_or(Repr::Never, |e| repr_rec(t, e, cyclic, boxed, false));
             let v = field_ty(t, atom_idx, "#1").map_or(Repr::Never, |e| repr_rec(t, e, cyclic, boxed, false));

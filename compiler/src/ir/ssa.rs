@@ -29,6 +29,15 @@ pub struct Program {
     /// layout. Every value of such a record is a `Repr::BoxedRec` pointer; this is what it
     /// points at.
     pub boxed: std::collections::HashMap<u32, Repr>,
+    /// The runtime symbols of natives declared `@pure`.
+    ///
+    /// Purity of a Neon body is *inferred* — the effect analysis reads its instructions.
+    /// A native is opaque, so its purity has to be declared, and the default is
+    /// effectful: forgetting `@pure` costs an optimisation, while wrongly assuming purity
+    /// deletes real work. That polarity is the point. An earlier version guessed from the
+    /// symbol's spelling and defaulted to pure, which silently eliminated a resource
+    /// construction and with it the cleanup that construction existed to schedule.
+    pub pure_natives: std::collections::HashSet<String>,
 }
 
 /// One function. `params` are the entry block's parameters; `values` records the repr

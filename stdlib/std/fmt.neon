@@ -39,4 +39,4 @@ fn pad_with(s: str, width: i64, fill: str) -> str {
 // A float with exactly `places` digits after the point. `to_string` uses `%g`, which is
 // right for "show me this number" and wrong for a column, where every row must be the same
 // width. Clamped to [0, 17]: beyond 17 the digits are noise from the binary representation.
-@native("neon_f64_to_fixed") fn fixed(x: f64, places: i64) -> str
+@pure @native("neon_f64_to_fixed") fn fixed(x: f64, places: i64) -> str

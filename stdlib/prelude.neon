@@ -9,7 +9,7 @@
 //   Display, Error     `#{x}` desugars to `to_string(x)`; `main`'s implicit channel
 //                      demands that whatever escapes implements `Error`.
 //   Ord                the `where T: Ord` bound; ordering is a language rule.
-//   List, Map, File     the compiler recognises these names in `record_repr` and gives
+//   List, Map           the compiler recognises these names in `record_repr` and gives
 //                      them runtime representations, so they must be unambiguous.
 //   range               `for i in range(a, b)` is the loop idiom; moving it would put an
 //                      import in front of every counted loop.
@@ -55,8 +55,6 @@ opaque record Map[K, V] {}
 // refcounted is the point -- the descriptor closes when the last reference dies, so
 // cleanup rides on ARC instead of on the caller remembering, and leaving through a `throw`
 // leaks nothing. `opaque` keeps its innards invisible; there is nothing to see anyway.
-opaque record File {}
-
 // ---- markers ----
 
 // A bound with no methods: `where T: Ord` says T can be ordered, and the compiler
@@ -100,7 +98,7 @@ impl Error for IndexError { fn message(v: IndexError) -> str { v.message } }
 
 // ---- primitive Display ----
 
-impl Display for i64 { @native("neon_i64_to_string") fn to_string(v: i64) -> str }
-impl Display for f64 { @native("neon_f64_to_string") fn to_string(v: f64) -> str }
-impl Display for bool { @native("neon_bool_to_string") fn to_string(v: bool) -> str }
-impl Display for str { @native("neon_str_to_string") fn to_string(v: str) -> str }
+impl Display for i64 { @pure @native("neon_i64_to_string") fn to_string(v: i64) -> str }
+impl Display for f64 { @pure @native("neon_f64_to_string") fn to_string(v: f64) -> str }
+impl Display for bool { @pure @native("neon_bool_to_string") fn to_string(v: bool) -> str }
+impl Display for str { @pure @native("neon_str_to_string") fn to_string(v: str) -> str }

@@ -187,6 +187,8 @@ records/declare_construct_access.neon
 records/generic.neon
 records/nested.neon
 records/nullable_field.neon
+records/opaque_hides_its_contents.neon
+records/opaque_values_still_travel.neon
 records/recursive_equality.neon
 records/recursive_mutual.neon
 records/recursive_self.neon
@@ -197,6 +199,8 @@ records/union_typed_field.neon
 records/unit_record.neon
 records/value_and_heap_records_same_semantics.neon
 records/value_record_through_any.neon
+resources/resource_cleanup_runs_at_last_use.neon
+resources/resource_lifecycle.neon
 strings/interpolation_basic.neon
 strings/interpolation_display.neon
 strings/interpolation_literal_braces.neon

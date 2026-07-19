@@ -45,17 +45,17 @@ impl Mappable for List {
 // what makes their generic argument covariant. `rc == 1` reuse makes the copy free
 // when the input is uniquely owned.
 
-@native("neon_list_new") fn new[T]() -> List[T]
+@pure @native("neon_list_new") fn new[T]() -> List[T]
 // Preallocate capacity for `n` elements to avoid regrowth while building.
-@native("neon_list_new_with_capacity") fn new_with_capacity[T](n: i64) -> List[T]
-@native("neon_list_len") fn len[T](xs: List[T]) -> i64
+@pure @native("neon_list_new_with_capacity") fn new_with_capacity[T](n: i64) -> List[T]
+@pure @native("neon_list_len") fn len[T](xs: List[T]) -> i64
 
 // The unchecked primitives. A native cannot build the tagged result a throwing function
 // returns, nor construct an `IndexError` — both are program-specific layouts codegen owns.
 // So the native does the unchecked operation and the check lives here, in the language,
 // where the error record is declared and its message can name the offending index.
 internal mod raw {
-    @native("neon_list_set") fn set_unchecked[T](xs: List[T], i: i64, v: T) -> List[T]
+    @pure @native("neon_list_set") fn set_unchecked[T](xs: List[T], i: i64, v: T) -> List[T]
 }
 
 fn get[T](xs: List[T], i: i64) throws IndexError -> T {
@@ -71,8 +71,8 @@ fn set[T](xs: List[T], i: i64, v: T) throws IndexError -> List[T] {
     }
     raw::set_unchecked(xs, i, v)
 }
-@native("neon_list_push") fn push[T](xs: List[T], v: T) -> List[T]
-@native("neon_list_concat") fn concat[T](a: List[T], b: List[T]) -> List[T]
+@pure @native("neon_list_push") fn push[T](xs: List[T], v: T) -> List[T]
+@pure @native("neon_list_concat") fn concat[T](a: List[T], b: List[T]) -> List[T]
 
 // ---- sorting ----
 //

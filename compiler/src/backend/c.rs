@@ -37,6 +37,7 @@ pub fn emit(program: &Program) -> String {
 
     // Adapter thunks give ordinary functions used as closure values the closure ABI.
     emit_thunks(&mut out, &types, program);
+    emit_resource_drops(&mut out, &types, program);
 
     for f in &program.funcs {
         emit_fn(&mut out, &types, f);
@@ -336,7 +337,32 @@ fn is_list_builder(symbol: &str) -> bool {
             | "neon_map_remove"
             | "neon_map_keys"
             | "neon_map_values"
+            | "neon_resource_new"
     )
+}
+
+/// The cleanup closure's shape: its payload parameter, what it throws, and what it
+/// returns.
+///
+/// Read off the *closure argument* rather than reconstructed from the resource's type.
+/// The closure repr already states all three, and it is the thing the emitted drop
+/// actually calls — so there is no name to match on, no argument position to assume, and
+/// no second place that has to agree with `std::resource`'s signature. Deriving it from
+/// `Repr::Runtime { name: "neon_resource", args }` was exactly the hardcoded name lookup
+/// that `@runtime` exists to delete.
+fn cleanup_shape(f: &Func, cleanup: Value) -> Option<(Repr, Repr, Repr)> {
+    match f.value_repr(cleanup) {
+        Repr::Closure { params, throws, ret } if params.len() == 1 => {
+            Some((params[0].clone(), (**throws).clone(), (**ret).clone()))
+        }
+        _ => None,
+    }
+}
+
+/// The name of the drop emitted for one cleanup shape.
+fn resource_drop_name(types: &TypeTable, t: &Repr, e: &Repr) -> String {
+    format!("nres_drop_{}", types.witness_ref(t).trim_start_matches('&'))
+        + &format!("_{}", types.witness_ref(e).trim_start_matches('&'))
 }
 
 /// The key and value reprs of a `Map` value.
@@ -435,6 +461,19 @@ fn emit_list_builder(out: &mut String, types: &TypeTable, f: &Func, result: Opti
             let elem = list_elem(types, f, r);
             format!("{symbol}({}, {})", var(args[0]), types.witness_ref(&elem))
         }
+        // The payload crosses by address (the resource memcpy's it in through the
+        // witness), the cleanup closure goes by value, and the drop is this
+        // instantiation's own -- the only code that knows how to call the closure.
+        "neon_resource_new" => {
+            let (t, e, _) = cleanup_shape(f, args[1]).expect("cleanup is a one-arg closure");
+            format!(
+                "neon_resource_new({}, {}, {}, {})",
+                addr_of(types, f, args[0], &t),
+                types.witness_ref(&t),
+                var(args[1]),
+                resource_drop_name(types, &t, &e)
+            )
+        }
         "neon_list_new" => format!("neon_list_new({w})"),
         "neon_list_new_with_capacity" => format!("neon_list_new_with_capacity({w}, {})", var(args[0])),
         // The element is passed by address; the list moves its bytes in through the witness.
@@ -455,6 +494,65 @@ fn emit_list_builder(out: &mut String, types: &TypeTable, f: &Func, result: Opti
 /// The adapter-thunk name for an ordinary function used as a closure value.
 fn thunk_name(func: &str) -> String {
     format!("{}_thunk", mangle(func))
+}
+
+/// Emit one drop per `Resource` instantiation.
+///
+/// The runtime reaches this through `header.drop`, arriving with only a `neon_header*`,
+/// so this is the only place that still knows `T` and `E`. It loads the payload at its
+/// real type, calls the cleanup closure through a pointer cast to the closure ABI, and
+/// releases the tagged result -- an error the drop path cannot report, but must not leak.
+///
+/// Forgetting that release would leak on the *automatic* path only, invisible to the
+/// explicit one, which is exactly the shape of bug that ships.
+fn emit_resource_drops(out: &mut String, types: &TypeTable, program: &Program) {
+    let mut seen: std::collections::BTreeMap<String, (Repr, Repr, Repr)> =
+        std::collections::BTreeMap::new();
+    for f in &program.funcs {
+        for b in &f.blocks {
+            for inst in &b.insts {
+                let Op::Native { symbol, .. } = &inst.op else { continue };
+                if symbol != "neon_resource_new" {
+                    continue;
+                }
+                let Op::Native { args, .. } = &inst.op else { continue };
+                let Some((t, e, ret)) = cleanup_shape(f, args[1]) else { continue };
+                seen.insert(resource_drop_name(types, &t, &e), (t, e, ret));
+            }
+        }
+    }
+    if seen.is_empty() {
+        return;
+    }
+    for (name, (t, e, ret)) in seen {
+        let tc = types.c_type(&t);
+        // The tagged result the closure actually returns, built from its own `ret` and
+        // `throws` — the same union `Func::result_repr` builds for a throwing function.
+        let tagged = Repr::Union(vec![ret, e.clone()]);
+        let throws = !matches!(e, Repr::Never);
+        let retc = if throws { types.c_type(&tagged) } else { "void".to_string() };
+        let _ = writeln!(out, "static void {name}(void* p) {{");
+        let _ = writeln!(out, "    neon_resource* r = (neon_resource*)p;");
+        let _ = writeln!(out, "    if (r->armed) {{");
+        let _ = writeln!(out, "        r->armed = false;");
+        let _ = writeln!(out, "        {tc} pay;");
+        let _ = writeln!(out, "        memcpy(&pay, neon_resource_payload(r), sizeof pay);");
+        let call = format!(
+            "(({retc}(*)(neon_header*, {tc}))r->cleanup.fn)(r->cleanup.env, pay)"
+        );
+        if throws {
+            let w = types.witness_ref(&tagged);
+            let _ = writeln!(out, "        {retc} res = {call};");
+            let _ = writeln!(out, "        const neon_witness* rw = {w};");
+            let _ = writeln!(out, "        if (rw && rw->release) rw->release(&res);");
+        } else {
+            let _ = writeln!(out, "        {call};");
+        }
+        let _ = writeln!(out, "    }}");
+        let _ = writeln!(out, "    neon_resource_finish(r);");
+        let _ = writeln!(out, "}}");
+    }
+    out.push('\n');
 }
 
 /// Emit an adapter thunk for every ordinary function used as a closure value: it takes the
@@ -708,7 +806,9 @@ fn eq_expr(types: &TypeTable, r: &Repr, a: &str, b: &str) -> String {
         // A handle has no content to compare; two of them are the same file only when they
         // are the same handle. `is_equatable` rejects it, so this is unreachable in a
         // checked program and exists to keep the match honest.
-        Repr::File => format!("({a} == {b})"),
+        // Identity, not contents: two handles are the same handle or they are not.
+        // The per-type entry that a uniform `Runtime` repr cannot derive.
+        Repr::Runtime { .. } => format!("({a} == {b})"),
         // A self-referencing record is a pointer, and comparing it means walking through
         // that pointer -- which a nested expression cannot do, since the walk recurses.
         // `emit_boxed_eq` generates one function per boxed record for exactly this.
@@ -1289,7 +1389,7 @@ fn rc_parts_rec(
     match repr {
         Repr::Str => out.push(format!("{func}({expr}.owner)")),
         Repr::Closure { .. } => out.push(format!("{func}({expr}.env)")),
-        Repr::List(_) | Repr::Map(_, _) | Repr::File | Repr::Any => {
+        Repr::List(_) | Repr::Map(_, _) | Repr::Runtime { .. } | Repr::Any => {
             out.push(format!("{func}((neon_header*){expr})"))
         }
         // A union is an inline `{tag, payload}`, so only the live variant's counted parts

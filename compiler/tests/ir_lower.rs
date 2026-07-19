@@ -220,6 +220,7 @@ fn unsubstituted_var(r: &neon_compiler::ir::repr::Repr) -> Option<String> {
         Repr::List(e) | Repr::Nullable(e) => unsubstituted_var(e),
         Repr::Map(k, v) => unsubstituted_var(k).or_else(|| unsubstituted_var(v)),
         Repr::Tuple(rs) | Repr::Union(rs) => rs.iter().find_map(unsubstituted_var),
+        Repr::Runtime { args, .. } => args.iter().find_map(unsubstituted_var),
         Repr::Record { fields, .. } => fields.iter().find_map(|(_, r)| unsubstituted_var(r)),
         Repr::Closure { params, throws, ret } => params
             .iter()

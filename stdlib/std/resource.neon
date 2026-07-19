@@ -1,0 +1,120 @@
+// Resources: a payload, a cleanup that runs exactly once, and a flag that says whether it
+// still needs running.
+//
+// Two paths have to work and must not collide. Explicit release, where the caller wants to
+// see the failure:
+//
+//     try resource::release(r)
+//
+// and automatic cleanup, where the last reference dies and something has to close the
+// descriptor anyway. A double release is worse than a leak -- descriptor numbers are
+// reused, so the second close lands on someone else's file -- so the armed flag is
+// disarmed *before* cleanup runs. Whoever disarms owns the cleanup, and there is exactly
+// one of them.
+//
+// Only the explicit path can observe failure: a drop has no error channel. That is the
+// whole reason `close` exists on a type that closes itself.
+//
+// `E` rides on the cleanup's arrow (`(T) throws E -> null`) rather than coming back as a
+// union, which buys three things: `release` composes with `try` like anything else,
+// infallible cleanup is `Resource[T, never]` whose `release` needs no `try` at all, and
+// double release needs no sentinel -- it disarms first, finds nothing to do, and returns.
+
+use std::string;
+
+// The runtime object: header, payload witness, cleanup closure, armed flag. `@runtime`
+// is what tells the backend to represent this as a pointer to that C type instead of
+// laying out a struct from fields it does not have.
+@runtime("neon_resource") opaque record Resource[T, E] {}
+
+// Reading a resource that has already been released. This is the error `get` turns a
+// use-after-release into -- neither Rust (which prevents it with borrowck) nor Swift
+// (which does not prevent it) reports it, and it costs one flag check on operations that
+// were about to make a syscall anyway.
+// No `Display`: that answers "how does this render", which is a different question and
+// one nothing here asks. `Error` is the bound that matters, and only at the one place the
+// language must render something it did not author -- an error escaping `main`.
+record ReleasedError { message: str }
+impl Error for ReleasedError { fn message(v: ReleasedError) -> str { v.message } }
+
+internal mod raw {
+    // Codegen-assisted: the payload crosses by address with its value-witness, and the
+    // drop is emitted per instantiation, since only that code knows how to call `cleanup`.
+    @native("neon_resource_new")
+    fn new[T, E](payload: T, cleanup: (T) throws E -> null) -> Resource[T, E]
+
+    // Both use the native out-parameter convention: the tuple's tail is a C out-parameter,
+    // and the head says whether it was written.
+    @native("neon_resource_get") fn get[T, E](r: Resource[T, E]) -> (bool, T)
+    @native("neon_resource_disarm") fn disarm[T, E](r: Resource[T, E]) -> (bool, T)
+
+    @native("neon_resource_is_live") fn is_live[T, E](r: Resource[T, E]) -> bool
+    @native("neon_resource_cleanup") fn cleanup[T, E](r: Resource[T, E]) -> (T) throws E -> null
+}
+
+fn new[T, E](payload: T, cleanup: (T) throws E -> null) -> Resource[T, E] {
+    raw::new(payload, cleanup)
+}
+
+// The payload, or a diagnosable error if it has already been released. This is what turns
+// use-after-close into something a program can report rather than a read of a stale
+// descriptor.
+fn get[T, E](r: Resource[T, E]) throws ReleasedError -> T {
+    let (live, payload) = raw::get(r);
+    // Statement position, so the `throw` leaves rather than producing a value: as a
+    // branch it would type the whole `if` as `T | ()`.
+    if !live {
+        throw ReleasedError { message: "this resource has already been released" };
+    }
+    payload
+}
+
+// Run cleanup now and let its failure reach the caller. Idempotent, and not by holding a
+// sentinel: disarming first means a second call finds nothing to run and returns.
+//
+// This is an ordinary Neon function rather than a native because a native cannot build the
+// tagged result a throwing function returns. It calls two small natives and does the
+// calling itself, so `throws` works normally -- less C, not more.
+fn release[T, E](r: Resource[T, E]) throws E -> null {
+    let (armed, payload) = raw::disarm(r);
+    if armed {
+        try raw::cleanup(r)(payload);
+    } else {
+        null
+    };
+    null
+}
+
+// Take the payload and disarm, without running cleanup. `null` if it was already gone.
+// The caller owns whatever came out.
+fn take[T, E](r: Resource[T, E]) -> T | null {
+    let (armed, payload) = raw::disarm(r);
+    if armed { payload } else { null }
+}
+
+fn is_live[T, E](r: Resource[T, E]) -> bool {
+    raw::is_live(r)
+}
+
+// Hold a resource for exactly the region of `body`, then release it.
+//
+// Under last-use ARC a resource dies at its last *use*, which for a lock guard is the
+// `lock` call itself -- so it would be released before the section it exists to protect.
+// The fix needs no language feature, only a function that touches the resource on the far
+// side of the body: because `r` is used after `body(...)` returns, the refcount pass must
+// keep it alive across the whole call. That is the entire trick.
+//
+// Deliberately not `defer`: nothing is registered and nothing is deferred. The cost is
+// the ordinary one for a scope combinator -- the body is a lambda, so control flow cannot
+// cross it.
+//
+// The failure path is right for free. If `body` throws, `release` never runs explicitly,
+// but ARC releases `r` on the throwing edge and cleanup fires anyway: the normal path
+// observes the cleanup's error, the throwing path still cleans up silently.
+fn using[T, E, R](r: Resource[T, E], body: (T) -> R) throws E | ReleasedError -> R {
+    let payload = try get(r);
+    let out = body(payload);
+    // The last use of `r` is here, not at the `get` above.
+    try release(r);
+    out
+}

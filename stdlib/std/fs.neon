@@ -17,6 +17,7 @@
 // nothing here needs yet.
 
 use std::string;
+use std::resource;
 
 // Thrown by everything here that can fail. Owned by this module rather than the prelude.
 record IoError { message: str }
@@ -36,13 +37,22 @@ newtype Bytes = str
 // quadratic.
 mu type IoList = str | Bytes | List[IoList]
 
+// A handle is a descriptor guarded by a `Resource`, so everything that used to be
+// open-coded in C comes from one place: cleanup when the last reference dies, an armed
+// flag so an explicit `close` and the drop cannot both fire, and a released flag that
+// turns use-after-close into an error instead of a read of a reused descriptor.
+//
+// `opaque` is what keeps the guard private -- without it a caller could reach `f.r` and
+// release the descriptor behind this module's back, which is the whole reason the guard
+// is not just a plain field holding an `i64`.
+opaque record File { r: resource::Resource[i64, IoError] }
+
 internal mod raw {
     @native("neon_io_open") fn open(path: str, mode: i64) -> i64
-    @native("neon_file_new") fn wrap(fd: i64) -> File
-    @native("neon_io_close") fn close(f: File) -> i64
+    @native("neon_io_close") fn close(fd: i64) -> i64
     // Returns the contents and the status together: the tuple's tail is a C out-parameter.
-    @native("neon_io_read_all") fn read_all(f: File) -> (str, i64)
-    @native("neon_io_writev") fn writev(f: File, parts: List[str]) -> i64
+    @native("neon_io_read_all") fn read_all(fd: i64) -> (str, i64)
+    @native("neon_io_writev") fn writev(fd: i64, parts: List[str]) -> i64
     @native("neon_io_remove") fn remove(path: str) -> i64
     @native("neon_io_strerror") fn strerror(code: i64) -> str
 }
@@ -55,12 +65,25 @@ fn fail(code: i64, what: str, path: str) throws IoError -> null {
 
 // ---- handles ----
 
+// The cleanup a handle carries: closing is the resource's job, so a forgotten close --
+// or one skipped by a `throw` -- still happens, and its error is available to whoever
+// closes explicitly.
+fn guard(fd: i64) -> File {
+    File { r: resource::new(fd, (d: i64) => {
+        let code = raw::close(d);
+        if code < 0 {
+            try fail(code, "cannot close", "<file>");
+        }
+        null
+    }) }
+}
+
 fn open(path: str) throws IoError -> File {
     let fd = raw::open(path, 0);
     if fd < 0 {
         try fail(fd, "cannot open", path);
     };
-    raw::wrap(fd)
+    guard(fd)
 }
 
 fn create(path: str) throws IoError -> File {
@@ -68,7 +91,7 @@ fn create(path: str) throws IoError -> File {
     if fd < 0 {
         try fail(fd, "cannot create", path);
     };
-    raw::wrap(fd)
+    guard(fd)
 }
 
 fn open_append(path: str) throws IoError -> File {
@@ -76,24 +99,31 @@ fn open_append(path: str) throws IoError -> File {
     if fd < 0 {
         try fail(fd, "cannot open", path);
     };
-    raw::wrap(fd)
+    guard(fd)
 }
 
 // Release the descriptor now rather than whenever the handle dies. Optional -- ARC closes
 // it either way -- and closing twice is a no-op, because a closed handle has nothing left
 // to fail at and an fd number gets reused.
 fn close(f: File) throws IoError -> null {
-    let code = raw::close(f);
-    if code < 0 {
-        try fail(code, "cannot close", "<file>");
-    };
+    try resource::release(f.r);
     null
+}
+
+// The descriptor, or an `IoError` if this handle was already closed. Reading a closed
+// handle used to reach the OS with `fd = -1` and come back `EBADF`; now it never leaves
+// the process, and it can never hit a descriptor number that was reused in between.
+fn fd_of(f: File) throws IoError -> i64 {
+    try resource::get(f.r) catch (e) {
+        throw IoError { message: "this file is already closed" }
+    }
 }
 
 // ---- reading and writing through a handle ----
 
 fn read_all(f: File) throws IoError -> str {
-    let (data, code) = raw::read_all(f);
+    let fd = try fd_of(f);
+    let (data, code) = raw::read_all(fd);
     if code < 0 {
         try fail(code, "cannot read", "<file>");
     };
@@ -103,7 +133,8 @@ fn read_all(f: File) throws IoError -> str {
 // Write every piece of `data`, in order, in a single `writev`. The payload bytes are never
 // copied: the tree's leaves become an `iovec` array of pointer/length pairs.
 fn write_all(f: File, data: IoList) throws IoError -> null {
-    let code = raw::writev(f, flatten(data));
+    let fd = try fd_of(f);
+    let code = raw::writev(fd, flatten(data));
     if code < 0 {
         try fail(code, "cannot write to", "<file>");
     };

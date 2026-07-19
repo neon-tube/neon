@@ -8,19 +8,13 @@
 //! fixpoint over the call graph.
 
 use super::ssa::{Op, Program};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Whether a native symbol has an observable effect: I/O, or a panic/abort. Everything
 /// else the runtime exposes (arithmetic, string and collection queries) is a pure
 /// function of its arguments.
-pub fn native_is_effectful(symbol: &str) -> bool {
-    symbol.starts_with("neon_io_")
-        || symbol.contains("panic")
-        || symbol.contains("abort")
-        || symbol.contains("print")
-        || symbol.contains("rand")
-        || symbol.contains("clock")
-        || symbol.contains("time")
+pub fn native_is_effectful(symbol: &str, pure_natives: &HashSet<String>) -> bool {
+    !pure_natives.contains(symbol)
 }
 
 /// The set of functions proven pure, by name. A name absent from the set is effectful.
@@ -36,7 +30,7 @@ pub fn analyze(program: &Program) -> HashMap<String, bool> {
                 continue; // already effectful
             }
             let effectful = f.blocks.iter().any(|b| {
-                b.insts.iter().any(|inst| op_is_effectful(&inst.op, &pure))
+                b.insts.iter().any(|inst| op_is_effectful(&inst.op, &pure, &program.pure_natives))
             });
             if effectful {
                 pure.insert(f.name.clone(), false);
@@ -53,10 +47,15 @@ pub fn analyze(program: &Program) -> HashMap<String, bool> {
 /// Whether an op has an effect that must be preserved -- so DCE may not drop it even if
 /// its result is unused, and CSE may not share it. `pure` maps each function to whether
 /// it is pure.
-pub fn op_is_effectful(op: &Op, pure: &HashMap<String, bool>) -> bool {
+pub fn op_is_effectful(
+    op: &Op,
+    pure: &HashMap<String, bool>,
+    pure_natives: &HashSet<String>,
+) -> bool {
     match op {
-        // Talks to the world, or reaches something that might.
-        Op::Native { symbol, .. } => native_is_effectful(symbol),
+        // Talks to the world, or reaches something that might. A native is opaque, so
+        // this is what it *declared*: no `@pure`, no elimination.
+        Op::Native { symbol, .. } => native_is_effectful(symbol, pure_natives),
         // A direct call is effectful iff its callee is; an unknown callee (not in the
         // program -- e.g. a not-yet-lowered instance) is assumed effectful.
         Op::Call { func, .. } => !pure.get(func).copied().unwrap_or(false),
@@ -102,9 +101,22 @@ mod tests {
     #[test]
     fn a_pure_native_stays_pure() {
         let e = analyze_src(
+            "@pure @native(\"neon_str_concat\") fn concat(a: str, b: str) -> str
+             fn greet(n: str) -> str { concat(\"hi \", n) }",
+        );
+        assert_eq!(e.get("greet"), Some(&true), "string concat is declared pure");
+    }
+
+    /// The polarity that matters: an unannotated native is effectful, so a caller of one
+    /// is effectful too and its calls survive DCE. Guessing purity from the symbol's
+    /// spelling — the rule this replaced — deleted a resource construction and with it the
+    /// cleanup that construction existed to schedule.
+    #[test]
+    fn an_unannotated_native_is_effectful() {
+        let e = analyze_src(
             "@native(\"neon_str_concat\") fn concat(a: str, b: str) -> str
              fn greet(n: str) -> str { concat(\"hi \", n) }",
         );
-        assert_eq!(e.get("greet"), Some(&true), "string concat is pure");
+        assert_eq!(e.get("greet"), Some(&false), "no `@pure` means effectful");
     }
 }

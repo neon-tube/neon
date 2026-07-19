@@ -1,17 +1,17 @@
 // String operations. `str` is UTF-8 bytes; indices and lengths are byte-oriented.
 // Turning a value into a str is `to_string` (Display), not a function here.
 
-@native("neon_str_byte_len") fn byte_len(s: str) -> i64
-@native("neon_str_concat") fn concat(a: str, b: str) -> str
+@pure @native("neon_str_byte_len") fn byte_len(s: str) -> i64
+@pure @native("neon_str_concat") fn concat(a: str, b: str) -> str
 // The unchecked primitives. A native can return neither a tagged result nor an
 // `i64 | null` — both are layouts codegen generates per program — so the check, the error
 // and the union all live here, where the types are declared.
 internal mod raw {
-    @native("neon_str_slice_unchecked") fn slice_unchecked(s: str, from: i64, to: i64) -> str
-    @native("neon_str_char_at_unchecked") fn char_at_unchecked(s: str, i: i64) -> str
-    @native("neon_str_index_of") fn index_of(s: str, needle: str) -> i64
-    @native("neon_str_is_int") fn is_int(s: str) -> bool
-    @native("neon_str_parse_int") fn parse_int(s: str) -> i64
+    @pure @native("neon_str_slice_unchecked") fn slice_unchecked(s: str, from: i64, to: i64) -> str
+    @pure @native("neon_str_char_at_unchecked") fn char_at_unchecked(s: str, i: i64) -> str
+    @pure @native("neon_str_index_of") fn index_of(s: str, needle: str) -> i64
+    @pure @native("neon_str_is_int") fn is_int(s: str) -> bool
+    @pure @native("neon_str_parse_int") fn parse_int(s: str) -> i64
 }
 
 fn slice(s: str, from: i64, to: i64) throws IndexError -> str {
@@ -40,18 +40,18 @@ fn to_int(s: str) throws ParseError -> i64 {
     }
     raw::parse_int(s)
 }
-@native("neon_str_join") fn join(parts: List[str], sep: str) -> str
+@pure @native("neon_str_join") fn join(parts: List[str], sep: str) -> str
 fn find(s: str, needle: str) -> i64 | null {
     let at = raw::index_of(s, needle);
     if at < 0 { null } else { at }
 }
-@native("neon_str_contains") fn contains(s: str, needle: str) -> bool
-@native("neon_str_starts_with") fn starts_with(s: str, p: str) -> bool
-@native("neon_str_ends_with") fn ends_with(s: str, p: str) -> bool
-@native("neon_str_to_upper") fn to_upper(s: str) -> str
-@native("neon_str_to_lower") fn to_lower(s: str) -> str
-@native("neon_str_repeat") fn repeat(s: str, n: i64) -> str
-@native("neon_str_is_empty") fn is_empty(s: str) -> bool
+@pure @native("neon_str_contains") fn contains(s: str, needle: str) -> bool
+@pure @native("neon_str_starts_with") fn starts_with(s: str, p: str) -> bool
+@pure @native("neon_str_ends_with") fn ends_with(s: str, p: str) -> bool
+@pure @native("neon_str_to_upper") fn to_upper(s: str) -> str
+@pure @native("neon_str_to_lower") fn to_lower(s: str) -> str
+@pure @native("neon_str_repeat") fn repeat(s: str, n: i64) -> str
+@pure @native("neon_str_is_empty") fn is_empty(s: str) -> bool
 
 // ---- splitting and trimming ----
 //

@@ -12,10 +12,11 @@ use std::collections::{HashMap, HashSet};
 /// Optimise every function in the program to a fixpoint.
 pub fn optimize(program: &mut Program) {
     let pure = effects::analyze(program);
+    let pure_natives = program.pure_natives.clone();
     for f in &mut program.funcs {
         loop {
             let a = const_fold(f);
-            let b = dead_code(f, &pure);
+            let b = dead_code(f, &pure, &pure_natives);
             let c = simplify_cfg(f);
             let d = drop_unreachable_blocks(f);
             if !(a || b || c || d) {
@@ -116,14 +117,18 @@ fn fold_bool(op: PrimOp, x: bool, y: bool) -> Option<Op> {
 
 /// Remove instructions whose result is unused and whose op is pure. Effectful
 /// instructions stay even when their result is dead. Returns whether anything changed.
-fn dead_code(f: &mut Func, pure: &HashMap<String, bool>) -> bool {
+fn dead_code(
+    f: &mut Func,
+    pure: &HashMap<String, bool>,
+    pure_natives: &HashSet<String>,
+) -> bool {
     let used = used_values(f);
     let mut changed = false;
     for b in &mut f.blocks {
         let before = b.insts.len();
         b.insts.retain(|inst| {
             let dead = inst.result.is_some_and(|v| !used.contains(&v));
-            let removable = dead && !effects::op_is_effectful(&inst.op, pure);
+            let removable = dead && !effects::op_is_effectful(&inst.op, pure, pure_natives);
             !removable
         });
         changed |= b.insts.len() != before;
