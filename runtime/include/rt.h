@@ -148,8 +148,8 @@ int64_t neon_i64_neg(int64_t a);
 //
 // Descriptors, and only descriptors. The *handle* is `opaque record File` on the Neon
 // side, holding a `Resource[i64, IoError]` -- so refcounted cleanup, the armed flag and
-// use-after-close detection all come from `neon_resource` instead of being open-coded
-// here. This file used to carry a `neon_file` doing exactly that by hand.
+// use-after-close detection all come from `neon_resource` rather than being open-coded
+// here.
 //
 // Failure is a value (`-errno`); the one call that returns data as well uses an
 // out-parameter, which codegen turns into a tuple.

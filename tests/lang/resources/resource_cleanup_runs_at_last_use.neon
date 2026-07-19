@@ -8,9 +8,9 @@
 // a brace to end its life.
 //
 // It also pins an optimiser property. Constructing a resource looks pure -- it allocates
-// and returns -- so dead-code elimination deleted it, and with it the cleanup it existed
-// to schedule. Nothing printed at all. A native is effectful unless it declares `@pure`,
-// and `neon_resource_new` does not.
+// and returns -- so dead-code elimination will delete it, and the cleanup it exists to
+// schedule with it, unless the construction counts as an effect. A native is effectful
+// unless it declares `@pure`, and `neon_resource_new` does not.
 
 use std::io;
 use std::resource;

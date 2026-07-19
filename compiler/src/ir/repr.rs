@@ -535,8 +535,7 @@ fn record_repr(t: &Types, atom_idx: u32, cyclic: &HashSet<TyId>, boxed: &HashSet
     // record's generic arguments — the `#0`, `#1` slots — become the repr's arguments, so
     // a payload's element type reaches the backend and can get a witness.
     //
-    // This is the whole of what used to be a hardcoded name match. A new runtime-backed
-    // type is now a stdlib declaration, not a compiler edit.
+    // A new runtime-backed type is a stdlib declaration, not a compiler edit.
     if let Some(sym) = name.as_deref().and_then(|n| t.runtime_types.get(n)) {
         let args = (0..)
             .map_while(|i| field_ty(t, atom_idx, &format!("#{i}")))

@@ -6,11 +6,10 @@
 // `opaque` hides a record's *contents* from other modules. Three ways in — reading a
 // field, building a literal, destructuring a pattern — and all three are closed.
 //
-// Until this was enforced, `opaque` was parsed, stored on the AST, and read only by the
-// formatter. `std::fs`'s claim that "nothing outside can read a descriptor out of it or
-// forge one from an integer" was therefore false; it just never came up, because `File`
-// has no fields to read. Anything holding an invariant in a field — a descriptor, an
-// armed cleanup guard — needs this to be real.
+// This is what lets a module hold an invariant its callers cannot break: a descriptor
+// that must not be forged from an integer, a cleanup guard that must not be disarmed
+// behind the module's back. `std::fs` depends on it — a `File` is a guard in a field,
+// and a reachable guard is the same as no guard.
 //
 // `vault` and `thief` are siblings, so neither can see the other's insides. The
 // declaring module and its immediate parent can; see the companion passing test.

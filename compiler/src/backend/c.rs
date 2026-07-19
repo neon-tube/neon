@@ -347,9 +347,7 @@ fn is_list_builder(symbol: &str) -> bool {
 /// Read off the *closure argument* rather than reconstructed from the resource's type.
 /// The closure repr already states all three, and it is the thing the emitted drop
 /// actually calls — so there is no name to match on, no argument position to assume, and
-/// no second place that has to agree with `std::resource`'s signature. Deriving it from
-/// `Repr::Runtime { name: "neon_resource", args }` was exactly the hardcoded name lookup
-/// that `@runtime` exists to delete.
+/// no second place that has to agree with `std::resource`'s signature.
 fn cleanup_shape(f: &Func, cleanup: Value) -> Option<(Repr, Repr, Repr)> {
     match f.value_repr(cleanup) {
         Repr::Closure { params, throws, ret } if params.len() == 1 => {

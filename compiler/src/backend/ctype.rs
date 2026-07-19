@@ -388,11 +388,10 @@ impl TypeTable {
             Repr::Any => "neon_value".into(),
             // Uninhabited, and reached often: it is the error half of a result whose
             // function does not throw, so a C type must be spelled even though no value
-            // of it exists. Kept as `neon_value` — the historical spelling — deliberately.
-            // `neon_unit` also passes the suite, but a pointer and a one-byte struct give
-            // any union containing this variant different sizes, and two paths disagreeing
-            // about a layout is the exact failure this file now panics to prevent. This is
-            // not erasure: nothing is ever loaded or stored through it.
+            // of it exists. `neon_value` deliberately: a pointer and a one-byte struct
+            // give any union containing this variant different sizes, and two paths
+            // disagreeing about a layout is the failure this file panics to prevent.
+            // Not erasure — nothing is ever loaded or stored through it.
             Repr::Never => "neon_value".into(),
             // A type variable here is always a compiler bug: monomorphisation ran, so
             // every repr reaching codegen should be concrete.

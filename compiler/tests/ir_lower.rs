@@ -173,17 +173,16 @@ fn any_never_appears_unless_the_source_type_is_any() {
 /// program contains only concrete functions and instances — never an uninstantiated
 /// template — so a surviving `Repr::Var` is always a substitution someone forgot.
 ///
-/// It is not caught by the `any` guard, and that gap has now cost three bugs in the same
-/// two functions. `lower_try` built a handler's error parameter with `repr_of` instead of
-/// `repr_of_ty`, and `wrap_throwing` did the same with the callee's `throws`: under
-/// `throws E` both produced `Var("E")`, which reaches `c_type`'s `_ => "neon_value"`
-/// catch-all and is boxed without complaint. The result disagreed with the instance,
-/// which *had* substituted — one call, two layouts for its result.
+/// The `any` guard does not catch it, and the gap cost three bugs in the same two
+/// functions: `lower_try` built a handler's error parameter with `repr_of` instead of
+/// `repr_of_ty`, and `wrap_throwing` did the same with the callee's `throws`. Under
+/// `throws E` both produced `Var("E")`, which the call site then built a tagged result
+/// from while the instance had substituted — one call, two layouts for its result.
 ///
-/// Both spellings share a sink, and that is the real lesson: an unpinned repr becomes
-/// `neon_value` silently. Until that catch-all is closed, this guard is what stands in
-/// for it — and unlike a check on `repr_of`, it runs over the lowered IR, because none of
-/// these bugs went through `repr_of`.
+/// `c_type` now panics on a `Var`, which covers every compiled program rather than only
+/// the corpus. This reports the offending function and value instead, which is what
+/// makes such a bug findable. It runs over the lowered IR rather than `repr_of`, because
+/// none of those bugs went through `repr_of`.
 #[test]
 fn no_type_variable_survives_lowering() {
     let mut checked = 0;

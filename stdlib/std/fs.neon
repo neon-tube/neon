@@ -37,10 +37,10 @@ newtype Bytes = str
 // quadratic.
 mu type IoList = str | Bytes | List[IoList]
 
-// A handle is a descriptor guarded by a `Resource`, so everything that used to be
-// open-coded in C comes from one place: cleanup when the last reference dies, an armed
-// flag so an explicit `close` and the drop cannot both fire, and a released flag that
-// turns use-after-close into an error instead of a read of a reused descriptor.
+// A handle is a descriptor guarded by a `Resource`, so all of it comes from one place:
+// cleanup when the last reference dies, an armed flag so an explicit `close` and the drop
+// cannot both fire, and a released flag that turns use-after-close into an error rather
+// than a read of a descriptor number that has since been reused.
 //
 // `opaque` is what keeps the guard private -- without it a caller could reach `f.r` and
 // release the descriptor behind this module's back, which is the whole reason the guard
@@ -110,9 +110,9 @@ fn close(f: File) throws IoError -> null {
     null
 }
 
-// The descriptor, or an `IoError` if this handle was already closed. Reading a closed
-// handle used to reach the OS with `fd = -1` and come back `EBADF`; now it never leaves
-// the process, and it can never hit a descriptor number that was reused in between.
+// The descriptor, or an `IoError` if this handle was already closed. The check never
+// leaves the process, so a closed handle cannot reach a descriptor number that was
+// reused in between -- which an `EBADF` from the kernel would not have ruled out.
 fn fd_of(f: File) throws IoError -> i64 {
     try resource::get(f.r) catch (e) {
         throw IoError { message: "this file is already closed" }

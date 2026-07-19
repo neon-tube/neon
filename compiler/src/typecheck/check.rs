@@ -1179,10 +1179,6 @@ impl Checker<'_> {
     /// `RecordDecl::opaque` has always documented and what `std::fs`'s `internal mod raw`
     /// depends on: the inner module declares the handle, the outer module implements the
     /// API over it.
-    ///
-    /// Until this landed, `opaque` was parsed, stored, and read only by the formatter —
-    /// so `std::fs`'s claim that "nothing outside can read a descriptor out of it" was
-    /// not true, merely unexercised, because `File` happens to have no fields.
     fn check_opaque_name(&mut self, module: &[String], span: Span, name: &str, what: &str) {
         let Some(owner) = self.env.opaque_record_named(module, name) else { return };
         let owner = owner.to_vec();

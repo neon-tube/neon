@@ -460,8 +460,8 @@ int64_t neon_io_open(neon_str path, int64_t mode) {
     return r;
 }
 
-// A bare descriptor: the armed flag that stops a double close now lives in the
-// `Resource` wrapping this, not here.
+// A bare descriptor: the armed flag that stops a double close lives in the `Resource`
+// wrapping this, not here.
 int64_t neon_io_close(int64_t fd) {
     return close((int)fd) != 0 ? -(int64_t)errno : 0;
 }
