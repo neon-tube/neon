@@ -410,6 +410,7 @@ impl TypeTable {
                 | Repr::Map(_, _)
                 | Repr::Runtime { .. }
                 | Repr::Nullable(_)
+                | Repr::Closure { .. }
         );
         if recurses {
             let k = key_with(r, &self.recursive);
@@ -442,7 +443,18 @@ impl TypeTable {
             // whole shape, not its first level.
             Repr::List(e) => format!("List[{}]", arg(e, open)),
             Repr::Map(k, v) => format!("Map[{},{}]", arg(k, open), arg(v, open)),
-            Repr::Closure { .. } => "fn".into(),
+            // The signature is part of the name, for the same reason `List`'s element is.
+            // `Closure { .. } => "fn"` gave every closure in the program one tag, so `is`
+            // could not tell `(i64) -> i64` from `(str) -> str` and answered true for both.
+            // `as` trusts `is`, and the cast that follows hands a `neon_str` to a body
+            // compiled for `int64_t`. Spelled by recursion like every other argument, so
+            // nesting — `((i64) -> i64) -> i64` — is distinguished at every level too.
+            Repr::Closure { params, throws, ret } => format!(
+                "fn({})!{}->{}",
+                params.iter().map(|p| arg(p, open)).collect::<Vec<_>>().join(","),
+                arg(throws, open),
+                arg(ret, open)
+            ),
             // A generic record carries its arguments in its *fields* — `Box[i64]` and
             // `Box[str]` are both `Record { name: Some("Box"), .. }` — so the fields are
             // what distinguishes them. Spelled with names, since a record's identity

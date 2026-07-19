@@ -1,0 +1,31 @@
+// `is` against a structural type — a tuple `(i64, str)`, an arrow `(i64) -> str` —
+// answers what the value actually is, like every other `is`.
+//
+// It used to answer `true`. `type_test` handled `null`, a named path and an atom,
+// and its catch-all emitted `ConstBool(true)` for everything else, so a `5` was a
+// `(i64, str)` and was also a `(i64) -> str`. `is` is the guard a person writes
+// *before* an `as`, and `as` trusts `is`, so the vacuous `true` was a licence to
+// reinterpret an i64 as a tuple.
+//
+// Nothing new had to be built to answer properly: the checker already records the
+// type the spec resolves to, and `Op::IsVariant` already compares that against the
+// value's box tag. The catch-all simply was not asking.
+
+use std::io;
+
+fn main() {
+    let n: any = 5;
+    let s: any = "hi";
+    let t: any = (1, "one");
+
+    // The false answers — the ones that used to be true.
+    io::println("n is tuple: #{n is (i64, str)}");
+    io::println("n is arrow: #{n is (i64) -> str}");
+    io::println("s is tuple: #{s is (i64, str)}");
+
+    // And the true one, so this is not merely a test that everything is false.
+    io::println("t is tuple: #{t is (i64, str)}");
+
+    // A tuple of a different shape is still a different type.
+    io::println("t is other tuple: #{t is (str, i64)}");
+}

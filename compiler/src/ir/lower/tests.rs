@@ -295,3 +295,71 @@ fn a_where_bound_is_discharged_to_the_concrete_impl() {
     assert!(ir.contains("fn @show$i64"), "instance: {ir}");
     assert!(ir.contains("neon_i64_to_string"), "bound discharged to i64 impl: {ir}");
 }
+
+#[test]
+fn an_instance_name_spells_its_type_arguments() {
+    // `repr_key` had constant answers standing in for whole families of type — every
+    // union spelled `union`, every closure `fn`, every anonymous record `rec`, and a
+    // nominal record spelled its name with its arguments left off. Two instantiations
+    // then mangled to one name and `lower_module`'s `lowered` set dropped the second
+    // body, so one function served call sites that had agreed on a different layout.
+    let ir = lower(
+        "record Box[T] { v: T }
+         fn ident[T](x: T) -> T { x }
+         fn unwrap[B](b: B) -> B { b }
+         fn use_unions(a: i64 | str, b: bool | f64) -> i64 | str { ident(b); ident(a) }
+         fn use_boxes(p: Box[i64], q: Box[str]) -> Box[i64] { unwrap(q); unwrap(p) }",
+    );
+    // Two union instances, not one shared `ident$union`.
+    assert!(!ir.contains("@ident$union\n"), "the collapsed name must be gone: {ir}");
+    assert!(ir.contains("fn @ident$union_i64_str"), "i64|str instance: {ir}");
+    // Spelled in the union's own normalised order, which is what the layout follows.
+    assert!(ir.contains("fn @ident$union_f64_bool"), "bool|f64 instance: {ir}");
+    // And two record instances, not one shared `unwrap$Box`.
+    assert!(ir.contains("fn @unwrap$Box_i64"), "Box[i64] instance: {ir}");
+    assert!(ir.contains("fn @unwrap$Box_str"), "Box[str] instance: {ir}");
+}
+
+#[test]
+fn try_assert_on_a_union_error_calls_each_variants_message() {
+    // A `try!` whose body can throw two error types holds a union, which has no single
+    // nominal head. `error_message` used to fall through to the string constant
+    // `"error"`, so every multi-error `try!` in the language panicked with that literal
+    // text instead of the message the impl was written to produce.
+    let ir = lower(
+        "protocol Error for T { fn message(e: T) -> str }
+         record NotFound { what: str }
+         record Denied { who: str }
+         impl Error for NotFound { fn message(e: NotFound) -> str { \"not found\" } }
+         impl Error for Denied { fn message(e: Denied) -> str { \"denied\" } }
+         fn find(f: bool) throws NotFound -> i64 { if f { throw NotFound { what: \"k\" } } else { 1 } }
+         fn check(f: bool) throws Denied -> i64 { if f { throw Denied { who: \"a\" } } else { 2 } }
+         fn go() -> i64 { try! { let a = try find(true); let b = try check(true); a + b } }",
+    );
+    // Both impls are reachable from the panic path, chosen by a runtime variant test.
+    assert!(ir.contains("call @Error$NotFound$message"), "NotFound's impl: {ir}");
+    assert!(ir.contains("call @Error$Denied$message"), "Denied's impl: {ir}");
+    assert!(ir.contains("is_variant"), "chosen by a runtime test: {ir}");
+    // And the placeholder that used to stand in for all of it is gone.
+    assert!(!ir.contains("const.str \"error\""), "no placeholder message: {ir}");
+}
+
+#[test]
+fn an_inner_try_propagates_to_an_enclosing_catch() {
+    // "Propagate" means to the next handler out, and an enclosing `try ... catch` in the
+    // same function is one. Lowering used to consult only the *function's* `throws`
+    // clause — a question one level away from the one that decides where the error goes,
+    // and not the question the checker asks when it typechecks the program. The catch
+    // was skipped and the process panicked instead.
+    let ir = lower(
+        "protocol Error for T { fn message(e: T) -> str }
+         record Boom { msg: str }
+         impl Error for Boom { fn message(e: Boom) -> str { e.msg } }
+         fn go() throws Boom -> i64 { throw Boom { msg: \"bang\" } }
+         fn caught() -> i64 { try { let v = try go(); v } catch (e) { 7 } }",
+    );
+    let body = ir.split("fn @caught").nth(1).expect("caught is lowered");
+    // The catch body is reached, and nothing on this path panics.
+    assert!(body.contains("const.i64 7"), "the catch body is lowered: {body}");
+    assert!(!body.contains("neon_panic"), "the enclosing catch handles it: {body}");
+}

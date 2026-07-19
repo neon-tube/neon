@@ -1,0 +1,28 @@
+// `use P::method` disambiguates a call between two protocols that declare the same
+// method name. The import lives at the root; the call is inside a `mod` that imports
+// nothing of its own.
+//
+// `Env::imported_method` walked outwards with `self.uses.get(&scope)?`, so the first
+// enclosing scope with no `use` table at all returned from the whole query rather than
+// continuing outwards. A module that imported nothing hid its parent's imports, and the
+// identical call resolved at the root and came back `Ambiguous` one level in.
+
+use std::io;
+use pp::A::go;
+
+mod pp { protocol A for T { fn go(x: T) -> str } }
+mod qq { protocol B for T { fn go(x: T) -> str } }
+
+record R { n: i64 }
+
+impl pp::A for R { fn go(x: R) -> str { "A" } }
+impl qq::B for R { fn go(x: R) -> str { "B" } }
+
+mod inner {
+    fn call(r: R) -> str { go(r) }
+}
+
+fn main() {
+    io::println(go(R { n: 1 }));
+    io::println(inner::call(R { n: 2 }));
+}

@@ -1,0 +1,23 @@
+// Recursion that closes through an arrow's THROWS CLAUSE, not through its return.
+//
+// The sibling test mu_type_through_arrow_that_throws recurses through the *return* of a
+// throwing arrow (`(i64) throws :err -> F`) and has always passed. This one moves the
+// back-edge one field along, into the clause itself (`(i64) throws F -> i64`), and that
+// field was missing from `successors` in the representation map: `repr_components`
+// descends into an arrow's params, throws AND ret, while `successors` — which computes
+// the set of types to cut the recursion at — walked only params and ret.
+//
+// Two lists of an arrow's parts, kept in step by hand, and they drifted. The type is
+// contractive and the checker accepts it; `repr_of` then recursed forever and the
+// compiler died with a stack overflow rather than a diagnostic.
+
+use std::io;
+
+mu type F = null | (i64) throws F -> i64
+
+fn is_done(f: F) -> bool { f is null }
+
+fn main() {
+    let done: F = null;
+    io::println(if is_done(done) { "done" } else { "more" });
+}

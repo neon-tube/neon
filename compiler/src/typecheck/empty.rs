@@ -88,7 +88,13 @@ impl Solver {
         // A reserved id still awaiting its body reads as `never`, so a query that
         // races resolution answers wrongly and says nothing. That is exactly how
         // `record Node { next: Node | null }` became `record Node { next: null }`.
-        debug_assert!(
+        //
+        // A hard `assert!`, not a `debug_assert!`. The check is a `HashSet::is_empty`,
+        // so it is free, and the failure it guards against is a *silent wrong answer* in
+        // the one decision procedure the whole checker rests on. Leaving it to debug
+        // builds would mean the tests are loud and the shipped compiler is quiet, which
+        // is the wrong way round.
+        assert!(
             self.t.all_defined(),
             "is_empty ran while a reserved id was still undefined"
         );
@@ -401,6 +407,18 @@ impl Solver {
     fn arrow_le(&mut self, pos: &[u32], s: &ArrowAtom) -> bool {
         let s_dom = self.t.tuple(s.params.clone());
         let n = pos.len();
+        // `1u32 << n` is undefined for n >= 32: a debug build panics, and a release build
+        // wraps — `1u32 << 32` is `1`, so the loop would run the single mask 0 and could
+        // return `true` (covered) having examined one of four billion subsets. That is a
+        // wrong subtyping answer with no diagnostic. Refuse instead. Nothing gets here in
+        // practice: 2^31 masks would not terminate anyway, so an intersection of 32
+        // function types is already outside what this can decide, and saying so is the
+        // only honest option.
+        assert!(
+            n < 32,
+            "arrow_le: {n} positive arrows in one intersection is beyond this decision \
+             procedure (the subset search is 2^n)"
+        );
         for mask in 0..(1u32 << n) {
             let mut dom_union = self.t.never();
             let mut ret_inter = self.t.any();

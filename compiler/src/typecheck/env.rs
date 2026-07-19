@@ -146,12 +146,21 @@ pub enum TypeErrorKind {
     MainSignatureFixed,
     /// A name that exists but sits inside an `internal` module the caller is outside of.
     Internal { name: String, owner: String },
+    /// A `mod` whose path is already a module of another compilation unit -- a program
+    /// declaring `mod std { mod fs { .. } }`. Rejected because a module path is an
+    /// *identity*: `opaque` is enforced by comparing the accessing module's path against
+    /// the declaring one, so claiming a path is claiming the privileges that come with it.
+    ModuleCollision(String),
     /// A value-position name nothing declares. Distinct from `Unknown`, which is a
     /// TYPE nothing declares — `unknown type println` is not a sentence.
     UnknownName(String),
     /// An orphan that does not fill a gap. `overlap` is the values already covered
     /// — the intersection itself, which is what the representation is for.
     OrphanOverlaps { protocol: String, overlap: String },
+    /// Two impls of one protocol answer for the same values, and neither is nested inside
+    /// the other, so there is no most-specific one to pick. decisions.md permits overlap
+    /// only when nested; this is the case it does not.
+    ImplOverlaps { protocol: String, overlap: String },
     TooDeep(String),
 }
 
@@ -277,13 +286,12 @@ impl fmt::Display for TypeError {
             ),
             TypeErrorKind::Unequatable { ty } => write!(
                 f,
-                "`{ty}` cannot be compared with `==` yet. Equality is meant to be \
-                 structural on every type, and is on primitives, `str`, records, tuples, \
-                 lists and unions -- but a closure has no structural answer at all, and a \
-                 `Map`, a self-referencing record, or a `List` behind `null` is an opaque \
-                 pointer the compiler would otherwise compare by address. Comparing those \
-                 by hand -- field by field, or `map::len` plus the keys -- is the way round \
-                 it for now"
+                "`{ty}` cannot be compared with `==`. Equality is structural on \
+                 primitives, `str`, atoms, records (including self-referencing ones), \
+                 tuples, `List` and `Map` -- but a closure has no structural answer at \
+                 all, and neither does a union whose arms are two different records, which \
+                 the comparison does not yet route by tag. Compare the parts by hand, or \
+                 narrow the union with `is` first"
             ),
             TypeErrorKind::Unordered { ty } => write!(
                 f,
@@ -332,6 +340,14 @@ impl fmt::Display for TypeError {
                 f,
                 "`{name}` is internal to `{owner}` and cannot be used from here"
             ),
+            TypeErrorKind::ModuleCollision(p) => write!(
+                f,
+                "`{p}` is already a module of another library, so this `mod` may not \
+                 claim that path. A module path is an identity: `opaque` decides who may \
+                 reach inside a record by comparing module paths, so claiming `{p}` would \
+                 give this code the right to read the insides of every opaque type \
+                 declared there. Give the module a name of your own"
+            ),
             TypeErrorKind::UnknownName(n) => write!(f, "nothing named `{n}` is in scope"),
             TypeErrorKind::NoField { field, on } => {
                 write!(f, "`{on}` has no field `{field}`")
@@ -364,6 +380,14 @@ impl fmt::Display for TypeError {
                 "this orphan impl of `{protocol}` does not fill a gap: `{overlap}` is \
                  already covered by another impl. An orphan may only add; it cannot \
                  specialize, override or steal what an existing impl answers for"
+            ),
+            TypeErrorKind::ImplOverlaps { protocol, overlap } => write!(
+                f,
+                "two impls of `{protocol}` both answer for `{overlap}`, and neither is \
+                 nested inside the other, so there is no most-specific one to dispatch \
+                 to. Overlap is allowed only when one target is a subtype of the other -- \
+                 `impl P for i64` beside `impl P for i64 | str` is fine, because the \
+                 narrower one wins. Split the targets so they do not intersect"
             ),
             TypeErrorKind::MuInParameter(n) => write!(
                 f,
@@ -580,6 +604,10 @@ pub struct Env {
     /// Modules declared `internal mod`. Their contents resolve only from the subtree
     /// rooted at the declaring parent — see `visible_from`.
     internal_modules: Vec<Vec<String>>,
+    /// Module path -> the compilation unit that introduced it. A path may be introduced
+    /// by exactly one unit; see `claim_module` for why that is a rule and not a tidiness
+    /// preference.
+    module_unit: HashMap<String, usize>,
     /// `mu` declarations whose contractivity check failed. Instantiating one is refused
     /// outright — an uncontractive `mu` has no fixed point, so unfolding it would not
     /// terminate — and the declaration has already been reported, so uses stay silent.
@@ -620,6 +648,7 @@ impl Env {
             inst: HashMap::new(),
             active: vec![],
             internal_modules: vec![],
+            module_unit: HashMap::new(),
             mu_bad: vec![],
             depth: 0,
             error_ty,
@@ -649,8 +678,11 @@ impl Env {
     pub fn build_with(modules: &[(Vec<String>, &ast::Module)], unit: Unit) -> Self {
         let mut env = Env::new();
         env.unit = unit;
-        for (prefix, m) in modules {
-            env.declare(prefix, &m.decls);
+        for (n, (prefix, m)) in modules.iter().enumerate() {
+            // The unit's own prefix is claimed first, so a *later* unit declaring a
+            // `mod` at that path is the one reported.
+            env.module_unit.entry(prefix.join("::")).or_insert(n);
+            env.declare(prefix, &m.decls, n);
         }
         env.check_contractivity();
         for (prefix, m) in modules {
@@ -702,8 +734,47 @@ impl Env {
             }
         }
 
+        self.check_overlap();
         self.check_supertraits();
         self.check_impl_completeness();
+    }
+
+    /// Two impls of one protocol may share values only when one target is nested inside
+    /// the other — that is what makes `most_specific` in `dispatch.rs` well defined, and
+    /// `most_specific`'s own doc asserts this rule holds without anything having checked
+    /// it. Only `orphan` impls were ever checked (above); a plain pair was accepted.
+    ///
+    /// It was not silent, but it was not a diagnostic either: `impl Tag for A | B` beside
+    /// `impl Tag for B | C` reached the C compiler and failed there, on a mangled-name
+    /// collision that has nothing to do with the real mistake. Verified 2026-07-19.
+    fn check_overlap(&mut self) {
+        for n in 0..self.impls.len() {
+            for m in (n + 1)..self.impls.len() {
+                if self.impls[n].protocol != self.impls[m].protocol {
+                    continue;
+                }
+                // An orphan's overlap is the previous check's business, and reporting it
+                // twice under two names helps nobody.
+                if self.impls[n].orphan || self.impls[m].orphan {
+                    continue;
+                }
+                let (Some(a), Some(b)) = (self.impls[n].target, self.impls[m].target) else {
+                    continue;
+                };
+                let meet = self.solver.t.intersect(a, b);
+                if self.solver.is_empty(meet) {
+                    continue;
+                }
+                // Nested is permitted: the narrower target wins at every value they share.
+                if self.solver.is_subtype(a, b) || self.solver.is_subtype(b, a) {
+                    continue;
+                }
+                let protocol = self.protocols[self.impls[n].protocol.0].name.clone();
+                let span = self.impls[m].span.clone();
+                let overlap = super::print::print(&mut self.solver.t, meet);
+                self.error(span, TypeErrorKind::ImplOverlaps { protocol, overlap });
+            }
+        }
     }
 
     /// Every impl must provide each method its protocol requires and does not give a
@@ -901,7 +972,7 @@ impl Env {
     ///
     /// `fn` and `impl` are deliberately absent — neither introduces a *type* name, so
     /// nothing can need them before pass 3.
-    fn declare(&mut self, module: &[String], decls: &[ast::Decl]) {
+    fn declare(&mut self, module: &[String], decls: &[ast::Decl], unit: usize) {
         for d in decls {
             match &d.kind {
                 ast::DeclKind::Record(r) => {
@@ -960,9 +1031,48 @@ impl Env {
                     if m.internal {
                         self.internal_modules.push(inner.clone());
                     }
-                    self.declare(&inner, &m.decls);
+                    self.claim_module(&inner, unit, d.span.clone());
+                    self.declare(&inner, &m.decls, unit);
                 }
                 _ => {}
+            }
+        }
+    }
+
+    /// Record that `unit` introduced the module at `path`, reporting a second unit that
+    /// claims the same one.
+    ///
+    /// Opacity is enforced by comparing the *accessing* module's path against the path the
+    /// record was declared under (`check.rs::opacity_permits`), and both are plain strings
+    /// a program chooses. So before this check, a program could write
+    ///
+    /// ```text
+    /// mod std { mod fs { fn steal(f: File) -> Resource[i64, IoError] { f.r } } }
+    /// ```
+    ///
+    /// and read the inside of `std::fs`'s opaque `File` — verified 2026-07-19: the same
+    /// `f.r` at the program's root is refused, and inside the forged module it compiled
+    /// and ran. Nothing downstream can tell the two `std::fs`es apart, because there is
+    /// only one flat table of declarations and a module path is the only identity in it.
+    /// Refusing the *claim* is the containable fix; the alternative is giving every
+    /// declaration a provenance and teaching `opacity_permits` to compare that instead.
+    ///
+    /// Paths within one unit are free to nest as they like — `std::fs` declaring
+    /// `internal mod raw` claims `std::fs::raw` for its own unit, which is not a
+    /// collision. The root path is exempt because the prelude and the program share it by
+    /// design.
+    fn claim_module(&mut self, path: &[String], unit: usize, span: Span) {
+        if path.is_empty() {
+            return;
+        }
+        let key = path.join("::");
+        match self.module_unit.get(&key) {
+            Some(&owner) if owner != unit => {
+                self.error(span, TypeErrorKind::ModuleCollision(key));
+            }
+            Some(_) => {}
+            None => {
+                self.module_unit.insert(key, unit);
             }
         }
     }
@@ -1202,7 +1312,12 @@ impl Env {
             module.len() >= root.len() && root.iter().zip(module).all(|(a, b)| *a == b.as_str())
         };
 
-        // A directory named `internal` is internal to its parent.
+        // A directory named `internal` is internal to its parent. Only the *first* such
+        // segment is judged, so `a::internal::b::internal::c` is checked against `a` and
+        // not also against `a::internal::b` — `a::z` can reach it. Unreachable from source
+        // (2026-07-19): `internal` is a keyword, so no `mod internal` parses, and this
+        // form arises only from a library tree with two nested `internal/` directories,
+        // which the stdlib does not have. It becomes a hole the day one appears.
         if let Some(pos) = segs.iter().position(|s| *s == "internal") {
             if !reachable(&segs[..pos]) {
                 return false;
@@ -1358,6 +1473,13 @@ impl Env {
     /// only the compiler can supply a rule, so a marker it does not recognise is satisfied
     /// by nothing, and `Env::build` reports the declaration rather than letting every use
     /// fail mysteriously at the call site.
+    ///
+    /// **Currently unreachable** (verified 2026-07-19): `type_satisfies` is called from
+    /// exactly one place, `check.rs`'s `where`-bound discharge, and that site branches on
+    /// `is_marker` *first* and answers markers itself with `ord_bound_vars()` in hand. If
+    /// a second caller ever reaches this path it will get a wrong answer, not an error:
+    /// the empty `bound` below makes every `where T: Ord` parameter unordered, so a
+    /// perfectly legal generic would be told its own bound does not hold.
     fn satisfies_marker(&mut self, ty: TyId, protocol: ProtocolId) -> bool {
         match self.protocols[protocol.0].name.as_str() {
             "Ord" => super::ordered::is_ordered(self, ty, &std::collections::HashSet::new()),
@@ -1409,13 +1531,16 @@ impl Env {
     /// The protocol path is looked up from the root, not from `module`, because a `use`
     /// is already absolute.
     ///
-    /// Note the search stops at the first enclosing scope with no `use` table at all,
-    /// rather than continuing outwards: a module that imports nothing hides its parent's
-    /// imports from this query.
+    /// The walk goes outwards through every enclosing scope, skipping the ones with no
+    /// `use` table rather than stopping at them. It used to `?` on the missing table,
+    /// which returned from the whole function: a module that imported nothing hid its
+    /// parent's imports, so a call this query was meant to disambiguate came back
+    /// `AmbiguousCall` inside such a module and resolved fine one level up. Every other
+    /// lookup (`candidates_raw`) iterates all scopes, and this now agrees with them.
     pub fn imported_method(&self, module: &[String], name: &str) -> Option<ProtocolId> {
         for n in (0..=module.len()).rev() {
             let scope = module[..n].join("::");
-            let us = self.uses.get(&scope)?;
+            let Some(us) = self.uses.get(&scope) else { continue };
             if let Some((_, full)) = us.iter().find(|(bound, _)| bound == name) {
                 if let Some((proto, _method)) = full.rsplit_once("::") {
                     let segs: Vec<String> = proto.split("::").map(String::from).collect();
@@ -1439,12 +1564,36 @@ impl Env {
     ///
     /// It matters most for `mu`: a recursive type with no name to reach for prints
     /// as `mu A0 = ...`, which is not syntax anyone can write.
+    ///
+    /// A type that already has a canonical spelling is *not* recorded. `print` reverse-maps
+    /// an id to a name, and types are hash-consed, so `type Age = i64` anywhere in the
+    /// program made every `i64` in every diagnostic print as `Age` -- `f(3)` against
+    /// `fn f(x: str)` reported "expected `str`, found `Age`" for a program with no `Age` in
+    /// sight. The whole value of `defs` is naming a type the printer would otherwise
+    /// *expand*; a primitive has nothing to expand, so recording it can only mislead.
+    /// Aliases of the same union or record still collide by hash-consing, which the printer
+    /// resolves by taking the least name -- that one is inherent to keying `defs` by id.
     fn record_name(&mut self, name: &str, args: &[TyId], ty: TyId) {
-        if !args.is_empty() || self.is_error(ty) {
+        if !args.is_empty() || self.is_error(ty) || self.has_own_spelling(ty) {
             return;
         }
         let n = self.solver.t.name(name);
         self.solver.t.defs.entry(n).or_insert(ty);
+    }
+
+    /// Whether `ty` is a type the printer can already write without consulting `defs`:
+    /// exactly one primitive base, `any`, or `never`. See `record_name`.
+    fn has_own_spelling(&mut self, ty: TyId) -> bool {
+        if ty == self.solver.t.any() || ty == self.solver.t.never() {
+            return true;
+        }
+        let d = self.solver.t.data(ty);
+        let structural = !self.solver.t.atomset_of(d.atoms).is_empty_set()
+            || !self.solver.t.atomset_of(d.vars).is_empty_set()
+            || d.records != super::bdd::FALSE
+            || d.tuples != super::bdd::FALSE
+            || d.arrows != super::bdd::FALSE;
+        !structural && d.base.count_ones() == 1
     }
 
     /// Apply a declaration to type arguments, producing the type it denotes. Every path

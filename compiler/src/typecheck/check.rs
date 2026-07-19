@@ -624,13 +624,18 @@ impl Checker<'_> {
 
             ExprKind::Path(p) => self.path(module, e, p),
 
-            ExprKind::Unary { op, rhs } => {
-                let t = self.expr(module, rhs, None);
-                match op {
-                    UnOp::Neg | UnOp::Bnot => t,
-                    UnOp::Not => self.env.solver.t.bool(),
+            ExprKind::Unary { op, rhs } => match op {
+                UnOp::Neg | UnOp::Bnot => self.expr(module, rhs, None),
+                // `not` is the one unary operator whose operand type is pinned by the
+                // operator itself. Reading the operand with no expected type and then
+                // returning `bool` regardless meant `!5` typechecked and produced a bool
+                // out of an integer — a plausible value where a diagnostic belonged.
+                UnOp::Not => {
+                    let b = self.env.solver.t.bool();
+                    self.expr(module, rhs, Some(b));
+                    b
                 }
-            }
+            },
 
             ExprKind::Binary { op, lhs, rhs } => self.binary(module, e, *op, lhs, rhs, expected),
 
@@ -777,7 +782,7 @@ impl Checker<'_> {
             }
             ExprKind::For { pat, iter, body } => {
                 let t = self.expr(module, iter, None);
-                let elem = match self.element_type(t) {
+                let elem = match self.collection_arg(t, 0) {
                     Some(e) => e,
                     None => {
                         if !self.env.is_error(t) {
@@ -827,10 +832,10 @@ impl Checker<'_> {
                 let t = self.expr(module, base, None);
                 // A two-argument collection -- `Map[K, V]` -- is keyed by K (#0) and
                 // yields V (#1). A one-argument `List[T]` is keyed by i64 and yields T.
-                let arg1 = self.arg_type(t, 1);
+                let arg1 = self.collection_arg(t, 1);
                 let (key, value) = match arg1 {
-                    Some(v) => (self.arg_type(t, 0), Some(v)),
-                    None => (Some(self.env.solver.t.i64()), self.element_type(t)),
+                    Some(v) => (self.collection_arg(t, 0), Some(v)),
+                    None => (Some(self.env.solver.t.i64()), self.collection_arg(t, 0)),
                 };
                 if let Some(k) = key {
                     self.expr(module, index, Some(k));
@@ -1330,6 +1335,38 @@ impl Checker<'_> {
         narrow::project_field(&mut self.env.solver, ty, label).ty()
     }
 
+    /// `arg_type`, but only for a subject that could actually *be* a collection.
+    ///
+    /// `arg_type` alone is not that question. It reads the slot off every record leaf of
+    /// the type and answers `Partial` where some leaf lacks it — and `any` has a record
+    /// leaf, so `element_type(any)` answered `Some(any)`. That made `for x in v` compile
+    /// for a `v: any` holding an i64, and the backend read the scalar as a list:
+    ///
+    ///     let v: any = 5; for x in v { .. }     // ASan: heap-buffer-overflow
+    ///
+    /// A collection is a nominal record and nothing else. A type that also admits an i64,
+    /// a str, an atom, a tuple, a function, `null`, or a rigid variable is not one,
+    /// whatever its record leaves happen to carry — so those are rejected here rather
+    /// than silently yielding a plausible element type.
+    fn collection_arg(&mut self, ty: TyId, i: usize) -> Option<TyId> {
+        if !self.is_all_records(ty) {
+            return None;
+        }
+        self.arg_type(ty, i)
+    }
+
+    /// A type built out of records and nothing else. Mirrors `is_atomic`, which asks the
+    /// same shape of question for the atom lattice.
+    fn is_all_records(&self, ty: TyId) -> bool {
+        let d = self.env.solver.t.data(ty);
+        d.base == 0
+            && self.env.solver.t.atomset_of(d.atoms).is_empty_set()
+            && self.env.solver.t.atomset_of(d.vars).is_empty_set()
+            && d.tuples == super::bdd::FALSE
+            && d.arrows == super::bdd::FALSE
+            && d.records != super::bdd::FALSE
+    }
+
     /// The nominal name of a type, when it is exactly one named record atom. This is
     /// the same question `ir::repr::nominal_name` asks of a lowered type, asked here of
     /// a checked one.
@@ -1664,10 +1701,42 @@ impl Checker<'_> {
         for arm in arms {
             let test = self.arm_test(module, arm, subject);
             self.locals.push(vec![]);
+            // An arm whose test is disjoint from the *subject* can never run, and binding
+            // it is the trap `narrow.rs` was built to prevent (see its module docs, and
+            // `Refined::NeverMatches`). `remaining ∧ test` would be `never`, `never` is
+            // below everything, so every check inside the arm succeeds vacuously:
+            //
+            //   fn f[T](x: T) -> str { match x { is i64 => g(x), _ => "no" } }
+            //
+            // A rigid `T` is disjoint from `i64`, so `x` bound `never` and `g(x: str)`
+            // typechecked. `f(5)` instantiates `T := i64`, the arm is live, and `g`
+            // receives an i64 through a str slot. `T` was opaque, not uninhabited.
+            //
+            // Tested against the subject rather than against `remaining`, deliberately:
+            // `remaining` being empty is the ordinary trailing-`_`-after-an-exhaustive-
+            // match case, which is fine and common. It is a test the subject could never
+            // satisfy *at all* that is the mistake.
+            if let Some(t) = test {
+                let live = self.env.solver.t.intersect(subject, t.ty);
+                if self.env.solver.is_empty(live)
+                    && !self.env.is_error(subject)
+                    && !self.env.solver.is_empty(subject)
+                {
+                    let (expected, found) = (self.show(subject), self.show(t.ty));
+                    self.error(
+                        arm.pat.span.clone(),
+                        TypeErrorKind::Mismatch { expected, found },
+                    );
+                }
+            }
             let bound = match test {
                 Some(t) => self.env.solver.t.intersect(remaining, t.ty),
                 None => remaining,
             };
+            // Never hand an arm an empty binding, reported or not. Poison is the checker's
+            // "already dealt with" type; `never` is the one that makes the next check
+            // succeed for the wrong reason.
+            let bound = if self.env.solver.is_empty(bound) { self.poison() } else { bound };
             if let Some(v) = &scrut_var {
                 self.bind(v, bound, scrutinee.span.clone());
             }

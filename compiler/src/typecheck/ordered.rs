@@ -35,12 +35,20 @@ pub(super) fn is_ordered(env: &Env, ty: TyId, bound: &HashSet<String>) -> bool {
 /// Whether `==` can compare `ty` structurally.
 ///
 /// Equality is meant to be total (docs/decisions.md), and it nearly is: primitives, `str`,
-/// records, tuples, lists and unions all compare by content. Four shapes the backend cannot
-/// yet do are rejected here rather than left to answer wrongly -- each of them compiled to
-/// an address comparison, or did not compile at all:
+/// atoms, records, tuples, `List` and `Map` all compare by content. This began as four
+/// rejections; three have since been closed by giving the backend the comparison it was
+/// missing (`Map` in 00b0640, a self-referencing record in e3e7b48, a `List` behind `null`
+/// in b0e5bcf), and each bullet was deleted with the fix. Two remain:
 ///
 /// - a **closure**: no structural answer exists, and C cannot `==` a `neon_closure`. This
-///   one is permanent; the rest are gaps to be closed.
+///   one is permanent.
+/// - a **union of two different records**: `record_fields` below reads a *single* record
+///   atom, and `A | B` normalises to the two BDD paths `A` and `B & !A`, so it answers
+///   `None` and the type is refused. Verified 2026-07-19: relaxing it to walk every path
+///   is not enough, because the second path carries a negative. The message this produces
+///   is honest about the shape now, and it is a diagnostic rather than a wrong answer --
+///   but the doc line above still claims unions compare by content, and for two records
+///   they do not.
 ///
 /// Unlike ordering there is no bound to escape through, because equality takes none: a bare
 /// type variable is *allowed* and deferred. Equality is total by design, so requiring a

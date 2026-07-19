@@ -169,10 +169,16 @@ fn hkt_resolve(
             let throws = env.solver.t.substitute(m.throws, &subst);
             (ret, throws)
         }
-        None => {
-            let never = env.solver.t.never();
-            (never, never)
-        }
+        // The impl relies on the protocol's default body, so the protocol's own signature
+        // is the answer. Falling through to `never` here said "this call produces a value
+        // nothing inhabits" with no diagnostic — see `result_of` for the same shape.
+        None => match env.protocols()[protocol.0].methods.iter().find(|m| m.name == method) {
+            Some(m) => (m.ret, m.throws),
+            None => {
+                let never = env.solver.t.never();
+                (never, never)
+            }
+        },
     };
     Ok(Selection { protocol, resolution: Resolution::Direct(impl_id), ret, throws })
 }
@@ -226,7 +232,7 @@ fn applicable(
 
     let hits = most_specific(env, hits);
 
-    let (ret, throws) = result_of(env, &hits, method);
+    let (ret, throws) = result_of(env, &hits, method, protocol);
     let resolution = match hits.as_slice() {
         [(id, target)] if env.solver.is_subtype(receiver, *target) => Resolution::Direct(*id),
         _ => {
@@ -265,13 +271,30 @@ fn most_specific(env: &mut Env, hits: Vec<(ImplId, TyId)>) -> Vec<(ImplId, TyId)
 /// Step 7, and the whole document: the return is the union over the applicable
 /// impls. If they agree it is that type exactly; if they disagree it is a union as
 /// imprecise as the receiver and no more. Never erased.
-fn result_of(env: &mut Env, hits: &[(ImplId, TyId)], method: &str) -> (TyId, TyId) {
+///
+/// An impl that does not carry the method is one relying on the protocol's *default*
+/// body, so the protocol's own signature answers for it. Contributing nothing used to
+/// mean the union was taken over an empty set, which is `never` — a type no value
+/// inhabits, handed to lowering as the call's result with no diagnostic anywhere. The
+/// case is currently unreachable, because a protocol method with a body does not
+/// typecheck at all (`check.rs` checks it with the subject unbound, so its `T` parameter
+/// is an unknown type), but the silent `never` was one fix away from being live.
+fn result_of(env: &mut Env, hits: &[(ImplId, TyId)], method: &str, protocol: ProtocolId) -> (TyId, TyId) {
     let mut rets = Vec::new();
     let mut throws = Vec::new();
     for &(id, _) in hits {
-        if let Some(m) = env.impls()[id.0].methods.iter().find(|m| m.name == method) {
-            rets.push(m.ret);
-            throws.push(m.throws);
+        let found = env.impls()[id.0].methods.iter().find(|m| m.name == method);
+        let sig = match found {
+            Some(m) => Some((m.ret, m.throws)),
+            None => env.protocols()[protocol.0]
+                .methods
+                .iter()
+                .find(|m| m.name == method)
+                .map(|m| (m.ret, m.throws)),
+        };
+        if let Some((ret, thr)) = sig {
+            rets.push(ret);
+            throws.push(thr);
         }
     }
     let ret = env.solver.t.union_all(&rets);
@@ -309,15 +332,30 @@ fn dispatch_position(
     m.params.iter().position(|(_, t)| *t == subject)
 }
 
-/// The receiver's rigid variable name, if it is exactly one.
+/// The receiver's rigid variable name, if the receiver is exactly one bare variable.
+///
+/// Every other kind has to be checked empty, not just the primitive bases. `T | :none`
+/// used to answer `Some("T")` — the atom arm was invisible here — so the call resolved to
+/// `Resolution::Bound`, lowering could not name an impl for an abstract receiver, and the
+/// program *ran* and printed `<todo: bound: abstract receiver>`. The same signature
+/// written `T | null` set a base bit, fell through to `applicable`, and was a diagnostic:
+/// a wrong answer or an error depending only on which kind the other arm lived in.
+///
+/// This is the same test `ordered::ordered_rec` makes on a variable, and for the same
+/// reason: a variable mixed with anything else is a union, and a union is not rigid.
 fn rigid_name(env: &Env, ty: TyId) -> Option<String> {
     let d = env.solver.t.data(ty);
     let vars = env.solver.t.atomset_of(d.vars);
     if vars.neg || vars.names.len() != 1 {
         return None;
     }
-    // A union of a variable and something else is not a rigid receiver.
-    if d.base != 0 {
+    // A union of a variable and anything at all is not a rigid receiver.
+    if d.base != 0
+        || !env.solver.t.atomset_of(d.atoms).is_empty_set()
+        || d.records != super::bdd::FALSE
+        || d.tuples != super::bdd::FALSE
+        || d.arrows != super::bdd::FALSE
+    {
         return None;
     }
     Some(env.solver.t.name_str(vars.names[0]).to_string())

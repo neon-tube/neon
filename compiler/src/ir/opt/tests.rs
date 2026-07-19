@@ -82,3 +82,22 @@ fn a_constant_branch_folds_to_a_jump() {
     assert!(ir.contains("const.i64 1"), "{ir}");
     assert!(!ir.contains("const.i64 2"), "dead arm removed: {ir}");
 }
+
+/// A call to a function that never returns survives DCE even though its result is unused.
+///
+/// `spin` is pure by every other measure the analysis has: f64 arithmetic and a comparison,
+/// no natives, no indirect calls. It also never returns — `x * 0.0` is `0.0` forever, so
+/// `x < 100.0` never goes false. DCE used to delete the call, and a program that must hang
+/// printed its next line and exited 0. Non-termination is observable for exactly the reason
+/// this file's effect analysis already treats a trap as observable.
+///
+/// The counterpart lives in `effects::tests`; this one pins the consequence rather than the
+/// classification, because deleting the call is the damage.
+#[test]
+fn a_call_that_never_returns_is_not_deleted() {
+    let ir = optimized(
+        "fn spin(n: f64) -> f64 { let x = n; while x < 100.0 { x = x * 0.0; } x }
+         fn main() { let unused = spin(1.0); }",
+    );
+    assert!(ir.contains("call @spin"), "the diverging call was deleted:\n{ir}");
+}

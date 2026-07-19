@@ -1,0 +1,22 @@
+//@ compile-fail
+//@ error-contains: neither is nested inside the other
+//
+// Overlap between impls is permitted only when nested — `impl P for i64` beside
+// `impl P for i64 | str`, where the narrower one wins at every shared value. That
+// property is what makes `dispatch::most_specific` well defined, and its own doc asserts
+// it holds.
+//
+// Nothing checked it. `Env::check_coherence` ran the overlap test over `orphan` impls
+// only, so a plain non-nested pair was accepted by the checker and reached the C
+// compiler, which failed on an unrelated mangled-name collision.
+
+use std::io;
+
+protocol Tag for T { fn tag(x: T) -> str }
+
+impl Tag for i64 | str { fn tag(x: i64 | str) -> str { "left" } }
+impl Tag for str | bool { fn tag(x: str | bool) -> str { "right" } }
+
+fn main() {
+    io::println(tag("s"));
+}

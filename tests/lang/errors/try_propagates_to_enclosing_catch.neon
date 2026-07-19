@@ -1,0 +1,46 @@
+// `try expr` propagates to the next handler OUT, and an enclosing `try ... catch`
+// in the same function is a handler. Only when there is none does the error become
+// the function's `throws` clause to carry.
+//
+// Lowering used to ask a different question than the checker. The checker's
+// `note_throw` appends to the enclosing `throw_sinks` frame, so it attributes an
+// inner `try` to the outer `catch` and typechecks the program on that basis;
+// lowering's `throw_or_escape` consulted only the *function's* `throws`, saw that
+// `main` was not declared to throw, and emitted a top-level panic. The catch below
+// never ran and the process aborted with exit 101 — a program the checker had
+// just proved handled its own error.
+//
+// The two `throw` cases are the contrast that pins the asymmetry: a bare `throw`
+// in the same position always did consult the handler stack, so the two spellings
+// of "raise an error here" disagreed with each other.
+
+use std::io;
+
+record Boom { msg: str }
+impl Display for Boom { fn to_string(e: Boom) -> str { "boom" } }
+impl Error for Boom { fn message(e: Boom) -> str { "boom" } }
+
+fn go(fail: bool) throws Boom -> i64 { if fail { throw Boom { msg: "bang" } } else { 1 } }
+
+fn main() {
+    // An inner `try` inside an enclosing catch, in a `main` that declares nothing.
+    let a = try { let v = try go(true); v } catch (e) {
+        io::println("catch ran");
+        7
+    };
+    io::println("a=#{a}");
+
+    // A bare `throw` in the same position: same handler, same answer.
+    let b = try { throw Boom { msg: "direct" } } catch (e) {
+        io::println("catch ran for throw");
+        8
+    };
+    io::println("b=#{b}");
+
+    // The success path still flows through the inner `try` untouched, and the catch
+    // does not run: the handler edge is on the error side only.
+    let c = try { let v = try go(false); v } catch (e) { 9 };
+    io::println("c=#{c}");
+
+    io::println("reached the end");
+}

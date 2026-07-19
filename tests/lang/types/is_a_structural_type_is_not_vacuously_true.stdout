@@ -1,0 +1,5 @@
+n is tuple: false
+n is arrow: false
+s is tuple: false
+t is tuple: true
+t is other tuple: false

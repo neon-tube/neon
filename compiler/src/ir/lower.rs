@@ -214,16 +214,53 @@ fn repr_key(r: &Repr) -> String {
         Repr::Runtime { nominal, args, .. } => {
             format!("{nominal}_{}", args.iter().map(repr_key).collect::<Vec<_>>().join("_"))
         }
-        Repr::Record { name: Some(n), .. } => n.clone(),
-        Repr::Record { .. } => "rec".into(),
+        // A generic record carries its arguments in its *fields* — `Box[i64]` and
+        // `Box[str]` are both `Record { name: Some("Box"), .. }` — so the name alone is
+        // not the type. `ctype::tag_name` spells a nominal record the same way for the
+        // same reason; keying on the name alone gave one `unwrap$Box` body to both.
+        Repr::Record { name: Some(n), fields } if fields.is_empty() => n.clone(),
+        Repr::Record { name: Some(n), fields } => {
+            format!("{n}_{}", fields.iter().map(|(_, r)| repr_key(r)).collect::<Vec<_>>().join("_"))
+        }
+        // An anonymous record has no name at all; its fields are its whole identity.
+        Repr::Record { fields, .. } => format!(
+            "rec_{}",
+            fields
+                .iter()
+                .map(|(n, r)| format!("{n}_{}", repr_key(r)))
+                .collect::<Vec<_>>()
+                .join("_")
+        ),
         Repr::List(e) => format!("list_{}", repr_key(e)),
         Repr::Map(k, v) => format!("map_{}_{}", repr_key(k), repr_key(v)),
         Repr::Tuple(rs) => format!("tup_{}", rs.iter().map(repr_key).collect::<Vec<_>>().join("_")),
         Repr::Nullable(e) => format!("opt_{}", repr_key(e)),
-        Repr::Closure { .. } => "fn".into(),
-        Repr::Union(_) => "union".into(),
+        // Structural, like `Tuple` and `Map` above, and for the same reason: this string
+        // is the *identity* of a monomorphisation instance. `Closure { .. } => "fn"` and
+        // `Union(_) => "union"` were constants, so every instantiation of one generic at
+        // any two closure types — or any two union types — mangled to a single name, and
+        // `lower_module`'s `lowered` set then dropped the second body on the floor. One
+        // emitted instance, typed at whichever substitution happened to be popped first,
+        // served call sites that had agreed with the compiler on a different layout.
+        //
+        // It is not reliably caught downstream. `fn ident[T](x: T) -> T` at `i64 | str`
+        // and at `bool | f64` produced two C structs and the C compiler rejected the
+        // mismatch; the same collision at `i64 | bool` and `i64 | f64` produced one struct
+        // and compiled silently, correct only by coincidence of layout.
+        //
+        // Recursion terminates: the two back-edge reprs below carry an id and nothing to
+        // descend into, and every cycle in a type graph passes through one of them.
+        Repr::Closure { params, throws, ret } => format!(
+            "fn_{}_{}_{}",
+            params.iter().map(repr_key).collect::<Vec<_>>().join("_"),
+            repr_key(throws),
+            repr_key(ret)
+        ),
+        Repr::Union(vs) => {
+            format!("union_{}", vs.iter().map(repr_key).collect::<Vec<_>>().join("_"))
+        }
         Repr::Var(n) => n.clone(),
-        Repr::Recursive(_) => "rec".into(),
+        Repr::Recursive(t) => format!("mu{}", t.0),
         Repr::BoxedRec(a) => format!("box{a}"),
         Repr::Any => "any".into(),
         Repr::Never => "never".into(),
@@ -1733,7 +1770,25 @@ impl Lower<'_> {
             self.scope.pop();
         } else {
             match form {
-                ast::TryForm::Propagate => self.throw_or_escape(err_param, ty),
+                // "Propagate" means *to the next handler out*, which is an enclosing
+                // `try ... catch` in this same function when there is one, and only the
+                // function's `throws` clause when there is not. `self.handlers` has
+                // already had this `try`'s own handler popped, so its top is exactly that
+                // next handler.
+                //
+                // Consulting only `throws()` — the function's clause — asked a question
+                // one level away from the one that decides where the error goes, and the
+                // checker does not ask it that way: `note_throw` appends to the enclosing
+                // `throw_sinks` frame, so it attributes an inner `try` to the outer
+                // `catch`. The two disagreed, and `try { let v = try go(); v } catch (e)`
+                // in a non-throwing `main` aborted the process instead of running its
+                // catch. `ExprKind::Throw` four hundred lines up already does it this way.
+                ast::TryForm::Propagate => match self.handlers.last().copied() {
+                    Some(h) => {
+                        self.b.terminate(Term::Jump(Target { to: h, args: vec![err_param] }))
+                    }
+                    None => self.throw_or_escape(err_param, ty),
+                },
                 ast::TryForm::Soften => {
                     let n = self.b.emit(Op::ConstNull, Repr::Null, ty);
                     self.b.terminate(Term::Jump(Target { to: join, args: vec![n] }));
@@ -1946,7 +2001,25 @@ impl Lower<'_> {
                 let lit = self.b.emit(Op::ConstAtom(a.clone()), Repr::Tag, bty);
                 self.b.emit(Op::Prim(PrimOp::Eq, vec![subj, lit]), Repr::Bool, bty)
             }
-            _ => self.b.emit(Op::ConstBool(true), Repr::Bool, bty),
+            // A structural type spec — a tuple `(i64, str)`, an arrow `(i64) -> str`.
+            // These have no head name to write, but they are not unanswerable: the
+            // checker resolved the spec to a type, and `Op::IsVariant` compares *that*
+            // against the value, by box tag when the subject is erased and statically
+            // otherwise. `ConstBool(true)` was here instead, so `x is (i64, str)` was
+            // true for a `5` and `x is (i64) -> str` was true for everything — the
+            // answer a person writes an `is` precisely to avoid, and `as` trusts `is`.
+            //
+            // With no resolved type there is deliberately no answer: `IsVariant` carries
+            // `tested: None`, which the backend refuses on an erased value rather than
+            // guessing, and reads as "not that variant" on a concrete one.
+            _ => {
+                let tested = self.tested_repr(id);
+                self.b.emit(
+                    Op::IsVariant { value: subj, variant: String::new(), tested },
+                    Repr::Bool,
+                    bty,
+                )
+            }
         }
     }
 
@@ -2251,12 +2324,69 @@ impl Lower<'_> {
         self.b.terminate(Term::Unreachable);
     }
 
-    /// `Error::message(e)` for a concrete error value, resolved at compile time.
+    /// `Error::message(e)` for an error value: resolved at compile time where the value
+    /// has one nominal type, and by a runtime test over the variants where it does not.
+    ///
+    /// A `try` body that can throw two error types produces a *union*, which has no head,
+    /// and the union case used to fall straight through to the `"error"` constant below.
+    /// The program then panicked with the literal text `error` — never the message the
+    /// impl was written to produce — with nothing to distinguish it from a real one.
     fn error_message(&mut self, err: Value, ty: TyId) -> Value {
-        let head = repr_head(self.b.value_repr(err));
-        if let Some(head) = head {
+        let r = self.b.value_repr(err).clone();
+        if let Some(head) = repr_head(&r) {
             let name = mangle_impl("Error", &head, "message");
             return self.b.emit(Op::Call { func: name, args: vec![err] }, Repr::Str, ty);
+        }
+        // A union of error types: which impl to call is a runtime question, so ask it.
+        // Each variant is tested in turn and the matching arm narrows and calls its own
+        // `Error::message`. Only taken when every variant names an impl — a union with an
+        // unnameable member has no such chain and falls through.
+        if let Repr::Union(variants) = &r {
+            let heads: Option<Vec<String>> = variants.iter().map(repr_head).collect();
+            if let Some(heads) = heads.filter(|h| !h.is_empty()) {
+                let variants = variants.clone();
+                let join = self.b.new_block();
+                let jp = self.b.block_param(join, Repr::Str, ty);
+                for (v, head) in variants.iter().zip(&heads) {
+                    let hit = self.b.new_block();
+                    let next = self.b.new_block();
+                    let test = self.b.emit(
+                        Op::IsVariant {
+                            value: err,
+                            variant: head.clone(),
+                            tested: Some(v.clone()),
+                        },
+                        Repr::Bool,
+                        ty,
+                    );
+                    self.b.terminate(Term::Branch {
+                        cond: test,
+                        then: Target { to: hit, args: vec![] },
+                        els: Target { to: next, args: vec![] },
+                    });
+                    self.b.switch_to(hit);
+                    self.terminated = false;
+                    // The impl method takes the concrete type, so narrow before calling.
+                    let narrowed = self.b.emit(Op::Cast(err), v.clone(), ty);
+                    let msg = self.b.emit(
+                        Op::Call {
+                            func: mangle_impl("Error", head, "message"),
+                            args: vec![narrowed],
+                        },
+                        Repr::Str,
+                        ty,
+                    );
+                    self.b.terminate(Term::Jump(Target { to: join, args: vec![msg] }));
+                    self.b.switch_to(next);
+                    self.terminated = false;
+                }
+                // The value is one of the union's variants, so every test failing is not
+                // a case to invent a message for.
+                self.b.terminate(Term::Unreachable);
+                self.b.switch_to(join);
+                self.terminated = false;
+                return jp;
+            }
         }
         // No nominal head to dispatch on; report something rather than nothing.
         self.b.emit(Op::ConstStr("error".into()), Repr::Str, ty)

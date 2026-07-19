@@ -1,0 +1,27 @@
+//@ compile-fail
+//@ error-contains: no impl of `Show` for
+//
+// A receiver of `T | :none` inside a generic body is not a rigid variable: the `:none`
+// arm has no impl reachable through `T`'s bound, so this must be a diagnostic.
+//
+// `dispatch::rigid_name` checked only the primitive bases for "is this bare `T`", so an
+// atom, record, tuple or arrow unioned with the variable was invisible and the call
+// resolved to `Resolution::Bound`. Lowering cannot name an impl for an abstract receiver,
+// so the program compiled and *ran*, printing `<todo: bound: abstract receiver>`. Writing
+// the same signature as `T | null` set a base bit and produced this error instead — a
+// wrong answer or a diagnostic depending only on which kind the other arm lived in.
+
+use std::io;
+
+protocol Show for T { fn show(x: T) -> str }
+
+record C { r: i64 }
+
+impl Show for C { fn show(x: C) -> str { "C" } }
+impl Show for :none { fn show(x: :none) -> str { "none" } }
+
+fn go[T](v: T | :none) -> str where T: Show { show(v) }
+
+fn main() {
+    io::println(go[C](C { r: 1 }));
+}

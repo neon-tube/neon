@@ -81,6 +81,30 @@ pub fn insert(program: &mut Program) {
 ///
 /// `Any -> Any` is the identity in `coerce_expr` and stays a view; so does a `Never`
 /// source, which never carries a live reference.
+///
+/// Two edges of this test are worth stating because they are the ones a future change
+/// would get wrong.
+///
+/// **`Never -> Any` is classified neither way, and that is only safe because it cannot
+/// run.** Excluded here, it is not an erasing owner; and `base_of` will not make it a view
+/// either, because `Repr::Never` is not `is_counted` and so the operand is not in `ptr`.
+/// The result is therefore treated as a *fresh owner* while `coerce_expr` emits the
+/// identity — no box — so the pass would release a value nothing allocated. It is
+/// unreachable rather than fixed: a value of repr `Never` is one an expression never
+/// produces, so the only shape that mints one is `unwrap_ok` of a call to a
+/// `-> never throws E` function, in the block reached when that call returned *Ok*. It
+/// never did. `neon ir` shows the block; nothing reaches it. Anything that gives `Never`
+/// a reachable value has to revisit this.
+///
+/// **This test reads reprs raw where `coerce_expr` reads them through `types.resolve`.**
+/// That is the file's one hand-kept agreement with the backend, and it cannot be closed
+/// here — resolving a `Repr::Recursive` back-edge needs the `TypeTable`, which is the
+/// emitter's and not the IR's. The gap is exactly a `mu` type whose unfolding *is* `any`,
+/// where the backend would box and this test would call it a view: the original bug,
+/// re-entered through the back door. No such type is constructible today (a `mu` alias for
+/// `any` is not contractive and the checker rejects it), which is why this is a comment and
+/// not a guard. If `Repr::Recursive` ever reaches here for a type that unfolds to `Any`,
+/// the leak is back.
 fn erasing_casts(f: &Func) -> HashSet<Value> {
     let mut out = HashSet::new();
     for b in &f.blocks {
@@ -426,6 +450,13 @@ fn liveness(
 ///
 /// `Retain`/`Release` report no uses at all. They are the pass's own output; counting them
 /// as uses would make the analysis depend on its own results.
+///
+/// Deliberately **exhaustive** — the constant ops are spelled out rather than swept into a
+/// wildcard — for the same reason `opt::op_operands` is, but with a worse failure. An
+/// operand missing here is not seen as a use, so its root's last use is placed at some
+/// earlier instruction and the release fires while this op still reads it: a
+/// use-after-free, not a missed optimisation. A new `Op` must therefore fail to compile
+/// until someone has decided whether it consumes or borrows.
 fn operand_uses(
     inst: &Inst,
     ptr: &HashSet<Value>,
@@ -460,7 +491,13 @@ fn operand_uses(
         | Op::IsVariant { value: v, .. } => borrowing.push(*v),
         Op::Prim(_, vs) => borrowing.extend(vs.iter().copied()),
         Op::Retain(_) | Op::Release(_) => {}
-        _ => {}
+        Op::ConstI64(_)
+        | Op::ConstF64(_)
+        | Op::ConstBool(_)
+        | Op::ConstStr(_)
+        | Op::ConstNull
+        | Op::ConstUnit
+        | Op::ConstAtom(_) => {}
     }
     consuming.retain(|v| ptr.contains(v));
     borrowing.retain(|v| ptr.contains(v));

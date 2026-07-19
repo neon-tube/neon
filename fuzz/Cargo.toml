@@ -1,0 +1,39 @@
+[package]
+name = "neon-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# Detached from the root workspace on purpose. cargo-fuzz needs nightly and
+# builds with sanitizers; the root workspace must stay on stable and must never
+# be dragged into building this. An empty `[workspace]` table is what actually
+# detaches it — the root's `exclude` is belt and braces.
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+neon-compiler = { path = "../compiler" }
+
+[[bin]]
+name = "lex"
+path = "fuzz_targets/lex.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse"
+path = "fuzz_targets/parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "format"
+path = "fuzz_targets/format.rs"
+test = false
+doc = false
+bench = false

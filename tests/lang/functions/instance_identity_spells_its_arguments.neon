@@ -1,0 +1,46 @@
+// A generic instance is identified by its mangled name, so that name must be
+// injective over the type arguments that can actually differ. Where it was not,
+// `lower_module`'s `lowered` set silently discarded the second body: two
+// instantiations shared one function, typed at whichever substitution happened to
+// be drained from the worklist first.
+//
+// `repr_key` had four constant answers standing in for whole families of type:
+// every union spelled `union`, every closure `fn`, every anonymous record `rec`,
+// and a nominal record spelled its *name* with its arguments left off — so
+// `Box[i64]` and `Box[str]` were both `Box`.
+//
+// The failure was not reliably caught downstream. The union pair below produced two
+// different C structs and the C compiler rejected the call; a pair whose payloads
+// happened to be the same width produced one struct and compiled clean, correct
+// only by coincidence of layout. So this file checks values, at widths and types
+// that would visibly diverge if one body were serving both call sites.
+
+use std::io;
+
+record Box[T] { v: T }
+
+fn ident[T](x: T) -> T { x }
+fn unwrap[B](b: B) -> B { b }
+fn eq2[T](a: T, b: T) -> bool { a == b }
+
+fn main() {
+    // Two unions, different payload types.
+    let a: i64 | str = 7;
+    let b: bool | f64 = true;
+    let ra = ident(a);
+    let rb = ident(b);
+    io::println(if ra is i64 { "a is i64" } else { "a is str" });
+    io::println(if rb is bool { "b is bool" } else { "b is f64" });
+
+    // Two unions whose payloads are the same width — the silent case.
+    let p: i64 | bool = true;
+    let q: i64 | f64 = 1.5;
+    io::println("p==p: #{eq2(p, p)}");
+    io::println("q==q: #{eq2(q, q)}");
+
+    // One generic record at two arguments.
+    let bi = unwrap(Box { v: 7 });
+    let bs = unwrap(Box { v: "seven" });
+    io::println("#{bi.v}");
+    io::println(bs.v);
+}

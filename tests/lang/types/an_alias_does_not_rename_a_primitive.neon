@@ -1,0 +1,21 @@
+//@ compile-fail
+//@ error-contains: found `i64`
+//
+// `type Age = i64` must not change how `i64` prints in a diagnostic that has nothing to
+// do with `Age`.
+//
+// Types are hash-consed, so the alias and the primitive are one `TyId`; `Env::record_name`
+// recorded the name against it and `print::def_name` reverse-maps an id to a name. Every
+// `i64` in the whole compilation then printed as `Age` — this file reported "expected
+// `str`, found `Age`" for the literal `3`. A name is only worth recording when it saves
+// the printer from expanding something, and a primitive has nothing to expand.
+
+use std::io;
+
+type Age = i64
+
+fn f(x: str) -> str { x }
+
+fn main() {
+    io::println(f(3));
+}

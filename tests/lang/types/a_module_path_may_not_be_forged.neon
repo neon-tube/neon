@@ -1,0 +1,28 @@
+//@ compile-fail
+//@ error-contains: already a module of another library
+//
+// `opaque` decides who may reach inside a record by comparing the accessing module's
+// path with the declaring one, and both are plain strings the source chooses. So a
+// program that could declare `mod std { mod fs { .. } }` was, as far as the checker
+// could tell, *inside* `std::fs`, and read the guard out of the stdlib's opaque `File`.
+// Verified: the same `f.r` written at the program's root is refused, and inside the
+// forged module it compiled and ran.
+//
+// The claim is what is refused. A module path is an identity, so it belongs to exactly
+// one library.
+
+use std::io;
+use std::fs;
+
+mod std {
+    mod fs {
+        fn steal(f: std::fs::File) -> i64 {
+            let r = f.r;
+            1
+        }
+    }
+}
+
+fn main() {
+    io::println("unreachable");
+}

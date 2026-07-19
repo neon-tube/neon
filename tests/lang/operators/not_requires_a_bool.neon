@@ -1,0 +1,14 @@
+//@ compile-fail
+//@ error-contains: expected `bool`, found `i64`
+
+// `not` is the one unary operator whose operand type the operator itself pins.
+// The checker used to read the operand with no expected type and return `bool`
+// regardless, so `!5` typechecked and produced a bool out of an integer — a
+// plausible value standing where a diagnostic belonged.
+
+use std::io;
+
+fn main() {
+    let b = !5;
+    io::println(if b { "t" } else { "f" });
+}

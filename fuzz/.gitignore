@@ -1,0 +1,16 @@
+# Build output. Nightly + sanitizers, several hundred MB.
+target
+
+# Coverage profiles from `cargo fuzz coverage`.
+coverage
+
+# The evolved corpus: libFuzzer writes thousands of files here, most of them
+# unreadable near-duplicates of each other, and it rewrites them on every run.
+# Committing it would put a churning binary blob in every diff for no benefit —
+# the corpus that *matters* is `tests/lang/**` and `stdlib/**`, which are already
+# tracked, and `fuzz/seed.sh` reconstitutes this directory from them in a second.
+corpus
+
+# Crash inputs from the last run. Transient by nature: a crash worth keeping is
+# one that has been minimised and copied into `known-crashes/`, which IS tracked.
+artifacts

@@ -1,0 +1,37 @@
+// A boxed record whose layout walk reaches a SECOND, pointer-backed cycle.
+//
+// `A` and `B` close a cycle entirely by value, so both are boxed: every value of them is
+// a pointer, and `repr_shape` computes the pointee layout. `L` closes a different cycle
+// through a `List`, which needs no box — the list pointer already makes it finite.
+//
+// `repr_shape` passed an EMPTY cut set to that layout walk, on the reasoning that boxing
+// already cuts every record cycle. It does — but only record cycles. Laying `A` out
+// inline descends through `l: L` into `List[L]` and back into `L`, a cycle boxing does
+// not cut and an empty cut set does not cut either, so the compiler recursed forever and
+// died with a stack overflow instead of compiling.
+//
+// Each half alone is fine — `L` on its own compiles, and `A`/`B` on their own compile —
+// so it is the two together that has no terminating walk, which is why neither existing
+// recursive-record test catches it. Building the values is enough to trigger it: the
+// crash was in laying the types out, not in any operation on them.
+
+use std::io;
+
+record L {
+    xs: List[L],
+}
+
+record B {
+    a: A | null,
+}
+
+record A {
+    b: B,
+    l: L,
+}
+
+fn main() {
+    let leaf = L { xs: [] };
+    let a = A { b: B { a: null }, l: leaf };
+    io::println("laid out");
+}

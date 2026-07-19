@@ -56,6 +56,15 @@ pub struct Func {
 impl Func {
     /// The tagged result a throwing function actually returns — `{tag, union{ok, err}}`,
     /// expressed as a two-variant union so it shares the union layout and accessors.
+    ///
+    /// This is a *positional pair*, not a type-level union, and it is deliberately built
+    /// raw rather than through `combine`/`normalize_union`. Those normalise: they dedupe
+    /// variants, reorder them into canonical rank, and collapse `T | null` to a nullable
+    /// pointer. Every one of those is wrong here. `IsErr`/`UnwrapOk`/`UnwrapErr` address
+    /// the arms by index — 0 is the value, 1 is the error — so `fn f() throws str -> str`
+    /// must stay a two-arm `Union([Str, Str])`, and `fn f() throws E -> null` must not
+    /// become a nullable `E`. Normalising here would leave the accessors reading an arm
+    /// that is no longer where they think it is.
     pub fn result_repr(&self) -> Option<Repr> {
         self.throws.as_ref().map(|e| Repr::Union(vec![self.ret.clone(), e.clone()]))
     }
@@ -295,6 +304,15 @@ impl Builder {
     /// Add a parameter to a block and return its value. Parameters are appended, so every
     /// predecessor's `Target::args` must be built in the same order they were added here —
     /// there is no name to check them against.
+    ///
+    /// Nor is there a check on the reprs, and the invariant is weaker than it looks. An
+    /// edge's argument repr is **not required to equal** the parameter's: lowering routinely
+    /// passes a `str` and a `Null` into a `str?` join, and an `i64` into an `i64 | null`
+    /// one, leaving the widen to the emitter. So the invariant is "every argument is
+    /// *assignable* to its parameter", and that relation is not written down anywhere — it
+    /// lives only in what the C emitter happens to accept. A verifier asserting equality
+    /// would reject the corpus; one asserting assignability would first have to define it.
+    /// Recording the gap here rather than claiming a check that does not exist.
     pub fn block_param(&mut self, block: BlockId, repr: Repr, ty: TyId) -> Value {
         let v = self.value(repr, ty);
         self.blocks[block.0 as usize].params.push(v);
@@ -343,7 +361,17 @@ impl Builder {
     /// `Union([ret, err])` that `Func::result_repr` spells out. `err` must never be
     /// `Repr::Never`: a `never` clause means the function does not throw, and setting it
     /// anyway would tag a result the callers read untagged.
+    ///
+    /// The rule was a comment for as long as it existed, which is the shape of bug this
+    /// audit keeps finding: an invariant stated where nobody can check it. It is an
+    /// assertion now, so a caller that gets it wrong stops rather than silently producing a
+    /// function whose result the whole program then reads at the wrong layout.
     pub fn set_throws(&mut self, err: Repr) {
+        debug_assert!(
+            err != Repr::Never,
+            "a `throws never` clause means the function does not throw; tagging its result \
+             would make every caller read a value that is not there",
+        );
         self.throws = Some(err);
     }
 

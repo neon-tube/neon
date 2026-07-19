@@ -189,8 +189,83 @@ pub fn repr_of(t: &Types, ty: TyId) -> Repr {
 
 /// The *pointee* layout of a boxed record — what `repr_of` will not give you, since a
 /// value of that type is the pointer.
+///
+/// The cut set is computed over `layout_successors` — the walk this function actually
+/// performs — rather than over `successors`, and that is the whole point: boxing already
+/// cuts every cycle that closes through a record field, so a cut set built from the full
+/// type graph would insert back-edges where the expansion terminates anyway and change
+/// every existing boxed record's pointee layout. Cutting the layout walk's *own* cycles
+/// adds a back-edge in exactly the cases that had none.
+///
+/// An empty cut set was the earlier design, on the reasoning that boxing cuts everything.
+/// It cuts every *record* cycle. A boxed record reaching a pointer-backed cycle — a
+/// `List[L]` inside an `L` — has a layout walk boxing does not cut, and the compiler
+/// recursed until the stack ran out. See `tests/lang/records/boxed_record_reaching_a_pointer_cycle.neon`.
 pub fn repr_shape(t: &Types, atom: u32, boxed: &HashSet<u32>) -> Repr {
-    record_repr(t, atom, &HashSet::new(), boxed)
+    let roots: Vec<TyId> = t.rec_atoms[atom as usize].fields.iter().map(|(_, ty)| *ty).collect();
+    let cyclic = scc_cycles(&roots, &mut |v| layout_successors(t, v, boxed));
+    record_repr(t, atom, &cyclic, boxed)
+}
+
+/// The types the inline layout walk descends into for `ty` — `repr_components`' recursive
+/// calls, edge for edge, including the stop at a boxed record.
+///
+/// This mirrors `repr_components`/`record_repr` rather than `successors`: `successors`
+/// describes the *type* graph, which follows a boxed record's fields, while the layout
+/// walk stops dead at one. Keeping the two apart is what lets `repr_shape` cut only the
+/// cycles that would not otherwise terminate.
+fn layout_successors(t: &Types, ty: TyId, boxed: &HashSet<u32>) -> Vec<TyId> {
+    if is_top(t, ty) {
+        return Vec::new();
+    }
+    let d = t.data(ty);
+    let mut out = Vec::new();
+    for (pos, _neg) in t.rec_bdd.paths(d.records) {
+        // A single boxed atom becomes a `BoxedRec` pointer and the walk stops.
+        if pos.is_empty() || matches!(pos.as_slice(), [only] if boxed.contains(only)) {
+            continue;
+        }
+        for &a in &pos {
+            atom_layout_successors(t, a, &mut out);
+        }
+    }
+    for atom in positive_atoms(&t.tup_bdd.paths(d.tuples)) {
+        out.extend(t.tup_atoms[atom as usize].elems.iter().copied());
+    }
+    for atom in positive_atoms(&t.arrow_bdd.paths(d.arrows)) {
+        let a = &t.arrow_atoms[atom as usize];
+        out.extend(a.params.iter().copied());
+        out.push(a.throws);
+        out.push(a.ret);
+    }
+    out.sort_unstable_by_key(|t| t.0);
+    out.dedup();
+    out
+}
+
+/// The types `record_repr` descends into for one atom: a `@runtime` type's generic slots,
+/// a `List`/`Map`'s element slots, or an ordinary record's real fields.
+fn atom_layout_successors(t: &Types, atom: u32, out: &mut Vec<TyId>) {
+    let name = nominal_name(t, atom);
+    if name.as_deref().is_some_and(|n| t.runtime_types.contains_key(n)) {
+        out.extend((0..).map_while(|i| field_ty(t, atom, &format!("#{i}"))));
+        return;
+    }
+    match name.as_deref() {
+        Some("List") => out.extend(field_ty(t, atom, "#0")),
+        Some("Map") => {
+            out.extend(field_ty(t, atom, "#0"));
+            out.extend(field_ty(t, atom, "#1"));
+        }
+        _ => {
+            for (n, fty) in &t.rec_atoms[atom as usize].fields {
+                let s = t.name_str(*n);
+                if !s.starts_with('#') || s == "#inner" {
+                    out.push(*fty);
+                }
+            }
+        }
+    }
 }
 
 /// Every boxed record atom reachable from `ty`, paired with its pointee layout.
@@ -240,10 +315,18 @@ pub fn recursive_unfoldings(t: &Types, ty: TyId, out: &mut HashMap<TyId, Repr>) 
     }
 }
 
-/// Every type reachable in one step: the fields, elements, parameters and results of the
-/// constructors this type admits. `#0`/`#1`/`#inner` are the generic arguments of the
-/// opaque containers and a newtype's payload — real edges — while `#nominal` is only the
-/// identity tag and leads nowhere.
+/// Every type reachable in one step: the fields, elements, parameters, error clauses and
+/// results of the constructors this type admits. `#0`/`#1`/`#inner` are the generic
+/// arguments of the opaque containers and a newtype's payload — real edges — while
+/// `#nominal` is only the identity tag and leads nowhere.
+///
+/// An arrow contributes all three of `params`, `throws` and `ret`, because that is what
+/// `repr_components` descends into when it builds the `Closure`. Omitting `throws` here
+/// was two lists of an arrow's parts kept in step by hand, and they drifted:
+/// `mu type F = null | (i64) throws F -> i64` is contractive and the checker accepts it,
+/// but its cycle closes through the clause, so `cycle_participants` did not see it and
+/// `repr_of` recursed until the stack ran out. See
+/// `tests/lang/types/mu_type_through_arrow_throws_clause.neon`.
 fn successors(t: &Types, ty: TyId) -> Vec<TyId> {
     let d = t.data(ty);
     let mut out = Vec::new();
@@ -261,6 +344,7 @@ fn successors(t: &Types, ty: TyId) -> Vec<TyId> {
     for atom in positive_atoms(&t.arrow_bdd.paths(d.arrows)) {
         let a = &t.arrow_atoms[atom as usize];
         out.extend(a.params.iter().copied());
+        out.push(a.throws);
         out.push(a.ret);
     }
     out.sort_unstable_by_key(|t| t.0);
@@ -386,6 +470,9 @@ fn reachable_atoms(t: &Types, ty: TyId, out: &mut Vec<u32>, seen: &mut HashSet<T
         for p in ar.params {
             reachable_atoms(t, p, out, seen);
         }
+        // `throws` as much as `ret`: a record atom mentioned only in an error clause is
+        // still reachable, and `boxed_atoms` searches only what this collects.
+        reachable_atoms(t, ar.throws, out, seen);
         reachable_atoms(t, ar.ret, out, seen);
     }
 }
@@ -675,7 +762,24 @@ pub fn normalize_union(variants: Vec<Repr>) -> Repr {
     combine(seen)
 }
 
-/// Where a variant sits in the canonical union order.
+/// Where a variant sits in the canonical union order — the order `repr_components` pushes
+/// its components in, reproduced for reprs that arrive by substitution rather than from a
+/// `TyId`. The two are one specification in two places, so they are written to be read
+/// side by side: scalars, tag, variable, *everything the records phase emits*, tuples,
+/// arrows.
+///
+/// `List`, `Map`, `Runtime` and `BoxedRec` all belong to rank 7. They do not look like
+/// records, but every one of them is produced by `repr_components`' record loop — they are
+/// what a record atom becomes when its `#nominal` names a container or a `@runtime` type —
+/// so they are pushed *before* tuples and arrows. Sorting them after, as a catch-all rank
+/// did, made `List[i64] | (i64, str)` come out `[List, Tuple]` from `repr_of` and
+/// `[Tuple, List]` from `normalize_union`: one type, two variant orders, two C structs the
+/// backend then refuses to assign between.
+///
+/// Ranks 0–9 are therefore exhaustive over what can actually reach here. The trailing arm
+/// covers `Nullable`, `Recursive`, `Any` and `Never`, none of which `repr_components`
+/// pushes as a union component — `Nullable` is made by `combine` *after* the ordering is
+/// fixed, and the others only ever appear nested inside a variant.
 fn variant_rank(r: &Repr) -> u8 {
     match r {
         Repr::I64 => 0,
@@ -685,10 +789,24 @@ fn variant_rank(r: &Repr) -> u8 {
         Repr::Null => 4,
         Repr::Tag => 5,
         Repr::Var(_) => 6,
-        Repr::Record { .. } => 7,
+        Repr::Record { .. }
+        | Repr::List(_)
+        | Repr::Map(_, _)
+        | Repr::Runtime { .. }
+        | Repr::BoxedRec(_) => 7,
         Repr::Unit | Repr::Tuple(_) => 8,
         Repr::Closure { .. } => 9,
-        _ => 10,
+        // None of these is pushed as a union component by `repr_components`. `Nullable` is
+        // made by `combine` after the ordering is fixed; `Recursive`, `Any` and `Never`
+        // only appear nested inside a variant.
+        //
+        // `Union` is the one that can genuinely turn up, when a variable standing for a
+        // union type is substituted into an enclosing one — and a rank cannot repair it.
+        // The type system flattens `(a | b) | c`, so `repr_of` never produces the nested
+        // shape at all; ordering a nested union against its siblings would still be a
+        // different repr from the flat one. Flattening belongs in `normalize_union`, not
+        // here, and is left unfixed rather than papered over. See the audit notes.
+        Repr::Union(_) | Repr::Nullable(_) | Repr::Recursive(_) | Repr::Any | Repr::Never => 10,
     }
 }
 

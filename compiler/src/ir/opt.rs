@@ -101,15 +101,28 @@ fn fold_prim(
 
 /// Fold an integer op, or decline.
 ///
-/// The arithmetic arms use `checked_*` and propagate the `None` with `?`, which is the
-/// whole overflow and divide-by-zero policy: the compiler refuses to produce a constant it
-/// cannot produce faithfully, and the instruction survives to the runtime, where the
-/// trapping semantics apply. Folding with wrapping or panicking arithmetic would either
-/// invent a value the program never computes or abort the *compiler* on unreachable code.
-/// `checked_div`/`checked_rem` also cover `i64::MIN / -1`, not just a zero divisor.
+/// The arithmetic arms use `checked_*` and propagate the `None` with `?`. What that buys
+/// differs per op, and the two cases must not be conflated:
 ///
-/// `Neg` does not come through here: `fold_prim` handles it with `wrapping_neg`, so
-/// `-i64::MIN` folds to `i64::MIN` rather than declining like the binary arms would.
+/// - `Div`/`Rem` genuinely **trap** at runtime, on a zero divisor and on `i64::MIN / -1`
+///   (`runtime/src/arith.c`). Declining is load-bearing: folding would replace a trap with
+///   a value, or abort the *compiler* on code that never runs. `checked_div`/`checked_rem`
+///   cover both cases, not just the zero divisor.
+/// - `Add`/`Sub`/`Mul` **wrap** at runtime — two's complement, no trap, per
+///   `docs/decisions.md` and the `neon_i64_*` unsigned round-trip. So declining on overflow
+///   changes nothing observable; the unfolded instruction computes the same wrapped value.
+///   It is a missed fold, not a preserved trap.
+///
+/// This distinction is written out because the comment that used to sit here said the
+/// unfolded instruction survives "where the trapping semantics apply", which is true only
+/// of `Div`/`Rem`. `effects::op_is_effectful` carried the mirror-image error. Two passes
+/// disagreeing about which ops trap is how `xs[10]` and `1 / 0` got deleted in the first
+/// place, so both sides now name the runtime file that settles it.
+///
+/// `Neg` does not come through here: `fold_prim` handles it with `wrapping_neg`, which is
+/// exactly what `neon_i64_neg` does, so `-i64::MIN` folds to `i64::MIN` and agrees with the
+/// runtime. Were `Neg` ever made to trap, that fold would start eliminating the trap and
+/// would have to become `checked_neg`.
 fn fold_int(op: PrimOp, x: i64, y: i64) -> Option<Op> {
     Some(match op {
         PrimOp::Add => Op::ConstI64(x.checked_add(y)?),
@@ -423,8 +436,12 @@ fn targets_mut(term: &mut Term) -> Vec<&mut super::ssa::Target> {
 /// that flowed in, and `merge_single_pred` applies it across the whole function before
 /// looking for the next merge, so a chain never needs a transitive lookup here.
 ///
-/// Unlike `op_operands` this ends in a wildcard, so an `Op` added without an arm here is
-/// silently left unsubstituted rather than caught by the compiler.
+/// Exhaustive, like `op_operands`, and for a sharper reason than that one. An `Op` missing
+/// an arm here is left *unsubstituted*: it keeps naming a parameter of the block that was
+/// just merged away, which nothing defines any more. That is the "silently computed with an
+/// uninitialised local" failure `merge_single_pred` documents, reintroduced by an omission
+/// no reader would notice. It used to end in a wildcard, and the doc comment said so
+/// instead of fixing it.
 fn rewrite_op(op: &mut Op, m: &HashMap<Value, Value>) {
     let sub = |v: &mut Value| {
         if let Some(&nv) = m.get(v) {
@@ -453,7 +470,13 @@ fn rewrite_op(op: &mut Op, m: &HashMap<Value, Value>) {
         | Op::IsVariant { value: v, .. }
         | Op::Retain(v)
         | Op::Release(v) => sub(v),
-        _ => {}
+        Op::ConstI64(_)
+        | Op::ConstF64(_)
+        | Op::ConstBool(_)
+        | Op::ConstStr(_)
+        | Op::ConstNull
+        | Op::ConstUnit
+        | Op::ConstAtom(_) => {}
     }
 }
 

@@ -1,0 +1,20 @@
+//@ compile-fail
+//@ error-contains: is not a collection and cannot be iterated
+
+// `for x in v` needs `v` to be a collection. `any` is not one, even though the
+// element-type projection has something to say about it: reading `#0` off a type
+// walks its record leaves, and `any` has a record leaf, so the projection
+// answered `any` and the loop compiled. The backend then read a scalar as a list
+// header — an ASan heap-buffer-overflow, from a program with no diagnostic.
+//
+// A collection is a nominal record and nothing else; a type that also admits an
+// i64 is not one, whatever its record leaves carry.
+
+use std::io;
+
+fn main() {
+    let v: any = 5;
+    for x in v {
+        io::println("iterated");
+    }
+}

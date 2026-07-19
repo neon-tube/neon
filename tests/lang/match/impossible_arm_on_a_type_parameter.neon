@@ -1,0 +1,29 @@
+//@ compile-fail
+//@ error-contains: expected `T`, found `i64`
+
+// A match arm whose test is disjoint from the subject can never run, and must be
+// reported rather than checked with an empty binding.
+//
+// A rigid `T` is disjoint from every concrete type, so `x ∧ i64` is `never`. But
+// `never` is below everything, so a `never` binding makes every check inside the
+// arm succeed for the wrong reason: `g(x)` below wants a `str` and typechecked.
+// `T` is opaque, not uninhabited — call `f(5)` and `T := i64`, the arm is live,
+// and `g` receives an i64 through a str slot.
+//
+// This is the trap `typecheck/narrow.rs` documents and `Refined::NeverMatches`
+// exists to surface. The checker used to intersect inline without asking.
+
+use std::io;
+
+fn g(s: str) -> str { s }
+
+fn f[T](x: T) -> str {
+    match x {
+        is i64 => g(x),
+        _ => "no"
+    }
+}
+
+fn main() {
+    io::println(f(5));
+}

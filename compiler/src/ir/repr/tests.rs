@@ -190,3 +190,188 @@ fn never_maps_to_never() {
     assert_eq!(repr_of(&ty, n), Repr::Never);
 }
 
+/// One representative of every `Repr` variant. Adding a variant breaks this match, which
+/// is the point: the three predicates below decide whether the refcount pass tracks a
+/// value, and a variant that slips in through a `_` arm silently answers "no".
+fn one_of_each() -> Vec<(&'static str, Repr)> {
+    let all = vec![
+        ("I64", Repr::I64),
+        ("F64", Repr::F64),
+        ("Bool", Repr::Bool),
+        ("Str", Repr::Str),
+        ("Null", Repr::Null),
+        ("Unit", Repr::Unit),
+        ("Tag", Repr::Tag),
+        ("Record", Repr::Record { name: None, fields: vec![("a".into(), Repr::I64)] }),
+        ("Tuple", Repr::Tuple(vec![Repr::I64])),
+        ("List", Repr::List(Box::new(Repr::I64))),
+        ("Map", Repr::Map(Box::new(Repr::Str), Box::new(Repr::I64))),
+        (
+            "Runtime",
+            Repr::Runtime { nominal: "R".into(), c_type: "neon_r".into(), args: vec![Repr::I64] },
+        ),
+        (
+            "Closure",
+            Repr::Closure {
+                params: vec![Repr::I64],
+                throws: Box::new(Repr::Never),
+                ret: Box::new(Repr::I64),
+            },
+        ),
+        ("Union", Repr::Union(vec![Repr::I64, Repr::Bool])),
+        ("Nullable", Repr::Nullable(Box::new(Repr::Str))),
+        ("Var", Repr::Var("T".into())),
+        ("BoxedRec", Repr::BoxedRec(0)),
+        ("Recursive", Repr::Recursive(crate::typecheck::types::TyId(0))),
+        ("Any", Repr::Any),
+        ("Never", Repr::Never),
+    ];
+    // Exhaustiveness: every name above is a distinct variant, and the compiler forces the
+    // list to be revisited when one is added.
+    for (_, r) in &all {
+        match r {
+            Repr::I64
+            | Repr::F64
+            | Repr::Bool
+            | Repr::Str
+            | Repr::Null
+            | Repr::Unit
+            | Repr::Tag
+            | Repr::Record { .. }
+            | Repr::Tuple(_)
+            | Repr::List(_)
+            | Repr::Map(_, _)
+            | Repr::Runtime { .. }
+            | Repr::Closure { .. }
+            | Repr::Union(_)
+            | Repr::Nullable(_)
+            | Repr::Var(_)
+            | Repr::BoxedRec(_)
+            | Repr::Recursive(_)
+            | Repr::Any
+            | Repr::Never => {}
+        }
+    }
+    all
+}
+
+/// The exact set of reprs that live behind a pointer, so `T | null` may use a null pointer
+/// rather than a discriminant. `Recursive` is deliberately absent — it names a type without
+/// describing it, and the type it names may be an inline union.
+#[test]
+fn is_pointer_is_pinned_per_variant() {
+    let expected = ["Str", "List", "Map", "Runtime", "Closure", "BoxedRec"];
+    for (name, r) in one_of_each() {
+        assert_eq!(
+            r.is_pointer(),
+            expected.contains(&name),
+            "is_pointer disagrees for {name}: {r:?}"
+        );
+    }
+}
+
+/// The predicate the refcount pass gates on. Getting it wrong in one direction leaks and
+/// in the other frees something live, so it is pinned variant by variant rather than
+/// spot-checked. `Any` counts without being a pointer (it is a box with a header);
+/// aggregates count when anything inside them does.
+#[test]
+fn is_counted_is_pinned_per_variant() {
+    let expected =
+        ["Str", "List", "Map", "Runtime", "Closure", "BoxedRec", "Any", "Recursive", "Nullable"];
+    for (name, r) in one_of_each() {
+        assert_eq!(r.is_counted(), expected.contains(&name), "is_counted disagrees for {name}");
+    }
+    // Aggregates are counted exactly when a part is.
+    assert!(!Repr::Tuple(vec![Repr::I64, Repr::Bool]).is_counted());
+    assert!(Repr::Tuple(vec![Repr::I64, Repr::Str]).is_counted());
+    assert!(!Repr::Record { name: None, fields: vec![("a".into(), Repr::I64)] }.is_counted());
+    assert!(Repr::Record { name: None, fields: vec![("a".into(), Repr::List(Box::new(Repr::I64)))] }
+        .is_counted());
+    assert!(!Repr::Union(vec![Repr::I64, Repr::Null]).is_counted());
+    assert!(Repr::Union(vec![Repr::I64, Repr::Str]).is_counted());
+    assert!(!Repr::Nullable(Box::new(Repr::Unit)).is_counted());
+}
+
+/// `Var` is the only thing that is not concrete. `Recursive` is concrete — a resolved
+/// back-edge, not an unknown — and every aggregate is concrete exactly when its parts are.
+#[test]
+fn is_concrete_is_pinned_per_variant() {
+    for (name, r) in one_of_each() {
+        assert_eq!(r.is_concrete(), name != "Var", "is_concrete disagrees for {name}");
+    }
+    let v = Repr::Var("T".into());
+    assert!(!Repr::List(Box::new(v.clone())).is_concrete());
+    assert!(!Repr::Map(Box::new(Repr::I64), Box::new(v.clone())).is_concrete());
+    assert!(!Repr::Nullable(Box::new(v.clone())).is_concrete());
+    assert!(!Repr::Tuple(vec![Repr::I64, v.clone()]).is_concrete());
+    assert!(!Repr::Union(vec![Repr::I64, v.clone()]).is_concrete());
+    assert!(!Repr::Record { name: None, fields: vec![("a".into(), v.clone())] }.is_concrete());
+    assert!(!Repr::Runtime {
+        nominal: "R".into(),
+        c_type: "neon_r".into(),
+        args: vec![v.clone()],
+    }
+    .is_concrete());
+    assert!(!Repr::Closure {
+        params: vec![],
+        throws: Box::new(v.clone()),
+        ret: Box::new(Repr::I64),
+    }
+    .is_concrete());
+    assert!(!Repr::Closure { params: vec![], throws: Box::new(Repr::Never), ret: Box::new(v) }
+        .is_concrete());
+}
+
+/// `normalize_union` claims to reproduce the order `repr_components` pushes its components
+/// in. It did not: `List`, `Map`, `Runtime` and `BoxedRec` all come out of the *records*
+/// phase, before tuples and arrows, but fell into `variant_rank`'s catch-all and sorted
+/// after them. One type, two variant orders — which is two C structs the backend refuses to
+/// assign between.
+#[test]
+fn normalize_union_reproduces_the_order_repr_of_derives() {
+    let mut ty = t();
+    let i = ty.i64();
+    let s = ty.str();
+    let ln = ty.name("List");
+    let list = ty.nominal(ln, vec![i], vec![]);
+    let tup = ty.tuple(vec![i, s]);
+    let u = ty.union(list, tup);
+
+    let direct = repr_of(&ty, u);
+    assert_eq!(
+        direct,
+        Repr::Union(vec![
+            Repr::List(Box::new(Repr::I64)),
+            Repr::Tuple(vec![Repr::I64, Repr::Str]),
+        ]),
+        "the records phase runs before the tuples phase"
+    );
+    // Whatever order an instance's variants arrive in, re-normalising must land back on the
+    // one `repr_of` derives for the same type.
+    for start in [
+        vec![Repr::List(Box::new(Repr::I64)), Repr::Tuple(vec![Repr::I64, Repr::Str])],
+        vec![Repr::Tuple(vec![Repr::I64, Repr::Str]), Repr::List(Box::new(Repr::I64))],
+    ] {
+        assert_eq!(normalize_union(start.clone()), direct, "normalize_union({start:?})");
+    }
+}
+
+/// An arrow's `throws` is a real edge of the type graph, exactly as its params and return
+/// are. It was missing from `successors`, so a cycle closing through the clause was never
+/// cut and `repr_of` recursed until the stack ran out.
+#[test]
+fn a_cycle_through_an_arrows_throws_clause_is_cut() {
+    // `mu F = null | (i64) throws F -> i64` — the back-edge is the error clause.
+    let mut ty = t();
+    let i = ty.i64();
+    let f = ty.reserve();
+    let arrow = ty.arrow(vec![i], f, i);
+    let n = ty.null();
+    let body = ty.union(n, arrow);
+    ty.define(f, ty.data(body));
+    assert!(ty.all_defined());
+    // The whole assertion is that this returns at all.
+    let r = repr_of(&ty, f);
+    assert!(r.is_concrete(), "a recursive arrow type is concrete, got {r:?}");
+}
+

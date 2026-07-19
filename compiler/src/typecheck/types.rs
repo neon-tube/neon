@@ -123,6 +123,23 @@ impl AtomSet {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub struct AtomSetId(pub u32);
 
+/// The state one `substitute` call carries down its walk.
+///
+/// `active` is the types currently being rewritten, i.e. the cycle guard. The `Option`
+/// is lazy on purpose: a type only gets a reserved id if something actually re-enters it,
+/// so an acyclic type is rebuilt through the ordinary constructors and keeps whatever id
+/// hash-consing gives it. Reserving up front would instead run `define` on every
+/// intermediate result, which overwrites `ty_map` and would move canonicity around for
+/// types that were never recursive to begin with.
+///
+/// `done` memoizes finished rewrites, so a type shared by several fields is rebuilt once
+/// rather than once per path to it.
+#[derive(Default)]
+struct Progress {
+    active: HashMap<TyId, Option<TyId>>,
+    done: HashMap<TyId, TyId>,
+}
+
 /// A boolean op whose operands were not all defined when it was written.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum PendingOp {
@@ -448,12 +465,18 @@ impl Types {
     /// can be the operand another op was waiting on. The final `retain` drops everything
     /// now defined and leaves the still-blocked ops for the next `define`.
     ///
-    /// Note the `or_insert` here, where `define` deliberately overwrites: `eval` has
-    /// already interned the result under a canonical id, so the reserved id becomes a
-    /// second id carrying the same descriptor rather than displacing it. Callers holding
-    /// the reserved id therefore have a type that is equivalent to, but not `==`, the
-    /// canonical one — which is one of the reasons `is_equiv` and not `==` is the
-    /// supported way to compare types.
+    /// Note the `or_insert` here, where `define` deliberately overwrites. It reads like a
+    /// choice between two mappings, but it is not one: every arm of `eval` ends in
+    /// `intern`, so `d` is already a key of `ty_map` by the time this line runs and the
+    /// insert can never fire. Verified by probing it under the suite — zero hits.
+    ///
+    /// What it therefore states is the outcome, not a policy: the reserved id becomes a
+    /// second id carrying the same descriptor rather than displacing the canonical one.
+    /// That duplicate is unavoidable — `r` may already be embedded in interned shapes, so
+    /// it cannot be rewritten away, and `insert` instead of `or_insert` would merely move
+    /// which of the two is canonical. Callers holding the reserved id have a type that is
+    /// equivalent to, but not `==`, the canonical one, which is one of the reasons
+    /// `is_equiv` and not `==` is the supported way to compare types.
     fn discharge(&mut self) {
         loop {
             let ready: Vec<(TyId, PendingOp)> = self
@@ -492,6 +515,13 @@ impl Types {
     /// Sorting the fields is what `RecordAtom::get`'s binary search assumes, and it also
     /// makes field order irrelevant to identity: `{x, y}` and `{y, x}` are one atom, so
     /// they are one BDD variable and compare equal without any set-comparison work.
+    ///
+    /// The sort is *not* a dedup, and must not be: with a label twice, `get`'s binary
+    /// search would return whichever of the two it happened to land on, so `{x: i64,
+    /// x: str}` would silently be one of them rather than an error. Uniqueness is the
+    /// caller's invariant, and `env.rs::record_body` enforces it by rejecting a duplicate
+    /// field on the declaration before a shape is ever built. Deduping here would turn
+    /// that diagnostic into a coin flip.
     pub fn rec_atom(&mut self, mut a: RecordAtom) -> u32 {
         a.fields.sort_by_key(|f| f.0);
         if let Some(&id) = self.rec_atom_map.get(&a) {
@@ -872,22 +902,76 @@ impl Types {
     /// substituted. `List[T]` with `T := i64` becomes `List[i64]`; a bare `T` becomes its
     /// binding.
     ///
-    /// Two limits are worth knowing, both of which hold for the signatures this is
-    /// actually called on and neither of which is checked:
+    /// The variable component is finite or cofinite and the two cases are *not* the same
+    /// walk, which is the trap this used to fall into. For a finite set, `vars.names`
+    /// lists the members, and each is replaced by its binding — the substituted name must
+    /// disappear from the result. For a cofinite set the names are the ones *excluded*,
+    /// so walking them substitutes the wrong things and, worse, drops every member. That
+    /// is exactly the variable component of `any`, which is ⊤: `substitute(any, {T:=i64})`
+    /// came back as "any value that is not a rigid variable", and passing a `U` to an
+    /// `any` parameter of a *generic* function was then rejected with
+    /// `expected !<var>, found U` — while the identical non-generic signature accepted it,
+    /// because `substitute` returns early on an empty substitution. A cofinite component
+    /// is therefore carried through unchanged (⊤ mentions no variable, so σ(⊤) = ⊤) with
+    /// the images of any bound members unioned on.
     ///
-    /// - Only variables occurring *positively* are rewritten. The loop walks
-    ///   `vars.names`, which for a cofinite set (`neg`) enumerates the excluded names
-    ///   rather than the members, so such a component is dropped instead of substituted.
-    ///   That is every variable in a negated position, and it is also the variable
-    ///   component of `any`, which is ⊤ — so `substitute(any, ..)` does not reproduce
-    ///   `any` exactly.
-    /// - There is no cycle guard and no memo. A shape whose fields lead back to the type
-    ///   being substituted would recurse without end, so this must not be handed a
-    ///   recursive type.
+    /// A recursive type is a *cycle* in the graph, not a tree, so the walk has to be
+    /// guarded or it does not terminate. It used to not be, and the doc comment here
+    /// said so and asked callers not to hand one over — which nothing enforced and
+    /// ordinary source violated: `record Node { next: Node | null }` passed to any
+    /// generic function (`fn f[T](n: Node, x: T) -> T`) overflowed the compiler's stack,
+    /// as did the generic-and-recursive `record Tree[T] { kid: Tree[T] | null, v: T }`.
+    /// `Progress` below closes that: re-entering a type in progress hands back a reserved
+    /// id, which `define` fills in once the body is rebuilt — the same reserve/define
+    /// cycle `env.rs` uses to build the recursive type in the first place. Completed
+    /// types are memoized, so a shared (but acyclic) subtype is rebuilt once.
     pub fn substitute(&mut self, ty: TyId, subst: &HashMap<NameId, TyId>) -> TyId {
         if subst.is_empty() {
             return ty;
         }
+        let mut p = Progress::default();
+        self.subst_rec(ty, subst, &mut p)
+    }
+
+    fn subst_rec(&mut self, ty: TyId, subst: &HashMap<NameId, TyId>, p: &mut Progress) -> TyId {
+        if let Some(&done) = p.done.get(&ty) {
+            return done;
+        }
+        match p.active.get(&ty) {
+            // Re-entry through a constructor: hand back a placeholder for this very type
+            // and let the constructor close the cycle around it.
+            Some(&Some(r)) => return r,
+            Some(&None) => {
+                let r = self.reserve();
+                p.active.insert(ty, Some(r));
+                return r;
+            }
+            None => {}
+        }
+        p.active.insert(ty, None);
+        let out = self.subst_body(ty, subst, p);
+        let slot = p.active.remove(&ty).flatten();
+        let out = match slot {
+            Some(r) => {
+                // Contractivity puts every recursive occurrence under a constructor, and
+                // constructors are always defined, so `out` cannot still be a deferred
+                // boolean op here. If it ever were, `data` would read the `never`
+                // placeholder and this would define the recursion away in silence.
+                assert!(
+                    !self.undefined.contains(&out),
+                    "substitute: a cyclic result was still a deferred boolean op"
+                );
+                let d = self.data(out);
+                self.define(r, d);
+                r
+            }
+            None => out,
+        };
+        p.done.insert(ty, out);
+        out
+    }
+
+    fn subst_body(&mut self, ty: TyId, subst: &HashMap<NameId, TyId>, p: &mut Progress) -> TyId {
         let d = self.data(ty);
         let mut acc = self.never();
 
@@ -903,14 +987,35 @@ impl Types {
         }
 
         let vars = self.atomset_of(d.vars).clone();
-        for name in &vars.names {
-            let t = subst.get(name).copied().unwrap_or_else(|| self.var(*name));
+        if vars.neg {
+            // Cofinite: `names` are the *excluded* variables, so the members cannot be
+            // enumerated. Carry the component through as it stands and add the image of
+            // every bound variable that is a member — for `any` (`neg` with no names)
+            // that reproduces `any` exactly, which is the case that matters.
+            let mut e = self.empty_data();
+            e.vars = d.vars;
+            let t = self.intern(e);
             acc = self.union(acc, t);
+            // Sorted because `subst` is a `HashMap`: the union is commutative so the
+            // result is the same either way, but the *intermediate* types it interns are
+            // not, and iteration order would otherwise leak into the arena's id numbering
+            // and make a build unreproducible.
+            let mut bound: Vec<TyId> =
+                subst.iter().filter(|(n, _)| vars.has(**n)).map(|(_, &t)| t).collect();
+            bound.sort_unstable();
+            for t in bound {
+                acc = self.union(acc, t);
+            }
+        } else {
+            for name in &vars.names {
+                let t = subst.get(name).copied().unwrap_or_else(|| self.var(*name));
+                acc = self.union(acc, t);
+            }
         }
 
-        acc = self.subst_kind(acc, d.records, subst, Kind::Record);
-        acc = self.subst_kind(acc, d.tuples, subst, Kind::Tuple);
-        acc = self.subst_kind(acc, d.arrows, subst, Kind::Arrow);
+        acc = self.subst_kind(acc, d.records, subst, Kind::Record, p);
+        acc = self.subst_kind(acc, d.tuples, subst, Kind::Tuple, p);
+        acc = self.subst_kind(acc, d.arrows, subst, Kind::Arrow, p);
         acc
     }
 
@@ -948,6 +1053,7 @@ impl Types {
         bdd: BddId,
         subst: &HashMap<NameId, TyId>,
         kind: Kind,
+        p: &mut Progress,
     ) -> TyId {
         let paths = match kind {
             Kind::Record => self.rec_bdd.paths(bdd),
@@ -958,11 +1064,11 @@ impl Types {
         for (pos, neg) in paths {
             let mut pt = self.kind_top(kind);
             for i in pos {
-                let a = self.subst_atom(i, subst, kind);
+                let a = self.subst_atom(i, subst, kind, p);
                 pt = self.intersect(pt, a);
             }
             for j in neg {
-                let a = self.subst_atom(j, subst, kind);
+                let a = self.subst_atom(j, subst, kind, p);
                 pt = self.diff(pt, a);
             }
             acc = self.union(acc, pt);
@@ -975,28 +1081,35 @@ impl Types {
     /// `rest` and `throws` are substituted along with the visible components. Missing
     /// either would be silent: a generic open record would lose its openness, and a
     /// generic throwing function would come back as one that cannot fail.
-    fn subst_atom(&mut self, idx: u32, subst: &HashMap<NameId, TyId>, kind: Kind) -> TyId {
+    fn subst_atom(
+        &mut self,
+        idx: u32,
+        subst: &HashMap<NameId, TyId>,
+        kind: Kind,
+        p: &mut Progress,
+    ) -> TyId {
         match kind {
             Kind::Record => {
                 let a = self.rec_atoms[idx as usize].clone();
                 let fields = a
                     .fields
                     .iter()
-                    .map(|&(l, t)| (l, self.substitute(t, subst)))
+                    .map(|&(l, t)| (l, self.subst_rec(t, subst, p)))
                     .collect();
-                let rest = self.substitute(a.rest, subst);
+                let rest = self.subst_rec(a.rest, subst, p);
                 self.record(RecordAtom { fields, rest })
             }
             Kind::Tuple => {
                 let a = self.tup_atoms[idx as usize].clone();
-                let elems = a.elems.iter().map(|&t| self.substitute(t, subst)).collect();
+                let elems = a.elems.iter().map(|&t| self.subst_rec(t, subst, p)).collect();
                 self.tuple(elems)
             }
             Kind::Arrow => {
                 let a = self.arrow_atoms[idx as usize].clone();
-                let params = a.params.iter().map(|&t| self.substitute(t, subst)).collect();
-                let throws = self.substitute(a.throws, subst);
-                let ret = self.substitute(a.ret, subst);
+                let params =
+                    a.params.iter().map(|&t| self.subst_rec(t, subst, p)).collect();
+                let throws = self.subst_rec(a.throws, subst, p);
+                let ret = self.subst_rec(a.ret, subst, p);
                 self.arrow(params, throws, ret)
             }
         }
@@ -1089,5 +1202,105 @@ impl AtomSet {
     }
     pub fn has(&self, n: NameId) -> bool {
         self.contains(n)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::empty::Solver;
+    use super::*;
+
+    /// `substitute` used to walk `vars.names` unconditionally. For `any` that set is
+    /// cofinite — `neg` with no names — so the walk visited nothing and the whole
+    /// variable component was dropped, leaving "any value that is not a rigid variable".
+    /// Since `substitute` returns early on an empty substitution, the loss showed up only
+    /// for *generic* callees: `fn pick[T](a: T, b: any)` rejected a rigid `U` for `b`
+    /// with `expected !<var>, found U`, while the identical non-generic signature took it.
+    #[test]
+    fn substitute_preserves_the_top_variable_component() {
+        let mut s = Solver::new();
+        let t = s.t.name("T");
+        let i = s.t.i64();
+        let any = s.t.any();
+        let sub = HashMap::from([(t, i)]);
+        let out = s.t.substitute(any, &sub);
+        assert_eq!(out, any, "sigma(any) is any");
+
+        let u = s.t.name("U");
+        let uv = s.t.var(u);
+        assert!(s.is_subtype(uv, out), "a rigid variable is still a member of any");
+    }
+
+    /// The same loss, one level down: an open structural record's `rest` is
+    /// `any_or_undef`, whose variable component is also cofinite.
+    #[test]
+    fn substitute_preserves_the_top_of_the_field_lattice() {
+        let mut s = Solver::new();
+        let t = s.t.name("T");
+        let i = s.t.i64();
+        let top = s.t.any_or_undef();
+        let sub = HashMap::from([(t, i)]);
+        let out = s.t.substitute(top, &sub);
+        assert!(s.is_equiv(out, top), "sigma(any|undef) is any|undef");
+    }
+
+    /// Build `Node = {next: Node | null}` the way `env.rs` does, then substitute into it.
+    /// Before the cycle guard this walked the graph as if it were a tree and overflowed
+    /// the compiler's stack — reachable from ordinary source, e.g.
+    /// `record Node { next: Node | null }` passed to any generic function.
+    #[test]
+    fn substitute_terminates_on_a_recursive_record() {
+        let mut s = Solver::new();
+        let node = s.t.reserve();
+        let null = s.t.null();
+        let next = s.t.union(node, null);
+        let (nm, lbl) = (s.t.name("Node"), s.t.name("next"));
+        let body = s.t.nominal(nm, vec![], vec![(lbl, next)]);
+        let d = s.t.data(body);
+        s.t.define(node, d);
+        assert!(s.t.all_defined());
+
+        let t = s.t.name("T");
+        let i = s.t.i64();
+        let sub = HashMap::from([(t, i)]);
+        let out = s.t.substitute(node, &sub);
+        assert!(s.t.all_defined(), "the cycle guard's reserved id was filled in");
+        assert!(s.is_equiv(out, node), "Node mentions no T, so sigma(Node) is Node");
+    }
+
+    /// The recursive *and* generic case: the walk has real work to do at every level, so
+    /// the guard cannot be a "no variables occur, return unchanged" shortcut.
+    #[test]
+    fn substitute_rewrites_a_recursive_generic_record() {
+        let mut s = Solver::new();
+        let t = s.t.name("T");
+        let tv = s.t.var(t);
+        let tree = s.t.reserve();
+        let null = s.t.null();
+        let kid = s.t.union(tree, null);
+        let (nm, kl, vl) = (s.t.name("Tree"), s.t.name("kid"), s.t.name("v"));
+        let body = s.t.nominal(nm, vec![tv], vec![(kl, kid), (vl, tv)]);
+        let d = s.t.data(body);
+        s.t.define(tree, d);
+        assert!(s.t.all_defined());
+
+        let i = s.t.i64();
+        let sub = HashMap::from([(t, i)]);
+        let out = s.t.substitute(tree, &sub);
+        assert!(s.t.all_defined());
+        assert!(!s.is_equiv(out, tree), "T was rewritten, so this is a different type");
+
+        // The `#0` generic argument and the `v` field both came out as `i64`.
+        let od = s.t.data(out);
+        let paths = s.t.rec_bdd.paths(od.records);
+        let [(pos, neg)] = paths.as_slice() else { panic!("expected one cube: {paths:?}") };
+        assert!(neg.is_empty() && pos.len() == 1, "expected a single record shape");
+        let atom = s.t.rec_atoms[pos[0] as usize].clone();
+        let arg0 = s.t.arg_label(0);
+        assert_eq!(atom.get(arg0), i, "Tree[T] with T:=i64 is Tree[i64]");
+        assert_eq!(atom.get(vl), i, "the v field is i64");
+        // And the recursion survived: `kid` still leads back to a record.
+        let kd = s.t.data(atom.get(kl));
+        assert_ne!(kd.records, bdd::FALSE, "kid is still Tree[i64] | null");
     }
 }

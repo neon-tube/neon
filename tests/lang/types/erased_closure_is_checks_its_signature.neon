@@ -1,0 +1,79 @@
+// `is` on an erased closure must compare the SIGNATURE, because `as` trusts it.
+//
+// The type tag for a closure was the constant `"fn"` — every closure in the program,
+// at every signature, shared one tag. So `is` could not tell `(i64) -> i64` from
+// `(str) -> str` and answered *true* for both, and `as` is an unchecked
+// reinterpretation:
+//
+//     let f: IntFn = (x: i64) => x + 1;
+//     let a: any = f;
+//     if a is StrFn {                 // was true, for an IntFn
+//         let bad = a as StrFn;
+//         io::println(bad("hello"));  // hand a neon_str to a body typed int64_t
+//     }
+//
+// which under UBSan was
+//
+//     runtime/src/string.c:35:5: runtime error: null pointer passed as argument 2,
+//     which is declared to never be null
+//
+// This is the same collapsing-key defect as `List` without its element type, one arm
+// down in the same `match`: a projection whose codomain is smaller than its domain,
+// used where distinctness is the entire point. It was left behind when the `List`,
+// `Map` and `Runtime` arms were given their arguments.
+//
+// The tag now spells params, throws and return, each by the same function that spells
+// the whole type — so nesting is distinguished too, not just the first level. The
+// `else` branch below is the assertion: taking it means `is` refused, and the `as`
+// that would have misread the argument is never reached.
+
+use std::io;
+
+type IntFn = (i64) -> i64
+type StrFn = (str) -> str
+type IntFn2 = (i64) -> i64
+type TwoArg = (i64, i64) -> i64
+type RetStr = (i64) -> str
+type Nested = ((i64) -> i64) -> i64
+type NestedS = ((str) -> str) -> i64
+
+fn main() {
+    let f: IntFn = (x: i64) => x + 1;
+    let a: any = f;
+
+    // The safety case. `bad("hello")` is unreachable, and must stay that way.
+    if a is StrFn {
+        let bad = a as StrFn;
+        io::println("reached the unsound cast: #{bad("hello")}");
+    } else {
+        io::println("not a StrFn");
+    }
+
+    // Not blanket-false: the true signature still answers true, and the value is
+    // usable through the cast that follows the guard.
+    if a is IntFn {
+        let good = a as IntFn;
+        io::println("#{good(41)}");
+    } else {
+        io::println("lost track of its own signature");
+    }
+
+    // A structurally equal signature under a different alias is the same type: the tag
+    // is the shape, not the name it was written under.
+    io::println("#{a is IntFn2}");
+
+    // Arity and return type are both part of the identity, not just the parameters.
+    io::println("#{a is TwoArg}");
+    io::println("#{a is RetStr}");
+
+    // Nesting: a closure *argument* is spelled by the same function, so the two differ
+    // at a level a head-only or first-level name could not see.
+    let g: Nested = (h: (i64) -> i64) => h(1);
+    let b: any = g;
+    io::println("#{b is Nested}");
+    io::println("#{b is NestedS}");
+
+    // And a closure is still not some other type entirely, which is what shows the tag
+    // did not simply become unique-per-value.
+    io::println("#{a is str}");
+}

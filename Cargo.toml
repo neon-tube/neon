@@ -2,7 +2,11 @@
 members = ["compiler", "cli", "lsp", "runtime"]
 # Editor plugins. `extra/zed` is itself a Rust crate (a Zed extension compiles to wasm),
 # so without this the workspace would try to build it against the wrong target.
-exclude = ["extra"]
+# `fuzz` is a detached workspace of its own (an empty `[workspace]` table in
+# `fuzz/Cargo.toml`), because cargo-fuzz requires nightly and builds with
+# sanitizers. That table is what actually keeps it out; listing it here as well
+# means a stray `cargo build` in the root cannot be tempted to pick it up.
+exclude = ["extra", "fuzz"]
 resolver = "2"
 
 [workspace.package]
