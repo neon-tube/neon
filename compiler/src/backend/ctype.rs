@@ -364,7 +364,18 @@ impl TypeTable {
                 Repr::Str => "neon_str".into(),
                 other => self.c_type(other),
             },
-            // Unions, `any`, and recursive back-edges are boxed until their own passes land.
+            // A type variable here is always a compiler bug: monomorphisation ran, so
+            // every repr reaching codegen should be concrete. Boxing it instead — which
+            // this arm's catch-all silently did — is how three separate substitution
+            // misses reached the C backend, where they became either a type error in
+            // generated code or, worse, a value read off the wrong layout. Fail loudly at
+            // the boundary rather than emit something that compiles.
+            Repr::Var(n) => panic!(
+                "internal error: type variable '{n} reached codegen — a repr was built \
+                 without applying the instance substitution (see `repr_of_ty`)"
+            ),
+            // `any` is the one deliberate erasure; the rest are boxed until their own
+            // passes land.
             _ => "neon_value".into(),
         }
     }

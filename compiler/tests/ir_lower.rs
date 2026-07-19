@@ -42,6 +42,38 @@ fn expected_pass() -> Vec<String> {
         .collect()
 }
 
+/// Lower every corpus program that checks cleanly, pairing each with the `any` TyId from
+/// its own `Env` (type ids are per-env, so the guards below cannot share one).
+fn lowered_corpus() -> Vec<(String, neon_compiler::ir::ssa::Program, neon_compiler::typecheck::types::TyId)>
+{
+    let mut out = Vec::new();
+    for rel in expected_pass() {
+        let Ok(src) = std::fs::read_to_string(lang_root().join(&rel)) else { continue };
+        let Ok(tokens) = lexer::lex(&src) else { continue };
+        let (module, perrs) = parser::parse(&tokens, src.len());
+        if !perrs.is_empty() {
+            continue;
+        }
+        let Some(module) = module else { continue };
+
+        let std_owned = stdlib_modules();
+        let mut modules: Vec<(Vec<String>, &_)> =
+            std_owned.iter().map(|(p, m)| (p.clone(), m)).collect();
+        modules.push((Vec::new(), &module));
+        let mut env = Env::build_with(&modules, Unit::RootApplication);
+        if !env.errors().is_empty() {
+            continue;
+        }
+        let (result, errs) = check_module(&mut env, &module);
+        if !errs.is_empty() {
+            continue;
+        }
+        let program = lower_module(&env, &result, &module, &[]);
+        out.push((rel, program, env.solver.t.any()));
+    }
+    out
+}
+
 #[test]
 fn lower_the_corpus_and_report_gaps() {
     let mut todos: BTreeMap<String, usize> = BTreeMap::new();
@@ -115,31 +147,8 @@ fn any_never_appears_unless_the_source_type_is_any() {
     let mut checked = 0;
     let mut offenders: Vec<String> = Vec::new();
 
-    for rel in expected_pass() {
-        let Ok(src) = std::fs::read_to_string(lang_root().join(&rel)) else { continue };
-        let Ok(tokens) = lexer::lex(&src) else { continue };
-        let (module, perrs) = parser::parse(&tokens, src.len());
-        if !perrs.is_empty() {
-            continue;
-        }
-        let Some(module) = module else { continue };
-
-        let std_owned = stdlib_modules();
-        let mut modules: Vec<(Vec<String>, &_)> =
-            std_owned.iter().map(|(p, m)| (p.clone(), m)).collect();
-        modules.push((Vec::new(), &module));
-        let mut env = Env::build_with(&modules, Unit::RootApplication);
-        if !env.errors().is_empty() {
-            continue;
-        }
-        let (result, errs) = check_module(&mut env, &module);
-        if !errs.is_empty() {
-            continue;
-        }
-
+    for (rel, program, top) in lowered_corpus() {
         checked += 1;
-        let program = lower_module(&env, &result, &module, &[]);
-        let top = env.solver.t.any();
         for f in &program.funcs {
             for v in f.values() {
                 if matches!(f.value_repr(v), neon_compiler::ir::repr::Repr::Any)
@@ -158,4 +167,65 @@ fn any_never_appears_unless_the_source_type_is_any() {
         offenders.len(),
         offenders.iter().take(20).cloned().collect::<Vec<_>>().join("\n  "),
     );
+}
+
+/// The same invariant as above, in its other spelling. Monomorphisation means a lowered
+/// program contains only concrete functions and instances — never an uninstantiated
+/// template — so a surviving `Repr::Var` is always a substitution someone forgot.
+///
+/// It is not caught by the `any` guard, and that gap has now cost three bugs in the same
+/// two functions. `lower_try` built a handler's error parameter with `repr_of` instead of
+/// `repr_of_ty`, and `wrap_throwing` did the same with the callee's `throws`: under
+/// `throws E` both produced `Var("E")`, which reaches `c_type`'s `_ => "neon_value"`
+/// catch-all and is boxed without complaint. The result disagreed with the instance,
+/// which *had* substituted — one call, two layouts for its result.
+///
+/// Both spellings share a sink, and that is the real lesson: an unpinned repr becomes
+/// `neon_value` silently. Until that catch-all is closed, this guard is what stands in
+/// for it — and unlike a check on `repr_of`, it runs over the lowered IR, because none of
+/// these bugs went through `repr_of`.
+#[test]
+fn no_type_variable_survives_lowering() {
+    let mut checked = 0;
+    let mut offenders: Vec<String> = Vec::new();
+
+    for (rel, program, _) in lowered_corpus() {
+        checked += 1;
+        for f in &program.funcs {
+            for v in f.values() {
+                if let Some(var) = unsubstituted_var(f.value_repr(v)) {
+                    offenders.push(format!("{rel}: {} %{} holds '{var}", f.name, v.0));
+                }
+            }
+        }
+    }
+
+    assert!(checked > 100, "expected to lower most of the corpus, got {checked}");
+    assert!(
+        offenders.is_empty(),
+        "{} value(s) kept an unsubstituted type variable, which codegen boxes as \
+         `neon_value`:\n  {}",
+        offenders.len(),
+        offenders.iter().take(20).cloned().collect::<Vec<_>>().join("\n  "),
+    );
+}
+
+/// The name of the first type variable anywhere inside a repr — nested, since the ones
+/// that bite hide in a closure's `throws` or a union's error variant rather than at the
+/// top level.
+fn unsubstituted_var(r: &neon_compiler::ir::repr::Repr) -> Option<String> {
+    use neon_compiler::ir::repr::Repr;
+    match r {
+        Repr::Var(n) => Some(n.clone()),
+        Repr::List(e) | Repr::Nullable(e) => unsubstituted_var(e),
+        Repr::Map(k, v) => unsubstituted_var(k).or_else(|| unsubstituted_var(v)),
+        Repr::Tuple(rs) | Repr::Union(rs) => rs.iter().find_map(unsubstituted_var),
+        Repr::Record { fields, .. } => fields.iter().find_map(|(_, r)| unsubstituted_var(r)),
+        Repr::Closure { params, throws, ret } => params
+            .iter()
+            .find_map(unsubstituted_var)
+            .or_else(|| unsubstituted_var(throws))
+            .or_else(|| unsubstituted_var(ret)),
+        _ => None,
+    }
 }
