@@ -1,0 +1,4 @@
+# The shipping map, and the refcount/trap code it calls into.
+src/map.c
+src/lifecycle.c
+src/trap.c

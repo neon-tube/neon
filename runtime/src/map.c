@@ -44,15 +44,15 @@ static size_t neon_map_slot(neon_map* m, const void* key, bool* found) {
     size_t ksz = m->kw->value->size;
     size_t mask = m->cap - 1;
     size_t i = (size_t)m->kw->hash(key) & mask;
-    size_t first_dead = (size_t)-1;
+    size_t first_dead = SIZE_MAX;
     for (size_t n = 0; n < m->cap; n++) {
         unsigned char c = m->ctrl[i];
         if (c == NEON_MAP_EMPTY) {
             *found = false;
-            return first_dead != (size_t)-1 ? first_dead : i;
+            return first_dead != SIZE_MAX ? first_dead : i;
         }
         if (c == NEON_MAP_DEAD) {
-            if (first_dead == (size_t)-1) first_dead = i;
+            if (first_dead == SIZE_MAX) first_dead = i;
         } else if (m->kw->eq(m->keys + i * ksz, key)) {
             *found = true;
             return i;
@@ -60,7 +60,7 @@ static size_t neon_map_slot(neon_map* m, const void* key, bool* found) {
         i = (i + 1) & mask;
     }
     *found = false;
-    return first_dead != (size_t)-1 ? first_dead : 0;
+    return first_dead != SIZE_MAX ? first_dead : 0;
 }
 
 // Release a key the map is not going to store. Every map native *consumes* its key, the
