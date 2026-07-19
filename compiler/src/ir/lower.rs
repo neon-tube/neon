@@ -21,6 +21,11 @@ struct LambdaJob {
     lambda: Expr,
     captures: Vec<(String, Repr, TyId)>,
     module: Vec<String>,
+    /// The enclosing instance's substitution. A lambda written inside a generic mentions
+    /// that generic's type parameters -- in its own parameter types, and in whatever its
+    /// body does with them -- so it monomorphises *with* its enclosing function rather
+    /// than once for all instantiations. Empty for a lambda in a non-generic function.
+    subst: std::collections::HashMap<String, Repr>,
 }
 
 /// A concrete instance of a generic function, discovered at a call site. Monomorphisation
@@ -559,8 +564,20 @@ fn lower_lambda_job(env: &Env, result: &TypecheckResult, job: LambdaJob) -> (Fun
         Some(Repr::Closure { params, ret }) => (params, *ret),
         _ => (vec![], Repr::Unit),
     };
+    // The inferred arrow is the *generic* one, so its variables are still open; the
+    // enclosing instance's substitution closes them.
+    let param_reprs: Vec<Repr> =
+        param_reprs.iter().map(|r| substitute_repr(r, &job.subst)).collect();
+    let ret_repr = substitute_repr(&ret_repr, &job.subst);
 
-    let mut lo = Lower::new(env, result, job.module.clone(), job.name.clone(), ret_repr.clone());
+    let mut lo = Lower::with_subst(
+        env,
+        result,
+        job.module.clone(),
+        job.name.clone(),
+        ret_repr.clone(),
+        job.subst.clone(),
+    );
 
     // The environment parameter, then unpack each capture from it.
     let env_repr = Repr::Tuple(job.captures.iter().map(|(_, r, _)| r.clone()).collect());
@@ -991,12 +1008,19 @@ impl Lower<'_> {
             .zip(&capture_vals)
             .map(|(n, &v)| (n.clone(), self.b.value_repr(v).clone(), self.b.value_ty(v)))
             .collect();
-        let name = format!("lambda${}", e.id.0);
+        // One instance per (source lambda, enclosing substitution). Naming it by source id
+        // alone emitted a single erased function shared by every instantiation: its
+        // parameters became `neon_value`, so `(a: T, b: T) => a < b` compared two
+        // *pointers*, and each caller cast the closure to its own concrete signature on
+        // top of that. `sort` delegating to `sort_by` through such a lambda answered `:eq`
+        // for every pair and left the list untouched.
+        let name = mangle_instance(&format!("lambda${}", e.id.0), &self.subst);
         self.pending.push(LambdaJob {
             name: name.clone(),
             lambda: e.clone(),
             captures: cap_info,
             module: self.module.clone(),
+            subst: self.subst.clone(),
         });
         self.b.emit(Op::MakeClosure { func: name, captures: capture_vals }, repr, ty)
     }

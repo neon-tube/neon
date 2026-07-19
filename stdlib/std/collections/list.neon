@@ -42,57 +42,8 @@ fn set[T](xs: List[T], i: i64, v: T) throws IndexError -> List[T] {
 // Stable: `merge` takes from the left whenever the two are equal, which is why the
 // test is `cmp(b, a) is :lt` rather than `cmp(a, b) is :gt`.
 
-// `sort` does not delegate to `sort_by` with a `(a: T, b: T) => a < b` lambda, which is
-// how it was first written: a lambda declared inside a generic function is not
-// monomorphised at the instantiation, so its `<` compared abstract values and answered
-// `:eq` for everything -- sorting a `List[str]` returned it untouched. A direct `<` on a
-// bound `T` *is* monomorphised, so the ordered merge is spelled out here instead. Collapse
-// the two once a generic lambda instantiates properly.
 fn sort[T](xs: List[T]) -> List[T] where T: Ord {
-    let n = len(xs);
-    if n <= 1 {
-        xs
-    } else {
-        let mid = n / 2;
-        let left: List[T] = [];
-        let right: List[T] = [];
-        let i = 0;
-        while i < mid {
-            left = push(left, xs[i]);
-            i = i + 1;
-        };
-        while i < n {
-            right = push(right, xs[i]);
-            i = i + 1;
-        };
-        merge_ord(sort(left), sort(right))
-    }
-}
-
-// `merge`, ordering structurally rather than by a supplied comparator. Stable: the test is
-// `b[j] < a[i]`, so an element from the left wins a tie.
-fn merge_ord[T](a: List[T], b: List[T]) -> List[T] where T: Ord {
-    let out: List[T] = [];
-    let i = 0;
-    let j = 0;
-    while i < len(a) and j < len(b) {
-        if b[j] < a[i] {
-            out = push(out, b[j]);
-            j = j + 1;
-        } else {
-            out = push(out, a[i]);
-            i = i + 1;
-        };
-    };
-    while i < len(a) {
-        out = push(out, a[i]);
-        i = i + 1;
-    };
-    while j < len(b) {
-        out = push(out, b[j]);
-        j = j + 1;
-    };
-    out
+    sort_by(xs, (a: T, b: T) => if a < b { :lt } else if b < a { :gt } else { :eq })
 }
 
 fn sort_by[T](xs: List[T], cmp: (T, T) -> Ordering) -> List[T] {

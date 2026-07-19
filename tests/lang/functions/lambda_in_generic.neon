@@ -1,0 +1,49 @@
+// A lambda written inside a generic function monomorphises *with* that function.
+//
+// It has to: the lambda's parameters mention the enclosing type parameter, so one
+// shared version cannot serve every instantiation. It used to be lifted once, keyed on
+// the lambda's source id alone, and its parameters were erased to `neon_value` — so
+// `(a: T, b: T) => a < b` compared two *pointers*, and each caller cast the closure to
+// its own concrete signature on top of that.
+//
+// The failure was silent, which is why this test checks values rather than just
+// running: `list::sort` is exactly this shape, and a stable sort whose comparator
+// always answers `:eq` is the identity, so sorting a `List[str]` returned it in the
+// original order with the sanitizers clean.
+
+use std::io;
+use std::string;
+use std::collections::list;
+
+fn apply[T](a: T, b: T, f: (T, T) -> bool) -> bool { f(a, b) }
+
+// The lambda closes over the enclosing `T` in its parameters.
+fn less[T](a: T, b: T) -> bool where T: Ord {
+    apply(a, b, (x: T, y: T) => x < y)
+}
+
+// And here it also captures a value of that type.
+fn any_bigger[T](xs: List[T], limit: T) -> bool where T: Ord {
+    let found = false;
+    for x in xs {
+        if apply(limit, x, (p: T, q: T) => p < q) {
+            found = true;
+        };
+    };
+    found
+}
+
+fn main() {
+    // Two instantiations at different widths: 8 bytes against a three-word view.
+    io::println("#{less(1, 2)}");
+    io::println("#{less(2, 1)}");
+    io::println("#{less("a", "b")}");
+    io::println("#{less("b", "a")}");
+
+    io::println("#{any_bigger([1, 5], 3)}");
+    io::println("#{any_bigger([1, 2], 3)}");
+    io::println("#{any_bigger(["a", "z"], "m")}");
+
+    // The case that made it visible: sort's comparator is a lambda over `T`.
+    io::println(string::join(list::sort(["bb", "a", "b", "ab"]), ","));
+}

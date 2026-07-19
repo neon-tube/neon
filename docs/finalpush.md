@@ -132,21 +132,15 @@ corpus programs run leak-free under ASan.
   correctly rejected unless it declares the bound
   (`operators/marker_ord_propagates.neon`).
 
-- **A lambda inside a generic is not monomorphised.** Found while writing `sort`. A
-  lambda declared in a generic function does not instantiate at the enclosing type
-  argument, so its body compares abstract values:
-
-  ```neon
-  fn sort[T](xs: List[T]) -> List[T] where T: Ord {
-      sort_by(xs, (a: T, b: T) => if a < b { :lt } else if b < a { :gt } else { :eq })
-  }
-  ```
-
-  The lambda answered `:eq` for every pair, so sorting a `List[str]` returned it in the
-  original order -- quietly, since a stable sort with a constant comparator is the
-  identity. A direct `<` on a bound `T` *is* monomorphised, so `list::sort` spells out its
-  own ordered merge and `sort_by` keeps the comparator version. Collapsing the two back
-  together is the test that this is fixed.
+- ~~**A lambda inside a generic is not monomorphised.**~~ **Fixed 2026-07-19.** A lambda
+  was lifted once, keyed on its source id alone, so every instantiation shared one erased
+  function whose parameters were `neon_value` -- `(a: T, b: T) => a < b` compared two
+  *pointers*, and each caller cast the closure to its own concrete signature on top. It is
+  now keyed on (source id, enclosing substitution) and lowered under it, like any other
+  instance. The failure was silent: a stable sort whose comparator always answers `:eq` is
+  the identity, so `sort` on a `List[str]` returned it untouched with the sanitizers clean.
+  `list::sort` is back to delegating to `sort_by` through exactly such a lambda, and
+  `functions/lambda_in_generic.neon` checks values rather than just running.
 
 - **Bound failures inside a generic call report twice.** Pre-existing; a protocol bound
   does it too. Arguments are checked once while solving the callee's generics and again
