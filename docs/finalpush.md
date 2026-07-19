@@ -84,19 +84,18 @@ corpus programs run leak-free under ASan.
   `record == record`, `record < record` and `tuple == tuple` emitted C comparing two
   structs (not valid C — the *C compiler* failed, not Neon), and `list == list` compiled
   and returned pointer equality, so `[1,2,3] == [1,2,3]` was false.
-- **`==` is not yet structural on three reprs.** All three are now *diagnostics* rather
+- **`==` is not yet structural on two reprs.** All three are now *diagnostics* rather
   than wrong answers (`is_equatable` in `typecheck/ordered.rs`), so nothing silently
   compares addresses and nothing reaches the C compiler. Each is an opaque pointer today:
 
   | expression | why | fix |
   | --- | --- | --- |
   | `Map == Map` | opaque container | same length, then every key's value |
-  | `(List[i64] \| null) == same` | pointer-backed `T \| null` lowers to a bare nullable pointer with no tag, so the structural routing never sees it | null-check, then the inner compare |
   | self-referencing record `==` | `BoxedRec` is a pointer | walk the fields through the pointer |
 
   `closure == closure` is also rejected, and that one is permanent -- there is no structural
-  answer. `(List[i64] \| null)` is the one worth doing first: an optional list is a common
-  type, and the fix is a `Repr::Nullable` arm in `eq_expr` plus routing it in `prim`.
+  answer. Nullable equality *was* on this list and is now fixed: `eq_expr` grew a
+  `Repr::Nullable` arm that null-tests each side before comparing the payload.
 
   Fixed on the way, both pinned by `operators/union_vs_union_equality.neon`: two *union*
   operands used to project each side to its first variant and compare those, so
@@ -172,10 +171,9 @@ corpus programs run leak-free under ASan.
   key that was there — at the cost of a weak hash. See the comment on `hash_expr`.)
 - Return overloading **does** work: `dispatch.rs` falls back to the expected type when no
   parameter mentions the subject, so `fn make() -> T` resolves from context.
-- Stdlib breadth: 48 functions across 5 modules. No sort, no real file I/O, no math.
-  `sort` is now unblocked — every type has a structural order — and `sort_by(xs, key)` is
-  the documented escape hatch for a type whose meaningful order is not its structural one.
-  Pick a sort that stays memory-safe under an inconsistent comparator: NaN makes the
-  comparison lie, and an introsort-style implementation can read out of bounds when it does.
+- Stdlib breadth. Sorting landed 2026-07-19: `list::sort`/`sort_by`/`merge` and
+  `std::cmp`'s `max`/`min`/`max_by`/`min_by`, merge sort so that a lying comparator (NaN
+  guarantees one) costs a wrong order rather than a read past the end. Still missing: real
+  file I/O, and math beyond the operators.
 - Stacktrace is still unbuilt, and `opt-release` passes `-fomit-frame-pointer`, which
   fights it.
