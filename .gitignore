@@ -3,3 +3,19 @@
 _neon/
 compile_flags.txt
 .DS_Store
+
+# Benchmark build outputs. Every language in bench/ compiles into its own tree
+# (dotnet's `bin`/`obj` alone is ~90MB) and none of it is source.
+bench/**/bin/
+bench/**/obj/
+bench/**/build/
+bench/**/target/
+bench/**/classes/
+bench/brainfuck/c/bf
+bench/brainfuck/cpp/bf
+bench/brainfuck/go/bf
+bench/brainfuck/zig/bf
+bench/brainfuck/*/bf_native
+
+# Java compiles in place — no bin/ dir to catch these.
+bench/**/*.class

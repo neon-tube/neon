@@ -1,0 +1,173 @@
+// Brainfuck, as a benchmark. Ported from the pre-rewrite repo, where it was written
+// against a `std::bytes` module and a recursion-only style; neither is how this
+// compiler wants the program written, so the shape changed and the algorithm did not.
+//
+// Two passes over the source, then a flat interpreter loop:
+//
+//   pass 1  coalesces runs of `+`/`-` and `>`/`<` into one op with a signed count,
+//           which is where most of the win is -- the benchmark's inner loops are runs
+//           of increments.
+//   pass 2  matches brackets with a stack, writing each `[`'s jump target into its own
+//           slot and its partner's, so `execute` never searches for a match.
+//
+// Ops are two parallel lists (`kinds`, `args`) rather than a union of records: a record
+// per op would box, and the point of this file is the interpreter loop.
+//
+// The kind is an atom. Atoms are a tag -- one `uint64` -- so a `List[Kind]` has the same
+// 8-byte elements an integer encoding would, and the comparison in the loop is the same
+// integer compare, with none of the magic numbers.
+//
+// Reads use `xs[i]`, which traps on a bad index; writes use `try! list::set`, which is
+// the same check spelled as an assertion. Neither can fire here -- every index is a
+// position the parser produced -- and both are how the language spells "I have already
+// established this is in range".
+
+use std::io;
+use std::string;
+use std::collections::list;
+
+// `+`/`-` runs, `>`/`<` runs, output, input, and the two bracket ends.
+type Kind = :add | :move | :out | :in | :open | :close
+
+// The source is walked as bytes: `string::char_at` hands back a one-byte `str`, so the
+// comparisons are against one-character literals rather than character codes. Only the
+// parser pays for it, and the parser sees ~120 characters.
+fn parse(source: str) -> (List[Kind], List[i64]) {
+    let kinds: List[Kind] = [];
+    let args: List[i64] = [];
+    let n = string::byte_len(source);
+    let pos = 0;
+
+    while pos < n {
+        let c = try! string::char_at(source, pos);
+        if c == "+" or c == "-" {
+            let (count, next) = coalesce(source, pos, "+", "-");
+            kinds = list::push(kinds, :add);
+            args = list::push(args, count);
+            pos = next;
+        } else if c == ">" or c == "<" {
+            let (count, next) = coalesce(source, pos, ">", "<");
+            kinds = list::push(kinds, :move);
+            args = list::push(args, count);
+            pos = next;
+        } else if c == "." {
+            kinds = list::push(kinds, :out);
+            args = list::push(args, 0);
+            pos = pos + 1;
+        } else if c == "," {
+            kinds = list::push(kinds, :in);
+            args = list::push(args, 0);
+            pos = pos + 1;
+        } else if c == "[" {
+            kinds = list::push(kinds, :open);
+            args = list::push(args, 0);
+            pos = pos + 1;
+        } else if c == "]" {
+            kinds = list::push(kinds, :close);
+            args = list::push(args, 0);
+            pos = pos + 1;
+        } else {
+            // Anything else is a comment character.
+            pos = pos + 1;
+        };
+    };
+
+    (kinds, link_brackets(kinds, args))
+}
+
+// A run of `pos_char`/`neg_char` as one signed count, plus the position just past it.
+// `+++` is `(3, pos+3)`; `+-+` is `(1, pos+3)`. Read by destructuring -- a tuple is not
+// indexable, which is the one shape change the port actually required.
+fn coalesce(source: str, pos: i64, pos_char: str, neg_char: str) -> (i64, i64) {
+    let n = string::byte_len(source);
+    let cur = pos;
+    let acc = 0;
+    let going = true;
+
+    while going {
+        if cur >= n {
+            going = false;
+        } else {
+            let c = try! string::char_at(source, cur);
+            if c == pos_char {
+                acc = acc + 1;
+                cur = cur + 1;
+            } else if c == neg_char {
+                acc = acc - 1;
+                cur = cur + 1;
+            } else {
+                going = false;
+            };
+        };
+    };
+
+    (acc, cur)
+}
+
+// Each bracket's `args` slot becomes the index of its partner, so the interpreter jumps
+// rather than scans. The stack holds the indices of open brackets not yet closed.
+fn link_brackets(kinds: List[Kind], args: List[i64]) -> List[i64] {
+    let out = args;
+    let stack: List[i64] = [];
+    let depth = 0;
+    let i = 0;
+    let n = list::len(kinds);
+
+    while i < n {
+        let k = kinds[i];
+        if k == :open {
+            stack = list::push(stack, i);
+            depth = depth + 1;
+        } else if k == :close {
+            let open = stack[depth - 1];
+            out = try! list::set(out, open, i);
+            out = try! list::set(out, i, open);
+            depth = depth - 1;
+        };
+        i = i + 1;
+    };
+
+    out
+}
+
+// The hot loop. Everything it touches is an `i64` in a `List[i64]`.
+fn execute(kinds: List[Kind], args: List[i64], tape: List[i64]) -> List[i64] {
+    let cells = tape;
+    let ptr = 0;
+    let i = 0;
+    let n = list::len(kinds);
+
+    while i < n {
+        let k = kinds[i];
+        if k == :add {
+            cells = try! list::set(cells, ptr, cells[ptr] + args[i]);
+        } else if k == :move {
+            ptr = ptr + args[i];
+        } else if k == :open {
+            // A zero cell skips the body: jump to the matching `]`, which `i = i + 1`
+            // then steps past.
+            if cells[ptr] == 0 {
+                i = args[i];
+            };
+        } else if k == :close {
+            if cells[ptr] != 0 {
+                i = args[i];
+            };
+        };
+        i = i + 1;
+    };
+
+    cells
+}
+
+fn main() {
+    // Eight nested loops of ten: 10^8 increments landing in cell 8. The runner checks
+    // for `Result: 100000000`.
+    let program = "++++++++++[>++++++++++[>++++++++++[>++++++++++[>++++++++++[>++++++++++[>++++++++++[>++++++++++[>+<-]<-]<-]<-]<-]<-]<-]<-]";
+
+    let (kinds, args) = parse(program);
+
+    // Ten cells is all this program addresses.
+    let final = execute(kinds, args, list::repeat(0, 10));
+    io::println("Result: #{final[8]}");
+}
