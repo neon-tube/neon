@@ -1,0 +1,53 @@
+name: Zed Extension
+
+# Manual, and separate from the toolchain and the other editor plugins, so the Zed
+# extension ships on its own clock.
+#
+# A Zed extension is distributed as *source*: the registry (and a local dev-extension load)
+# compiles the Rust to wasm on Zed's side, so there is no prebuilt artifact Zed consumes the
+# way VS Code consumes a .vsix. This workflow therefore does two things: it compiles the
+# extension to wasm as a gate — a package that does not build should not be shippable — and
+# it bundles the source (extension.toml, languages/, src/, Cargo.toml) as the artifact.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # Zed loads extensions as wasm32-wasip2 components.
+          targets: wasm32-wasip2
+
+      # extra/zed is a detached workspace (its own Cargo.toml, excluded from the root), so
+      # the cache is scoped to it.
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: extra/zed
+
+      # The gate: if it does not compile, it does not package.
+      - name: Build (validate)
+        working-directory: extra/zed
+        run: cargo build --release --locked --target wasm32-wasip2
+
+      # The artifact is the source Zed installs and builds, not the wasm.
+      - name: Bundle
+        working-directory: extra/zed
+        run: |
+          set -eux
+          tar -czf zed-neon-extension.tar.gz \
+            extension.toml Cargo.toml Cargo.lock src languages README.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zed-neon-extension
+          path: extra/zed/zed-neon-extension.tar.gz
