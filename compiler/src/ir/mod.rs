@@ -7,6 +7,7 @@
 pub mod effects;
 pub mod lower;
 pub mod opt;
+pub mod partial;
 pub mod refcount;
 pub mod repr;
 pub mod ssa;
@@ -86,6 +87,10 @@ fn compile_with(
     // module doc), and refcount placement must see the rewritten writes to give the
     // in-place native its borrow convention.
     unique::apply(&mut program);
+    // Straight after `unique`, because the whole-record stores it produces are what this
+    // narrows, and before refcounting for the same reason `unique` runs before it: the
+    // per-field stores must be the writes refcount placement sees.
+    partial::apply(&mut program);
     refcount::insert(&mut program);
     program
 }

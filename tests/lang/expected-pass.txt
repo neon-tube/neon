@@ -91,6 +91,7 @@ collections/map_set_does_not_mutate_base.neon
 collections/map_union_key.neon
 collections/map_update_probes_once.neon
 collections/nested_list_value_semantics.neon
+collections/partial_record_write_keeps_stale_fields.neon
 collections/stdlib_breadth.neon
 control/for_break_continue.neon
 control/for_empty_list.neon

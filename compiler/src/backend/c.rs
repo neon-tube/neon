@@ -418,6 +418,7 @@ fn is_list_builder(symbol: &str) -> bool {
             // list already established as sole-owned, and the establishing call itself.
             | "neon_list_set_inplace"
             | "neon_list_ensure_unique"
+            | "neon_list_set_field_inplace"
             | "neon_map_new"
             | "neon_map_set"
             | "neon_map_contains"
@@ -551,6 +552,34 @@ fn emit_list_builder(out: &mut String, types: &TypeTable, f: &Func, result: Opti
     // uncounted, so reaching this with a refcounted element is a bug in that pass rather
     // than a case to handle. `sizeof` as the width for the same reason `neon_list_set`
     // takes one — the literal cannot disagree with the layout the emitter gave the type.
+    // One field of a record element, written straight into the slot. `ir::partial` emits
+    // these in place of a whole-record store when the rest of the record is already what is
+    // in the slot; its module doc has the safety argument and why it is worth 4.4x -> 2.5x C
+    // on n-body.
+    //
+    // The field's position rides in the third operand as a `const.i64`, so it is read back
+    // out of its defining instruction rather than printed as a variable. It names a position
+    // in the *element repr's* declared field order, which is the order this emitter lays the
+    // struct out in -- so the two cannot drift.
+    if let Some(pos) = crate::ir::partial::field_position(f, symbol, args) {
+        let Repr::List(e) = f.value_repr(args[0]) else {
+            unreachable!("codegen: field write on a non-list")
+        };
+        let Repr::Record { fields, .. } = types.resolve(e) else {
+            unreachable!("codegen: field write on a non-record element")
+        };
+        let (name, _) = fields[pos].clone();
+        let ty = types.c_type(e);
+        let _ = writeln!(
+            out,
+            "((({ty}*)neon_list_at_scalar({}, {}, sizeof({ty})))->{} = {});",
+            var(args[0]),
+            var(args[1]),
+            field_name(&name),
+            var(args[3]),
+        );
+        return;
+    }
     if symbol == "neon_list_set_inplace" {
         let Repr::List(e) = f.value_repr(args[0]) else {
             unreachable!("codegen: in-place write on a non-list")

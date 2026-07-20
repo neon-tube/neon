@@ -393,6 +393,19 @@ arrays (seven `List[f64]`s) turns every write into an 8-byte scalar store and wo
 likely put this benchmark near C today — but the benchmark keeps the record shape on
 purpose, because the record shape is what people write.
 
+**Half of this is now built: `ir::partial`.** It matches the shape below — a
+`neon_list_set_inplace` whose record's unchanged fields are `field` projections of an
+`index` of the same list at the same index value — and emits one
+`neon_list_set_field_inplace` per changed field instead of a whole-record store. n-body
+goes **4.35x C to 2.09x**; the other three benchmarks are unmoved.
+
+What it does *not* do is the third write site, and that is the remaining half. `advance`
+writes slot `i` and then slot `j`; the write to `j` has the write to `i` between it and its
+read, so the safety condition declines it. `i != j` always, since `j` runs `i+1..n`, but
+proving that needs induction-variable range analysis, which the pass has not got. Hand-
+patching that site too gets 1.43x C, so the remaining half is worth as much as the built
+half. That is the next thing to build here.
+
 **Measured ceiling, and four things not to try.** The fix above was re-derived
 independently on 2026-07-20 and, this time, its value was measured rather than argued.
 Patching the *generated* C to store only the changed fields — same program, identical

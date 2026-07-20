@@ -472,7 +472,10 @@ fn operand_uses(
         // and `neon_list_set_scalar_inplace` releases nothing. The chain's one owner
         // stays live across it — a retain-per-write here is exactly the traffic
         // `ir::unique` exists to remove, and would leak besides.
-        Op::Native { symbol, args } if symbol == "neon_list_set_inplace" => {
+        Op::Native { symbol, args }
+            if symbol == "neon_list_set_inplace"
+                || symbol == super::partial::SET_FIELD_INPLACE =>
+        {
             borrowing.extend(args.iter().copied())
         }
         Op::Call { args, .. } | Op::Native { args, .. } | Op::MakeTuple(args) | Op::MakeList(args) => {

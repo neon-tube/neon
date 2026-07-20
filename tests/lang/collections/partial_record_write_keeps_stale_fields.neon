@@ -1,0 +1,61 @@
+// `ir::partial` narrows a whole-record write into stores of only the fields that changed,
+// when the rest of the record was read out of that same slot. The win is large -- n-body
+// goes 4.35x C to 2.07x -- and the way it goes wrong is silent, so both halves are here.
+//
+// `bump` is the shape the pass exists for: read, change one field, write back. The two
+// unchanged fields are not stored at all, because the slot already holds them.
+//
+// `hazard` is the shape it must decline. The slot is overwritten between the read and the
+// write, so the unchanged fields of the *stale* record are no longer what the slot holds.
+// Storing only `c` would leave the 900s in place and print (900,900,4) -- the pass sees the
+// intervening write and keeps the whole-record store.
+
+use std::io;
+use std::collections::list;
+
+record P { a: i64, b: i64, c: i64 }
+
+// The hazard: `p` is read, then the slot is overwritten, then a record built from the
+// stale `p` is stored back. The unchanged fields must be written -- skipping them would
+// leave the intervening write's values in place.
+fn hazard(xs: List[P]) -> List[P] {
+    let i = 0;
+    let n = list::len(xs);
+    while i < n {
+        let p = xs[i];
+        xs = try! list::set(xs, i, P { a: 900, b: 900, c: 900 });   // intervening write
+        xs = try! list::set(xs, i, P { a: p.a, b: p.b, c: p.c + 1 });
+        i = i + 1;
+    };
+    xs
+}
+
+// The ordinary case the pass exists for: read, modify one field, write back.
+fn bump(xs: List[P]) -> List[P] {
+    let i = 0;
+    let n = list::len(xs);
+    while i < n {
+        let p = xs[i];
+        xs = try! list::set(xs, i, P { a: p.a, b: p.b, c: p.c + 10 });
+        i = i + 1;
+    };
+    xs
+}
+
+fn show(xs: List[P]) -> str {
+    let s = "";
+    let i = 0;
+    while i < list::len(xs) {
+        let p = xs[i];
+        s = s + "(#{p.a},#{p.b},#{p.c})";
+        i = i + 1;
+    };
+    s
+}
+
+fn main() {
+    let xs: List[P] = [P{a:1,b:2,c:3}, P{a:4,b:5,c:6}];
+    io::println(show(bump(xs)));
+    let ys: List[P] = [P{a:1,b:2,c:3}, P{a:4,b:5,c:6}];
+    io::println(show(hazard(ys)));
+}
