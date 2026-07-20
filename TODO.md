@@ -393,6 +393,46 @@ arrays (seven `List[f64]`s) turns every write into an 8-byte scalar store and wo
 likely put this benchmark near C today — but the benchmark keeps the record shape on
 purpose, because the record shape is what people write.
 
+**Measured ceiling, and four things not to try.** The fix above was re-derived
+independently on 2026-07-20 and, this time, its value was measured rather than argued.
+Patching the *generated* C to store only the changed fields — same program, identical
+output to nine decimals:
+
+| variant | time | x C |
+|---|---|---|
+| today | 2.82s | 4.41x |
+| partial stores at the 2 provably-safe sites | 1.62s | 2.53x |
+| partial stores at all 3 sites | 0.92s | **1.43x** |
+
+So the item is worth 4.41x -> 1.43x, and a *conservative* version that declines the hard
+site still gets 4.41x -> 2.53x. That matters for scoping: two of the three writes in
+`advance` need no aliasing argument at all (the record is read from the slot and written
+back with no intervening write to the same list), and they are half the win. The third
+writes slot `j` with a write to slot `i` in between, so it needs `i != j` — true, since
+`j` runs `i+1..n`, but proving it needs induction-variable range analysis. Build the
+conservative version first; it is a much smaller proof obligation for 43% of the run.
+
+**It is a serialisation fix, not a work reduction, and the counters say so.** The partial
+version executes *more* instructions than the whole-record one (24.2B against 22.3B) and
+takes a third of the cycles (4.8B against 15.2B) — IPC 1.46 -> 5.04. Anything reasoning
+about this in terms of "56 bytes versus 24 bytes of traffic" is measuring the wrong thing;
+the cost is the reload of a just-stored record failing to forward.
+
+Four plausible fixes were tested first and are all dead ends, recorded so the next person
+does not spend the afternoon:
+
+- **The whole-record rebuild is not inherently slow.** Rewriting the *C reference* to
+  rebuild the whole struct the way an immutable language must costs **1.01x** — gcc's SRA
+  sees straight through it. The problem is that gcc cannot see through *our* version, not
+  that the shape is expensive.
+- **It is not alignment.** `Body` is 56 bytes, so slots alternate 8/16-byte alignment.
+  Padding the record to 64 bytes: **-0.2%**.
+- **It is not the out-of-line call.** `neon_list_set_scalar_inplace` is an archive symbol
+  while `neon_list_at_scalar` is `static inline` in the header, and the asymmetry looks
+  suspicious. Making it inline too: **+0.3%**.
+- **It is not bounds checks**, despite their being 1.1B extra branches (5.3x C's branch
+  count). Removing them from the generated C entirely made it **9.7% slower**.
+
 **Revised by the clang experiment, same day.** Built clang-all-the-way-down
 (`CC=clang`, runtime archive included — verify with `strings` on the archive, not the
 binary's `.comment`, which always shows GCC from glibc's crt objects), this benchmark
