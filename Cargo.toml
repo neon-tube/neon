@@ -6,7 +6,8 @@ members = ["compiler", "cli", "lsp", "runtime"]
 # `fuzz/Cargo.toml`), because cargo-fuzz requires nightly and builds with
 # sanitizers. That table is what actually keeps it out; listing it here as well
 # means a stray `cargo build` in the root cannot be tempted to pick it up.
-exclude = ["extra", "fuzz"]
+# `verify` is likewise detached (Kani drives its own toolchain and codegen backend).
+exclude = ["extra", "fuzz", "verify"]
 resolver = "2"
 
 [workspace.package]

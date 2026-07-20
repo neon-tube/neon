@@ -27,22 +27,47 @@
 //
 // Verifies `src/map.c` compiled from source; see rule 1.
 //
+// ---- VALIDATED BY MUTATION (rule 6) ----
 //
-// ---- KNOWN FAILURE IN THE SHIPPING SOURCE ----
+// Three mutations of `neon_map_slot`. One caught decisively, two not -- and the two are
+// worth more than the one, so read past the first paragraph. Baseline is 1915 properties.
 //
-// This target currently FAILS, and not on any claim in this file. `neon_map_slot` writes
-// its "no tombstone seen yet" sentinel as `(size_t)-1`, at map.c lines 47, 52, 55 and 63,
-// and the project's own `--conversion-check` reports each of those as
+// CAUGHT. The probe step `i = (i + 1) & mask` changed to `i = i + 1`, dropping the
+// wraparound so the probe walks off the end of the table. Failed on 36 properties, which is
+// every named claim in the harness -- "a saturated table holding no entry finds nothing",
+// "the key inserted into a saturated table is found again", "with its value", "a key that
+// was never inserted is still absent" -- plus a wide memory-safety cascade: pointer
+// arithmetic outside object bounds in `neon_map_slot`, `neon_map_find` and `neon_map_set`,
+// "memcpy destination region writeable" in `set`, and reads of garbage through `box_eq` and
+// `box_release` once the probe leaves the arrays. Reverted. This is the model's core claim
+// and it holds it firmly.
 //
-//     arithmetic overflow on signed to unsigned type conversion in (size_t)-1
+// NOT CAUGHT, and correctly so: the loop guard `n < m->cap` widened to `n <= m->cap`. The
+// model still passed, 0 of 1915. This is an equivalent mutant, not a blind spot. Because
+// the step is masked, the index cycles with period exactly `cap`, so iteration `cap` merely
+// re-examines the slot the probe started at and reaches the same verdict; there is no
+// out-of-bounds access and no change in result. Do not "strengthen" the model to catch it --
+// there is nothing there to catch.
 //
-// The conversion is well-defined C -- converting to an unsigned type is modular, and this
-// is the ordinary spelling of SIZE_MAX -- so this is not a defect in the map's behaviour;
-// every behavioural property asserted below holds. It is a real disagreement between the
-// source and the check set the models are run under, and the fix belongs in map.c:
-// `SIZE_MAX` from <stdint.h> is already `size_t`, so it converts nothing and the check
-// passes. Changing runtime source is out of scope for this model, hence the report rather
-// than the edit.
+// NOT CAUGHT, and this one is a real gap in coverage: the exhausted-probe return
+// `first_dead != SIZE_MAX ? first_dead : 0` reduced to plain `first_dead`, so an exhausted
+// probe that saw no tombstone returns `SIZE_MAX` as a slot index. The model still passed, 0
+// of 1915, and the reason is visible in the harness: it saturates the table with TOMBSTONES
+// (`ctrl_a[i] = NEON_MAP_DEAD`), never with live entries, so `first_dead` is always set on
+// the path that falls out of the loop and the `!= SIZE_MAX` guard is never load-bearing
+// here. `check_not_entirely_full` asserts precisely that, so the model is honest about the
+// hole rather than hiding it.
+//
+// The gap was left open deliberately after checking where an all-FULL table could come
+// from. It cannot: `neon_map_set` is the only thing that fills slots and it clones to a
+// larger capacity at a 75% load factor, so `len == cap` is unreachable, and the two callers
+// that use the returned index over a missing key (`set`, and `clone` into a fresh oversized
+// table) never see an exhausted probe. The guard and the `: 0` fallback are defensive code
+// for a state the runtime does not construct. Reaching it from a model would mean building
+// a map by hand that `neon_map_set` would never produce and asserting properties of a call
+// the runtime forbids -- the same scoping mistake rule 7 warns about, in reverse. Recorded
+// as a known-unverified branch instead. If `set`'s load-factor rule ever changes, this
+// becomes reachable and this model will NOT catch it.
 //
 // ---- SCOPE: what this model does not cover ----
 //
@@ -59,23 +84,45 @@
 // 2. RESIZE, CLONE AND DROP ARE UNREACHABLE FOR ANY OF THESE MODELS, and this is a
 //    limitation of the tool rather than a choice:
 //
-//      CBMC models a heap allocation as an untyped byte array, so a function pointer
-//      read back out of a heap object is symbolic. Every witness call in map.c is one
-//      -- `m->vw->release(...)`, reached through `m`. CBMC resolves an indirect call by
-//      branching over every address-taken function of matching type, and `neon_map_drop`
-//      is `void (*)(void*)`, exactly like a witness `release`. So on a heap-allocated
-//      map CBMC believes `m->vw->release` may be `neon_map_drop`, recurses into it
-//      twelve deep, and unwinds a loop bounded by a symbolic `m->cap` at every level.
-//      Measured: three `set`s triggering one resize did not finish in 400s; the same
-//      harness on a *statically* allocated map finished in 0.25s, because a static
-//      object has typed fields and the call resolves.
+//      CBMC models a heap allocation as an untyped byte array, so EVERY field read back
+//      out of a heap object is symbolic. That bites in two independent places, and the
+//      second one is the one that actually decides the matter:
 //
-//    Hence a static fixture with `rc` 1, kept under the load factor so no clone is
-//    taken. Not verified anywhere in this set, therefore: "a resize preserves every
-//    live entry and drops every tombstone", and "set/remove copy before mutating when
-//    rc > 1". Reaching them needs `goto-instrument --restrict-function-pointer` in the
-//    pipeline, or a runtime where a drop and a witness release have distinguishable
-//    types.
+//        a) Function pointers. Every witness call in map.c goes through `m` --
+//           `m->vw->release(...)`. CBMC resolves an indirect call by branching over every
+//           address-taken function of matching type, and `neon_map_drop` is
+//           `void (*)(void*)` exactly like a witness `release`, so CBMC believes
+//           `m->vw->release` may be `neon_map_drop` and recurses into it ~12 deep.
+//
+//        b) Sizes and capacities. `neon_map_drop` (map.c:14) and `neon_map_slot`
+//           (map.c:48) both loop on `n < m->cap`, and the body indexes with
+//           `m->kw->value->size` / `m->vw->size` -- so the loop bounds are symbolic and
+//           each iteration does symbolic-stride pointer arithmetic into a malloc'd byte
+//           array under `--pointer-check`.
+//
+//      Measured: three `set`s triggering one resize did not finish in 400s; the same
+//      harness on a *statically* allocated map finished in 0.25s, because a static object
+//      has typed fields and both facets resolve.
+//
+//    Hence a static fixture with `rc` 1, kept under the load factor so no clone is taken.
+//    Not verified anywhere in this set, therefore: "a resize preserves every live entry
+//    and drops every tombstone", and "set/remove copy before mutating when rc > 1".
+//
+//    DO NOT reach for `goto-instrument --restrict-function-pointer`. It was tried on CBMC
+//    6.10.0 and the result was negative, which is recorded here so it is not rediscovered:
+//    the restriction applies cleanly and soundly (a wrong target becomes an `ASSERT false`
+//    rather than a silent narrowing) and it does collapse facet (a) -- nested
+//    `neon_map_drop` loop entries fell from 9 to 2 over an identical symex window. Heap
+//    maps remained intractable regardless, because facet (b) is untouched and is on its
+//    own sufficient: a harness doing ONE `set` and one `release` on a heap map, with the
+//    restriction fully applied and OOM checks off, still timed out at 100s. The
+//    "distinguishable types" escape hatch an earlier version of this note suggested would
+//    not have worked either, for the same reason.
+//
+//    The one avenue not tried: harness-side assert-then-pin of `m->cap` and the witness
+//    sizes, the trick `pin_len` already uses for `len`. Plausible -- but it pins the very
+//    field the resize property is about (`cap` 8 -> 16), so it would need care not to
+//    prove the property vacuously.
 //
 // 3. Capacity is 8 and cannot go lower: `neon_map_set` clones once
 //    `(len + 1) * 4 >= cap * 3`, which at capacity 4 fires on the second entry, so a

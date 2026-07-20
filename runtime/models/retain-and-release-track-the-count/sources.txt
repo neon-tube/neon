@@ -1,0 +1,3 @@
+# The shipping refcount entry points, and the trap their allocation path reaches.
+src/lifecycle.c
+src/trap.c

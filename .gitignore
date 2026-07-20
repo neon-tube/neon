@@ -1,4 +1,6 @@
 /target/
+# `verify/` is a detached workspace, so it builds into its own tree.
+/verify/target/
 /runtime/build/
 _neon/
 compile_flags.txt
@@ -11,26 +13,23 @@ bench/**/obj/
 bench/**/build/
 bench/**/target/
 bench/**/classes/
-bench/brainfuck/c/bf
-bench/brainfuck/cpp/bf
-bench/brainfuck/go/bf
-bench/brainfuck/zig/bf
-bench/binary-trees/c/bt
-bench/binary-trees/cpp/bt
-bench/binary-trees/go/bt
-bench/binary-trees/zig/bt
-bench/word-frequency/c/wf
-bench/word-frequency/cpp/wf
-bench/word-frequency/go/wf
-bench/word-frequency/zig/wf
-bench/n-body/c/nb
-bench/n-body/cpp/nb
-bench/n-body/go/nb
-bench/n-body/zig/nb
+# One binary per benchmark, named for the benchmark, in whichever language dir
+# compiled it. No source file shares these names, so the wildcard is safe and
+# saves editing this list every time a language is added.
+bench/*/*/bf
+bench/*/*/bt
+bench/*/*/wf
+bench/*/*/nb
 bench/*/*/bf_native
 bench/*/*/bt_native
 bench/*/*/wf_native
 bench/*/*/nb_native
+
+# GHC and ocamlopt leave their intermediates beside the source.
+bench/**/*.hi
+bench/**/*.cmi
+bench/**/*.cmx
+bench/**/*.o
 
 # Java compiles in place — no bin/ dir to catch these.
 bench/**/*.class

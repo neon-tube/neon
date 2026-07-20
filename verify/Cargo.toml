@@ -1,0 +1,18 @@
+[package]
+name = "neon-verify"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# Detached from the root workspace, for the same reason `fuzz/` is: Kani drives its own
+# bundled toolchain and its own codegen backend, and the root workspace must never be
+# dragged into that. An empty `[workspace]` table is what actually detaches it — the root's
+# `exclude` is belt and braces.
+[workspace]
+
+[dependencies]
+neon-compiler = { path = "../compiler" }
+
+# `kani` itself is not listed. cargo-kani injects the crate when it builds under
+# `--cfg kani`, and every harness here is behind `#[cfg(kani)]`, so a plain `cargo build`
+# compiles this to an empty library and needs nothing from Kani at all.

@@ -21,6 +21,17 @@ rustup toolchain install nightly
 
 ## Running a target
 
+`fuzz/run.sh` is the entry point — it encodes everything below, including the
+leak workaround `parse` and `format` need:
+
+```sh
+fuzz/run.sh                     # format for 300s — the target worth the hours
+fuzz/run.sh lex 60              # target is lex|parse|format, time in seconds
+fuzz/run.sh format 3600 -jobs=8 -workers=8   # extra libFuzzer flags pass through
+```
+
+The rest of this section is what it runs and why.
+
 `lex` is simple:
 
 ```sh

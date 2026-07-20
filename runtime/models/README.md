@@ -122,3 +122,42 @@ an inlined drop — **under 1s to over 5 minutes**, covering identical execution
 
 This is the main argument for rule 2. If a model is slow, splitting it is usually the fix,
 and enumerating a choice concretely usually beats letting CBMC explore it.
+
+---
+
+## A known boundary: heap-allocated containers
+
+A model can drive a heap object only so far. Past that point the harness has to use a
+statically allocated fixture, and some properties become unreachable — the six `map-*`
+models all do this, and their SCOPE note 2 says which properties it costs.
+
+The cause is that CBMC models a heap allocation as an untyped byte array, so **every field
+read back out of a heap object is symbolic**. Two consequences, and they are independent:
+
+- **Function pointers.** An indirect call through a heap-read pointer branches over every
+  address-taken function of matching type. `neon_map_drop` is `void (*)(void*)` exactly
+  like a witness `release`, so `m->vw->release` may be `neon_map_drop`, and CBMC recurses.
+- **Sizes and capacities.** A loop bounded by `m->cap` has a symbolic bound, and a body
+  indexing at `m->vw->size` does symbolic-stride pointer arithmetic under `--pointer-check`.
+
+Measured on the map: three `set`s triggering one resize did not finish in 400s; the same
+harness on a static map finished in **0.25s**.
+
+**`goto-instrument --restrict-function-pointer` does not rescue this.** Tried on CBMC
+6.10.0, negative result, recorded so it is not rediscovered:
+
+- It applies cleanly and *soundly* — restricting a site emits `ASSERT false` on the
+  excluded branches, so a wrong restriction fails the proof instead of quietly narrowing it.
+- It does fix the first consequence: nested `neon_map_drop` loop entries fell from **9 to 2**
+  over an identical symex window.
+- It does not help overall, because the second consequence is untouched and is on its own
+  sufficient. A harness doing **one `set` and one `release`** on a heap map — restriction
+  fully applied, OOM checks off — still timed out at 100s.
+- The call sites are also not discoverable: there is no `--list-function-pointers` in 6.10.0.
+  Names follow `<function>.function_pointer_call.<N>` and must be recovered by applying a
+  dummy restriction and reading `--show-goto-functions`. They shift whenever a call site is
+  added or reordered, so any pipeline built on them is silently fragile.
+
+The untried avenue, if this is ever revisited: assert-then-pin `m->cap` and the witness
+sizes in the harness, as `pin_len` already does for `len`. Plausible — but it pins the very
+field a resize property is about, so it would need care not to prove that property vacuously.

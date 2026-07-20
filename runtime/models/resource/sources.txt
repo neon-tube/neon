@@ -1,3 +1,0 @@
-src/resource.c
-src/lifecycle.c
-src/trap.c

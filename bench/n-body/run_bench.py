@@ -127,6 +127,14 @@ def main():
         if shutil.which("go"):
             go_ok = compile_and_show_output("Go", ["go", "build", "-o", "go/nb", "go/main.go"])
 
+    # Compile Dart
+    dart_ok = False
+    if should_run('Dart'):
+        if shutil.which("dart"):
+            dart_ok = compile_and_show_output("Dart", ["dart", "compile", "exe", "dart/main.dart", "-o", "dart/nb"])
+        else:
+            console.print("[yellow]dart not found. Cannot compile Dart.[/yellow]")
+
     # Compile C# (.NET)
     dotnet_ok = False
     if should_run('C# (.NET)'):
@@ -140,6 +148,22 @@ def main():
             java_ok = compile_and_show_output("Java", ["javac", "java/Main.java"])
         else:
             console.print("[yellow]Java compiler or runtime not found.[/yellow]")
+
+    # Compile Haskell
+    haskell_ok = False
+    if should_run('Haskell'):
+        if shutil.which("ghc"):
+            haskell_ok = compile_and_show_output("Haskell", ["ghc", "-O2", "haskell/Main.hs", "-o", "haskell/nb"])
+        else:
+            console.print("[yellow]ghc not found. Cannot compile Haskell.[/yellow]")
+
+    # Compile OCaml
+    ocaml_ok = False
+    if should_run('OCaml'):
+        if shutil.which("ocamlopt"):
+            ocaml_ok = compile_and_show_output("OCaml", ["ocamlopt", "-O3", "ocaml/main.ml", "-o", "ocaml/nb"])
+        else:
+            console.print("[yellow]ocamlopt not found. Cannot compile OCaml.[/yellow]")
 
     # Check interpreter runtimes
     python_ok = shutil.which("python3") is not None
@@ -173,11 +197,14 @@ def main():
                 console.print(f"[red]Failed to compile Clojure (Native): {e}[/red]")
 
     targets = [
+        {"name": "Haskell", "cmd": ["./haskell/nb"], "available": haskell_ok},
+        {"name": "OCaml", "cmd": ["./ocaml/nb"], "available": ocaml_ok},
         {"name": "C", "cmd": ["./c/nb"], "available": c_ok},
         {"name": "C++", "cmd": ["./cpp/nb"], "available": cpp_ok},
         {"name": "Zig", "cmd": ["./zig/nb"], "available": zig_ok},
         {"name": "Rust", "cmd": ["./rust/target/release/nbody"], "available": rust_ok},
         {"name": "Go", "cmd": ["./go/nb"], "available": go_ok},
+        {"name": "Dart", "cmd": ["./dart/nb"], "available": dart_ok},
         {"name": "C# (.NET)", "cmd": ["./dotnet/build/nbody"], "available": dotnet_ok},
         {"name": "Java (Native)", "cmd": ["./java/nb_native"], "available": java_native_ok},
         {"name": "JS (Bun)", "cmd": ["bun", "js/main.js"], "available": bun_ok},

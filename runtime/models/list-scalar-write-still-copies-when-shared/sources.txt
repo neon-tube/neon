@@ -1,0 +1,4 @@
+# The shipping list, and the refcount/trap code it calls into.
+src/list.c
+src/lifecycle.c
+src/trap.c

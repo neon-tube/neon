@@ -159,6 +159,30 @@ fn fold_bool(op: PrimOp, x: bool, y: bool) -> Option<Op> {
     })
 }
 
+/// The folding helpers, exposed for the Kani proofs in `verify/`.
+///
+/// Not API: these are private to the pass, and the only reason they are reachable at all is
+/// that a proof harness lives outside `src/` and so can only see `pub` items. `fold_int` is
+/// where the claim in its own doc comment — that a fold agrees with `runtime/src/arith.c`
+/// for *every* operand pair — is actually discharged, and that is worth three lines of
+/// widened surface. Nothing in the compiler should call through here.
+///
+/// Thin wrappers rather than a `pub use`, so the folders themselves stay private: a
+/// re-export would have to widen them to `pub`, and then anything in the compiler could
+/// reach them. These forward and nothing else.
+#[doc(hidden)]
+pub mod verify {
+    use super::{Op, PrimOp};
+
+    pub fn fold_int(op: PrimOp, x: i64, y: i64) -> Option<Op> {
+        super::fold_int(op, x, y)
+    }
+
+    pub fn fold_bool(op: PrimOp, x: bool, y: bool) -> Option<Op> {
+        super::fold_bool(op, x, y)
+    }
+}
+
 // ---- dead-code elimination ----
 
 /// Remove instructions whose result is unused and whose op is pure. Effectful

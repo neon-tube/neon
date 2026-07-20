@@ -16,6 +16,26 @@
 //
 // Verifies `src/map.c` compiled from source; see rule 1.
 //
+// ---- VALIDATED BY MUTATION (rule 6) ----
+//
+// Two mutations, each confirmed to fail and reverted. Baseline is 279 properties.
+//
+// `neon_map_new`'s `neon_map_alloc(kw, vw, 8)` changed to capacity 12 -- a plausible edit,
+// since 12 is a perfectly reasonable-looking initial size for anyone who has not noticed
+// that `neon_map_slot` addresses with `mask = m->cap - 1` rather than a modulo. Failed on
+// "a fresh map has eight slots" and, more importantly, "the capacity is a power of two,
+// which `neon_map_slot`'s mask requires" (2 of 279). Shipped, this does not crash: the mask
+// `11` simply makes slots 4-7 and 12+ unreachable from the probe, so the table silently
+// uses two thirds of its storage and probes cycle over a subset -- a performance and
+// distribution bug with no symptom, which is the kind this model is cheapest at catching.
+//
+// `calloc(cap ? cap : 1, 1)` for `m->ctrl` changed to `malloc` -- dropping the zeroing that
+// is the only reason a fresh slot reads as `NEON_MAP_EMPTY`. Failed on "every slot of a
+// fresh map reads as empty, which relies on calloc's zeroes meaning NEON_MAP_EMPTY" (1 of
+// 276). This is the mutation the model most earns its keep on: `NEON_MAP_EMPTY` being 0 is
+// an unwritten coupling between the enum and the allocator call, and nothing else in the
+// tree would notice it breaking. Uninitialised ctrl bytes mean a probe reads garbage
+// markers, so a fresh map reports keys it never held or terminates a probe early.
 //
 // ---- SCOPE: what this model does not cover ----
 //
@@ -32,23 +52,45 @@
 // 2. RESIZE, CLONE AND DROP ARE UNREACHABLE FOR ANY OF THESE MODELS, and this is a
 //    limitation of the tool rather than a choice:
 //
-//      CBMC models a heap allocation as an untyped byte array, so a function pointer
-//      read back out of a heap object is symbolic. Every witness call in map.c is one
-//      -- `m->vw->release(...)`, reached through `m`. CBMC resolves an indirect call by
-//      branching over every address-taken function of matching type, and `neon_map_drop`
-//      is `void (*)(void*)`, exactly like a witness `release`. So on a heap-allocated
-//      map CBMC believes `m->vw->release` may be `neon_map_drop`, recurses into it
-//      twelve deep, and unwinds a loop bounded by a symbolic `m->cap` at every level.
-//      Measured: three `set`s triggering one resize did not finish in 400s; the same
-//      harness on a *statically* allocated map finished in 0.25s, because a static
-//      object has typed fields and the call resolves.
+//      CBMC models a heap allocation as an untyped byte array, so EVERY field read back
+//      out of a heap object is symbolic. That bites in two independent places, and the
+//      second one is the one that actually decides the matter:
 //
-//    Hence a static fixture with `rc` 1, kept under the load factor so no clone is
-//    taken. Not verified anywhere in this set, therefore: "a resize preserves every
-//    live entry and drops every tombstone", and "set/remove copy before mutating when
-//    rc > 1". Reaching them needs `goto-instrument --restrict-function-pointer` in the
-//    pipeline, or a runtime where a drop and a witness release have distinguishable
-//    types.
+//        a) Function pointers. Every witness call in map.c goes through `m` --
+//           `m->vw->release(...)`. CBMC resolves an indirect call by branching over every
+//           address-taken function of matching type, and `neon_map_drop` is
+//           `void (*)(void*)` exactly like a witness `release`, so CBMC believes
+//           `m->vw->release` may be `neon_map_drop` and recurses into it ~12 deep.
+//
+//        b) Sizes and capacities. `neon_map_drop` (map.c:14) and `neon_map_slot`
+//           (map.c:48) both loop on `n < m->cap`, and the body indexes with
+//           `m->kw->value->size` / `m->vw->size` -- so the loop bounds are symbolic and
+//           each iteration does symbolic-stride pointer arithmetic into a malloc'd byte
+//           array under `--pointer-check`.
+//
+//      Measured: three `set`s triggering one resize did not finish in 400s; the same
+//      harness on a *statically* allocated map finished in 0.25s, because a static object
+//      has typed fields and both facets resolve.
+//
+//    Hence a static fixture with `rc` 1, kept under the load factor so no clone is taken.
+//    Not verified anywhere in this set, therefore: "a resize preserves every live entry
+//    and drops every tombstone", and "set/remove copy before mutating when rc > 1".
+//
+//    DO NOT reach for `goto-instrument --restrict-function-pointer`. It was tried on CBMC
+//    6.10.0 and the result was negative, which is recorded here so it is not rediscovered:
+//    the restriction applies cleanly and soundly (a wrong target becomes an `ASSERT false`
+//    rather than a silent narrowing) and it does collapse facet (a) -- nested
+//    `neon_map_drop` loop entries fell from 9 to 2 over an identical symex window. Heap
+//    maps remained intractable regardless, because facet (b) is untouched and is on its
+//    own sufficient: a harness doing ONE `set` and one `release` on a heap map, with the
+//    restriction fully applied and OOM checks off, still timed out at 100s. The
+//    "distinguishable types" escape hatch an earlier version of this note suggested would
+//    not have worked either, for the same reason.
+//
+//    The one avenue not tried: harness-side assert-then-pin of `m->cap` and the witness
+//    sizes, the trick `pin_len` already uses for `len`. Plausible -- but it pins the very
+//    field the resize property is about (`cap` 8 -> 16), so it would need care not to
+//    prove the property vacuously.
 //
 // 3. Capacity is 8 and cannot go lower: `neon_map_set` clones once
 //    `(len + 1) * 4 >= cap * 3`, which at capacity 4 fires on the second entry, so a
