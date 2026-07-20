@@ -1,0 +1,46 @@
+// `list::repeat(v, n)` is `n` copies of `v` — the fixed-size buffer a tape, a grid row, a
+// histogram or a sieve starts from.
+//
+// Three things that read alike and are not the same, which is what this file pins:
+//
+//   repeat(v, n)          n copies of v. Has a length.
+//   new_with_capacity(n)  room for n. EMPTY — reserves, does not produce elements.
+//   fill(xs, v)           xs's length, every element replaced. Needs a list already.
+//
+// Name and argument order follow `string::repeat(s, n)`: the thing first, the count
+// second. It is the one constructor in the module that is not `xs`-first, which is why it
+// is named for what it produces rather than for a list it does not have.
+
+use std::io;
+use std::string;
+use std::collections::list;
+
+fn main() {
+    let zeros = list::repeat(0, 5);
+    io::println("#{list::len(zeros)}");
+    io::println("#{zeros[0]} #{zeros[4]}");
+
+    // Reserving is not repeating: capacity is not length.
+    let reserved: List[i64] = list::new_with_capacity(5);
+    io::println("#{list::len(reserved)}");
+
+    // Zero and negative counts are the empty list, not errors — as `string::repeat` does.
+    io::println("#{list::len(list::repeat(7, 0))} #{list::len(list::repeat(7, -3))}");
+    io::println(string::repeat("x", 0));
+
+    // The elements are independent, not n aliases of one cell: writing through one index
+    // leaves the rest alone. That is the property a tape depends on.
+    let tape = list::repeat(0, 4);
+    let after = try! list::set(tape, 2, 99);
+    io::println("#{after[0]} #{after[1]} #{after[2]} #{after[3]}");
+    io::println("#{tape[2]}");
+
+    // Not just scalars: a str element is retained once per copy, so every slot is usable.
+    let words = list::repeat("ok", 3);
+    io::println("#{words[0]}#{words[1]}#{words[2]}");
+
+    // `fill` is `repeat` at an existing list's length — the two agree by construction.
+    let sized = list::repeat(1, 3);
+    let refilled = list::fill(sized, 9);
+    io::println("#{list::len(refilled)}: #{refilled[0]} #{refilled[1]} #{refilled[2]}");
+}
