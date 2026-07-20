@@ -19,3 +19,6 @@ bench/brainfuck/*/bf_native
 
 # Java compiles in place — no bin/ dir to catch these.
 bench/**/*.class
+
+# The bench runner caches per-language results between runs.
+bench/**/.bench_cache.json

@@ -10,6 +10,8 @@ import time
 import shutil
 import os
 import glob
+import json
+import argparse
 from rich.console import Console
 from rich.table import Table
 
@@ -47,62 +49,96 @@ def compile_and_show_output(name, cmd, cwd=None):
     return res.returncode == 0
 
 def main():
+    parser = argparse.ArgumentParser(description="Run brainfuck benchmarks.")
+    parser.add_argument("--fast-only", action="store_true", help="Only run languages within 5x the performance of C (based on cache).")
+    parser.add_argument("--clear-cache", action="store_true", help="Clear the benchmark cache.")
+    args = parser.parse_args()
+
     # Make sure we are in the script's directory
     script_dir = os.path.dirname(os.path.abspath(__file__))
     os.chdir(script_dir)
+
+    cache_file = ".bench_cache.json"
+    if args.clear_cache and os.path.exists(cache_file):
+        os.remove(cache_file)
+
+    cache = {}
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, "r") as f:
+                cache = json.load(f)
+        except Exception:
+            pass
+
+    def should_run(name):
+        if not args.fast_only:
+            return True
+        if name == "C":
+            return True
+        if name not in cache or "C" not in cache:
+            return True
+        return cache[name] <= 5.0 * cache["C"]
 
     console = Console()
     console.print("[bold blue]Compiling binaries...[/bold blue]")
     
     # Compile C
     c_ok = False
-    if shutil.which("gcc"):
-        c_ok = compile_and_show_output("C", ["gcc", "-O3", "c/main.c", "-o", "c/bf"])
-    else:
-        console.print("[yellow]gcc not found. Cannot compile C.[/yellow]")
+    if should_run('C'):
+        if shutil.which("gcc"):
+            c_ok = compile_and_show_output("C", ["gcc", "-O3", "c/main.c", "-o", "c/bf"])
+        else:
+            console.print("[yellow]gcc not found. Cannot compile C.[/yellow]")
 
     # Compile C++
     cpp_ok = False
-    if shutil.which("g++"):
-        cpp_ok = compile_and_show_output("C++", ["g++", "-O3", "cpp/main.cpp", "-o", "cpp/bf"])
-    else:
-        console.print("[yellow]g++ not found. Cannot compile C++.[/yellow]")
+    if should_run('C++'):
+        if shutil.which("g++"):
+            cpp_ok = compile_and_show_output("C++", ["g++", "-O3", "cpp/main.cpp", "-o", "cpp/bf"])
+        else:
+            console.print("[yellow]g++ not found. Cannot compile C++.[/yellow]")
 
     # Compile Zig
     zig_ok = False
-    if shutil.which("zig"):
-        zig_ok = compile_and_show_output("Zig", ["zig", "build-exe", "-O", "ReleaseFast", "zig/main.zig", "-femit-bin=zig/bf"])
-    else:
-        console.print("[yellow]zig not found. Cannot compile Zig.[/yellow]")
+    if should_run('Zig'):
+        if shutil.which("zig"):
+            zig_ok = compile_and_show_output("Zig", ["zig", "build-exe", "-O", "ReleaseFast", "zig/main.zig", "-femit-bin=zig/bf"])
+        else:
+            console.print("[yellow]zig not found. Cannot compile Zig.[/yellow]")
 
     # Compile Rust
     rust_ok = False
-    if shutil.which("cargo"):
-        rust_ok = compile_and_show_output("Rust", ["cargo", "build", "--release", "--manifest-path", "rust/Cargo.toml"])
-    else:
-        console.print("[yellow]cargo not found. Cannot compile Rust.[/yellow]")
+    if should_run('Rust'):
+        if shutil.which("cargo"):
+            rust_ok = compile_and_show_output("Rust", ["cargo", "build", "--release", "--manifest-path", "rust/Cargo.toml"])
+        else:
+            console.print("[yellow]cargo not found. Cannot compile Rust.[/yellow]")
 
     # Compile Neon
     neon_ok = False
-    if shutil.which("cargo"):
-        neon_ok = compile_and_show_output("Neon", ["cargo", "run", "--release", "--manifest-path", "../../../Cargo.toml", "--bin", "neon", "--", "build"], cwd="neon")
+    if should_run('Neon'):
+        if shutil.which("cargo"):
+            neon_ok = compile_and_show_output("Neon", ["cargo", "run", "--release", "--manifest-path", "../../../Cargo.toml", "--bin", "neon", "--", "build"], cwd="neon")
 
     # Compile Go
     go_ok = False
-    if shutil.which("go"):
-        go_ok = compile_and_show_output("Go", ["go", "build", "-o", "go/bf", "go/main.go"])
+    if should_run('Go'):
+        if shutil.which("go"):
+            go_ok = compile_and_show_output("Go", ["go", "build", "-o", "go/bf", "go/main.go"])
 
     # Compile C# (.NET)
     dotnet_ok = False
-    if shutil.which("dotnet"):
-        dotnet_ok = compile_and_show_output("C# (.NET)", ["dotnet", "publish", "dotnet/brainfuck.csproj", "-c", "Release", "-o", "dotnet/build"])
+    if should_run('C# (.NET)'):
+        if shutil.which("dotnet"):
+            dotnet_ok = compile_and_show_output("C# (.NET)", ["dotnet", "publish", "dotnet/brainfuck.csproj", "-c", "Release", "-o", "dotnet/build"])
 
     # Compile Java
     java_ok = False
-    if shutil.which("javac") and shutil.which("java"):
-        java_ok = compile_and_show_output("Java", ["javac", "java/Main.java"])
-    else:
-        console.print("[yellow]Java compiler or runtime not found.[/yellow]")
+    if should_run('Java'):
+        if shutil.which("javac") and shutil.which("java"):
+            java_ok = compile_and_show_output("Java", ["javac", "java/Main.java"])
+        else:
+            console.print("[yellow]Java compiler or runtime not found.[/yellow]")
 
     # Check interpreter runtimes
     python_ok = shutil.which("python3") is not None
@@ -118,20 +154,22 @@ def main():
 
     # Compile Java Native
     java_native_ok = False
-    if java_ok and shutil.which("native-image"):
-        java_native_ok = compile_and_show_output("Java (Native)", ["native-image", "-cp", "java", "-O3", "Main", "-o", "java/bf_native"])
+    if should_run('Java (Native)'):
+        if java_ok and shutil.which("native-image"):
+            java_native_ok = compile_and_show_output("Java (Native)", ["native-image", "-cp", "java", "-O3", "Main", "-o", "java/bf_native"])
 
     # Compile Clojure Native
     clojure_native_ok = False
-    if clojure_ok and shutil.which("native-image") and shutil.which("java"):
-        try:
-            clojure_cp = subprocess.run(["clojure", "-Spath"], capture_output=True, text=True, check=True).stdout.strip()
-            os.makedirs("clojure/classes", exist_ok=True)
-            aot_ok = compile_and_show_output("Clojure AOT", ["java", "-Dclojure.compile.path=clojure/classes", "-cp", f"{clojure_cp}:clojure:clojure/classes", "clojure.lang.Compile", "main"])
-            if aot_ok:
-                clojure_native_ok = compile_and_show_output("Clojure (Native)", ["native-image", "-cp", f"{clojure_cp}:clojure/classes", "-O3", "--no-fallback", "--initialize-at-build-time", "main", "-o", "clojure/bf_native"])
-        except Exception as e:
-            console.print(f"[red]Failed to compile Clojure (Native): {e}[/red]")
+    if should_run('Clojure (Native)'):
+        if clojure_ok and shutil.which("native-image") and shutil.which("java"):
+            try:
+                clojure_cp = subprocess.run(["clojure", "-Spath"], capture_output=True, text=True, check=True).stdout.strip()
+                os.makedirs("clojure/classes", exist_ok=True)
+                aot_ok = compile_and_show_output("Clojure AOT", ["java", "-Dclojure.compile.path=clojure/classes", "-cp", f"{clojure_cp}:clojure:clojure/classes", "clojure.lang.Compile", "main"])
+                if aot_ok:
+                    clojure_native_ok = compile_and_show_output("Clojure (Native)", ["native-image", "-cp", f"{clojure_cp}:clojure/classes", "-O3", "--no-fallback", "--initialize-at-build-time", "main", "-o", "clojure/bf_native"])
+            except Exception as e:
+                console.print(f"[red]Failed to compile Clojure (Native): {e}[/red]")
 
     targets = [
         {"name": "C", "cmd": ["./c/bf"], "available": c_ok},
@@ -163,7 +201,7 @@ def main():
     results = {}
     
     for t in targets:
-        if not t["available"]:
+        if not t["available"] or not should_run(t["name"]):
             results[t["name"]] = None
             continue
         
@@ -217,6 +255,16 @@ def main():
 
     console.print("\n")
     console.print(table)
+
+    # Save cache
+    for name, elapsed in results.items():
+        if elapsed is not None:
+            cache[name] = elapsed
+    try:
+        with open(cache_file, "w") as f:
+            json.dump(cache, f, indent=2)
+    except Exception as e:
+        console.print(f"[red]Failed to save cache: {e}[/red]")
 
     # Build artifacts are preserved after execution as requested.
 
