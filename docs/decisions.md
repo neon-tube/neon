@@ -857,6 +857,36 @@ write that code.
 If you need one stage's effects fully sequenced before the next, that is a `for` loop,
 not a pipeline. Pipelines are for transforming values, not for ordering effects.
 
+### A top-level `const` is compile-time or it is an error
+
+    const LIMIT: i64 = 42
+    const DOUBLE: i64 = LIMIT * 2
+
+A `const` has no storage, no address and no initialisation order, because it produces no
+runtime object. Lowering re-lowers the initialiser at each use and the folder in `ir::opt`
+collapses it there; a `str` const becomes `neon_str_lit`, so its bytes land in `.rodata`
+like any literal written in place.
+
+**The type is required.** Inferring it would mean typing initialisers in dependency order
+before any of their types were known — `const B = A + 1` cannot be typed until `A` is —
+which is a lot of machinery to save an annotation on module-level API.
+
+**The initialiser admits exactly what the folder folds:** literals, other consts, and
+integer and boolean arithmetic over those. Float and string arithmetic are rejected, and
+this is the part that surprises people — `"a" + "b"` is as constant as `1 + 2` to a reader,
+and is refused because `fold_int` and `fold_bool` are the whole of the folder.
+
+That rule exists because the failure is otherwise *silent*. An initialiser the folder
+declines still compiles and still runs; it just becomes runtime work performed at every
+use, which is the opposite of what `const` promises. A diagnostic that names the obstacle
+is worth more than a constant that quietly is not one. The same reasoning is why adding
+`const` was paired with teaching the folder `bsl`/`bsr` and `bnot` rather than rejecting
+them: `const MASK: i64 = 1 bsl 20` should be a constant, so the folder learned to make it
+one — and `verify/src/fold.rs` proves the new arms match the emitted C for every operand.
+
+A `const` that refers to itself, directly or through others, is rejected before lowering.
+It has to be: lowering inlines initialisers, so a cycle would not terminate.
+
 ---
 
 ## Implementation

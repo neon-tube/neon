@@ -27,6 +27,8 @@ pub enum DefKind {
     Param,
     /// A top-level or module-level `fn`.
     Fn,
+    /// A top-level or module-level `const`.
+    Const,
 }
 
 /// Where a name was defined: enough to open the right file at the right range.

@@ -1,0 +1,19 @@
+//@ compile-fail
+//@ error-contains: defined in terms of itself
+//
+// Lowering inlines a const's initialiser at each use, so a const that reaches itself would
+// inline forever. `Checker::const_cycles` runs after checking and before any lowering, and
+// is the only thing standing between this file and a stack overflow in the compiler.
+//
+// The diagnostic prints the whole chain — `A -> B -> C -> A` — because a cycle reported at
+// one arbitrary member leaves the author hunting for the rest of it.
+
+use std::io;
+
+const A: i64 = C + 1
+const B: i64 = A + 1
+const C: i64 = B + 1
+
+fn main() {
+    io::println("#{A}");
+}

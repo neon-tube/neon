@@ -167,6 +167,16 @@ pub enum TypeErrorKind {
     /// only when nested; this is the case it does not.
     ImplOverlaps { protocol: String, overlap: String },
     TooDeep(String),
+    /// A `const` written without `: T`. Required rather than inferred — see `ConstSig`.
+    ConstNeedsType(String),
+    /// A `const` initialiser that is not a compile-time constant. `what` names the
+    /// construct that stopped it, so the message can point at the actual obstacle rather
+    /// than saying "not constant" and leaving the author to guess.
+    ConstNotConstant { name: String, what: String },
+    /// `const A = B + 1` where `B` eventually refers back to `A`. The chain is carried so
+    /// the message can print the whole loop -- a cycle reported at one arbitrary member
+    /// of it is much harder to act on.
+    ConstCycle(Vec<String>),
 }
 
 impl fmt::Display for TypeError {
@@ -360,6 +370,24 @@ impl fmt::Display for TypeError {
                  declared there. Give the module a name of your own"
             ),
             TypeErrorKind::UnknownName(n) => write!(f, "nothing named `{n}` is in scope"),
+            TypeErrorKind::ConstNeedsType(n) => write!(
+                f,
+                "`const {n}` needs a type: write `const {n}: T = ...`. A top-level \
+                 constant is module API, and its type is not inferred from its value"
+            ),
+            TypeErrorKind::ConstNotConstant { name, what } => write!(
+                f,
+                "`const {name}` is not a compile-time constant: {what}. A `const` \
+                 initialiser may be a literal, another `const`, or integer and boolean \
+                 arithmetic over those -- it is evaluated by the compiler, so there is \
+                 nowhere to run anything else"
+            ),
+            TypeErrorKind::ConstCycle(chain) => write!(
+                f,
+                "`const {}` is defined in terms of itself: {}",
+                chain.first().map(String::as_str).unwrap_or(""),
+                chain.join(" -> ")
+            ),
             TypeErrorKind::NoField { field, on } => {
                 write!(f, "`{on}` has no field `{field}`")
             }
@@ -502,6 +530,25 @@ pub struct FnSig {
     pub span: Span,
 }
 
+/// A top-level `const`. Its value is a *compile-time* constant, so the initialiser is
+/// carried here as AST rather than reduced to something the environment stores: lowering
+/// re-lowers it at each use, and the folder in `ir::opt` collapses it there. That is why
+/// there is no value field beyond the expression itself.
+///
+/// The type is required rather than inferred. Inferring it would mean typing the
+/// initialisers in dependency order before any of their types were known — `const B = A + 1`
+/// cannot be typed until `A` is — and that ordering is a lot of machinery to save an
+/// annotation on what is module-level API surface. Rust requires it for the same reason.
+#[derive(Debug, Clone)]
+pub struct ConstSig {
+    pub name: String,
+    pub module: Vec<String>,
+    pub ty: TyId,
+    /// The initialiser, re-lowered at every use.
+    pub value: crate::ast::Expr,
+    pub span: Span,
+}
+
 /// A declared protocol. `methods` is empty until pass 3: the signatures name types,
 /// and no type can be resolved until every declaration exists.
 #[derive(Debug, Clone)]
@@ -609,6 +656,7 @@ pub struct Env {
     protocol_ids: HashMap<String, ProtocolId>,
     impls: Vec<ImplDef>,
     fns: Vec<FnSig>,
+    consts: Vec<ConstSig>,
     errors: Vec<TypeError>,
 
     /// (declaration key, type arguments) -> the type it denotes. Memoising here is not
@@ -669,6 +717,7 @@ impl Env {
             protocol_ids: HashMap::new(),
             impls: vec![],
             fns: vec![],
+            consts: vec![],
             errors: vec![],
             inst: HashMap::new(),
             active: vec![],
@@ -949,6 +998,30 @@ impl Env {
         None
     }
 
+    /// A `const` by path, as seen from `module`. Same candidate order as `fn_named`, so
+    /// imports and visibility behave identically -- `candidates` proposes and each table
+    /// decides, which is what lets one rule serve types, functions and now constants.
+    pub fn const_named(&self, module: &[String], path: &[String]) -> Option<&ConstSig> {
+        for cand in self.candidates(module, path) {
+            let (m, name) = match cand.rsplit_once("::") {
+                Some((m, n)) => (m, n),
+                None => ("", cand.as_str()),
+            };
+            if let Some(c) =
+                self.consts.iter().find(|c| c.name == name && c.module.join("::") == m)
+            {
+                return Some(c);
+            }
+        }
+        None
+    }
+
+    /// Every top-level constant in the compilation. The checker walks these to type each
+    /// initialiser and to reject a reference cycle between them.
+    pub fn consts(&self) -> &[ConstSig] {
+        &self.consts
+    }
+
     /// Every free function in the compilation, stdlib included. Impl and protocol
     /// methods are *not* here — they live on their `ImplDef`/`Protocol`, because reaching
     /// them is dispatch's job and putting them in one flat list would let a method be
@@ -1200,6 +1273,28 @@ impl Env {
                 ast::DeclKind::Fn(f) => {
                     let sig = self.fn_sig(module, f, &[], &d.span);
                     self.fns.push(sig);
+                }
+                // Registered here rather than in pass 1 because the annotation is a
+                // `TypeSpec` and resolving one needs every type name to exist. A const
+                // declares a *value*, not a type, so pass 1 has nothing to record.
+                ast::DeclKind::Const(c) => {
+                    let Some(spec) = &c.ty else {
+                        // Reported as an error rather than inferred; see `ConstSig`.
+                        self.errors.push(TypeError {
+                            span: d.span.clone(),
+                            kind: TypeErrorKind::ConstNeedsType(c.name.clone()),
+                        });
+                        continue;
+                    };
+                    let scope = Scope::new(module);
+                    let ty = self.resolve(&scope, spec);
+                    self.consts.push(ConstSig {
+                        name: c.name.clone(),
+                        module: module.to_vec(),
+                        ty,
+                        value: c.value.clone(),
+                        span: d.span.clone(),
+                    });
                 }
                 ast::DeclKind::Protocol(p) => {
                     let key = qualify(module, &p.name);
@@ -2023,7 +2118,7 @@ pub fn opacity_permits(module: &[String], owner: &[String]) -> bool {
 /// The key a name is stored under. The single place a module path becomes a string, so
 /// the separator and the root-module case are decided once — `candidates` splits on the
 /// same `::` and would silently miss every name if the two disagreed.
-fn qualify(module: &[String], name: &str) -> String {
+pub(crate) fn qualify(module: &[String], name: &str) -> String {
     if module.is_empty() {
         name.to_string()
     } else {

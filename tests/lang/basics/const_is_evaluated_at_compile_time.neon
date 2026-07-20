@@ -1,0 +1,47 @@
+// A top-level `const` is a compile-time value, not a runtime one. There is no storage and
+// no initialisation order, because there is no object: lowering re-lowers the initialiser
+// at each use and `ir::opt`'s folder collapses it there. A `str` const becomes an
+// `Op::ConstStr`, which codegen emits as `neon_str_lit`, so its bytes sit in `.rodata`
+// exactly as a literal written in place would.
+//
+// The consequence worth testing is that a const may be written in terms of other consts —
+// `NESTED` below is two levels deep — and that the arithmetic still disappears. The
+// declaration order is deliberately not dependency order: `resolve_bodies` registers every
+// const before any body is checked, so a forward reference is fine.
+//
+// What is *not* here, and is checked by the compile-fail tests beside this one: float and
+// string arithmetic, calls, aggregates, interpolation, and cycles. The admitted set is
+// exactly what the folder folds, because an initialiser the folder declines would not
+// fail — it would silently become runtime work at every use.
+
+use std::io;
+
+const NESTED: i64 = DOUBLE + LIMIT
+const LIMIT: i64 = 42
+const DOUBLE: i64 = LIMIT * 2
+
+const NEG: i64 = -7
+const MASK: i64 = 1 bsl 20
+const SHIFTED: i64 = -256 bsr 4
+
+const FLAG: bool = true
+const BOTH: bool = FLAG and false
+const COMPARED: bool = LIMIT > 40
+
+const NAME: str = "neon"
+
+fn scaled(x: i64) -> i64 {
+    x * DOUBLE + NEG
+}
+
+fn main() {
+    io::println("#{LIMIT} #{DOUBLE} #{NESTED}");
+    io::println("#{NEG} #{MASK} #{SHIFTED}");
+    io::println("#{FLAG} #{BOTH} #{COMPARED}");
+    io::println(NAME);
+    // A const reaches into a function body like any other name, and shadowing still works
+    // the way it does for a fn: the local wins.
+    io::println("#{scaled(2)}");
+    let LIMIT = 1;
+    io::println("#{LIMIT}");
+}

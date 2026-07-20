@@ -29,6 +29,10 @@ basics/block_expression.neon
 basics/block_scope.neon
 basics/bool_literals.neon
 basics/comments.neon
+basics/const_is_evaluated_at_compile_time.neon
+basics/const_may_not_cycle.neon
+basics/const_must_be_constant.neon
+basics/const_needs_a_type.neon
 basics/float_literals.neon
 basics/hello.neon
 basics/int_literals.neon

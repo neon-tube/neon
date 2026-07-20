@@ -10,7 +10,7 @@
 //! error rather than twenty silent ones.
 
 use super::dispatch::{self, DispatchError};
-use super::env::{Env, TypeError, TypeErrorKind};
+use super::env::{qualify, Env, TypeError, TypeErrorKind};
 use super::narrow::{self, Projected};
 use super::print::print;
 use super::resolve::Scope;
@@ -52,6 +52,25 @@ pub fn check_module(env: &mut Env, m: &ast::Module) -> (TypecheckResult, Vec<Typ
 ///
 /// The result is sorted by span, so the two phases' diagnostics interleave in source order
 /// rather than arriving as two batches, and deduplicated on (span, kind).
+/// Every path a const's initialiser mentions, for the cycle walk.
+///
+/// Through `ast::visit` rather than a hand-rolled match: the traversal there is kept in
+/// step with `ids::Numberer` arm for arm, so a new `ExprKind` cannot quietly become a
+/// place a self-reference hides. Paths that are not consts are collected too and filtered
+/// by the caller, which is the one that can resolve them.
+fn const_refs(e: &Expr, out: &mut Vec<Vec<String>>) {
+    struct Refs<'a>(&'a mut Vec<Vec<String>>);
+    impl<'a> ast::visit::Visitor<'a> for Refs<'_> {
+        fn expr(&mut self, e: &'a Expr) {
+            if let ExprKind::Path(p) = &e.kind {
+                self.0.push(p.clone());
+            }
+            ast::visit::walk_expr(self, e);
+        }
+    }
+    ast::visit::Visitor::expr(&mut Refs(out), e);
+}
+
 pub fn check_all(
     env: &mut Env,
     modules: &[(Vec<String>, &ast::Module)],
@@ -75,6 +94,11 @@ pub fn check_all(
     for (path, m) in modules {
         c.decls(path, &m.decls);
     }
+    // After the walk, because it reads the const table the environment finished building,
+    // and *before* anything is lowered: lowering inlines a const's initialiser at each use
+    // and would recurse forever on a cycle. This is the only thing standing between
+    // `const A = B` / `const B = A` and a stack overflow in the compiler.
+    c.const_cycles();
     // One mistake, one diagnostic. A generic call checks each argument twice -- once while
     // solving the callee's type parameters, then again under the solution, which is what
     // lets an expected type flow into a lambda argument -- so anything wrong *inside* an
@@ -571,6 +595,9 @@ impl Checker<'_> {
                         }
                     }
                 }
+                ast::DeclKind::Const(c) => {
+                    self.const_decl(module, c, &d.span);
+                }
                 ast::DeclKind::Mod(m) => {
                     let mut inner = module.to_vec();
                     inner.push(m.name.clone());
@@ -601,6 +628,161 @@ impl Checker<'_> {
     /// than saved and restored, which is safe only because declarations do not nest —
     /// a *lambda* is the case that does nest, and it saves and restores in `lambda`.
     ///
+    /// Reject a `const` that is defined, directly or through others, in terms of itself.
+    ///
+    /// Depth-first over the reference graph, reporting the cycle at the declaration that
+    /// closes it and printing the whole chain — `A -> B -> A` rather than a bare "cycle
+    /// here", which leaves the author hunting for the other half.
+    ///
+    /// One report per cycle, not one per member: every const on a cycle would otherwise
+    /// rediscover it and the same loop would be printed once for each name on it.
+    fn const_cycles(&mut self) {
+        let consts: Vec<(Vec<String>, String, ast::Expr, Span)> = self
+            .env
+            .consts()
+            .iter()
+            .map(|c| (c.module.clone(), c.name.clone(), c.value.clone(), c.span.clone()))
+            .collect();
+        let mut done: Vec<String> = Vec::new();
+        for (module, name, _, span) in &consts {
+            let key = qualify(module, name);
+            if done.contains(&key) {
+                continue;
+            }
+            let mut stack: Vec<String> = Vec::new();
+            if let Some(chain) = self.walk_const(&consts, module, name, &mut stack, &mut done) {
+                self.error(span.clone(), TypeErrorKind::ConstCycle(chain));
+            }
+        }
+    }
+
+    /// One depth-first step of `const_cycles`. Returns the cycle as a chain of names when
+    /// this const reaches itself, closing the loop back to where it started.
+    fn walk_const(
+        &mut self,
+        consts: &[(Vec<String>, String, ast::Expr, Span)],
+        module: &[String],
+        name: &str,
+        stack: &mut Vec<String>,
+        done: &mut Vec<String>,
+    ) -> Option<Vec<String>> {
+        let key = qualify(module, name);
+        if let Some(at) = stack.iter().position(|k| *k == key) {
+            // The chain from where the cycle opened, closed by repeating that name.
+            let mut chain: Vec<String> = stack[at..].to_vec();
+            chain.push(key);
+            return Some(chain);
+        }
+        if done.contains(&key) {
+            return None;
+        }
+        let (_, _, value, _) = consts.iter().find(|(m, n, _, _)| qualify(m, n) == key)?;
+        stack.push(key.clone());
+        let mut refs: Vec<Vec<String>> = Vec::new();
+        const_refs(value, &mut refs);
+        let mut found = None;
+        for r in refs {
+            // Resolved through the same rule a use site would use, so an imported or
+            // qualified reference is followed rather than missed.
+            let Some(target) = self.env.const_named(module, &r) else { continue };
+            let (tm, tn) = (target.module.clone(), target.name.clone());
+            if let Some(chain) = self.walk_const(consts, &tm, &tn, stack, done) {
+                found = Some(chain);
+                break;
+            }
+        }
+        stack.pop();
+        done.push(key);
+        found
+    }
+
+    /// Check a top-level `const`: its initialiser against its annotation, and then that
+    /// the initialiser is a thing the compiler can actually evaluate.
+    ///
+    /// The second half is the load-bearing one. Lowering inlines a const's initialiser at
+    /// every use and leaves `ir::opt`'s folder to collapse it, so an initialiser the folder
+    /// declines does not fail — it silently becomes *runtime* work, repeated at each use.
+    /// `const_expr` therefore admits exactly what the folder folds, which is why it turns
+    /// away float and string arithmetic that looks perfectly constant to a reader.
+    fn const_decl(&mut self, module: &[String], c: &ast::ConstDecl, span: &Span) {
+        // A missing annotation is already reported by `Env::resolve_bodies`, which is also
+        // what decided there is no `ConstSig` to check against. Nothing to add here.
+        let Some(sig) = self.env.const_named(module, std::slice::from_ref(&c.name)) else {
+            return;
+        };
+        let want = sig.ty;
+        self.locals.push(vec![]);
+        let found = self.expr(module, &c.value, Some(want));
+        self.locals.pop();
+        self.assignable(module, &c.value.span, found, want);
+        if let Err(what) = self.const_expr(module, &c.value) {
+            self.error(span.clone(), TypeErrorKind::ConstNotConstant { name: c.name.clone(), what });
+        }
+    }
+
+    /// Whether an expression is one `ir::opt`'s folder will reduce to a single constant,
+    /// or `Err(what)` naming the first construct that is not.
+    ///
+    /// The admitted set is deliberately narrower than "looks constant":
+    ///
+    /// - A literal of any type is fine — it needs no folding at all.
+    /// - Arithmetic, comparison and logic are fine **on `i64` and `bool` only**, because
+    ///   `fold_int` and `fold_bool` are the whole of what the folder knows. `1.5 + 2.5` and
+    ///   `"a" + "b"` are rejected: nothing folds them, so they would become a runtime add
+    ///   and a runtime `neon_str_concat` at every use.
+    /// - A path is fine when it names another `const`. The cycle that makes this dangerous
+    ///   is caught separately, by `const_cycles`, before anything is lowered.
+    /// - An interpolation is rejected even when its holes are constant: `"#{X}"` lowers to
+    ///   `to_string` plus a concat, neither of which folds.
+    fn const_expr(&mut self, module: &[String], e: &Expr) -> Result<(), String> {
+        let foldable = |c: &mut Self, e: &Expr| -> bool {
+            let Some(t) = c.result.ty(e.id) else { return false };
+            let i = c.env.solver.t.i64();
+            let b = c.env.solver.t.bool();
+            t == i || t == b
+        };
+        match &e.kind {
+            ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Rune(_)
+            | ExprKind::Atom(_) | ExprKind::Null => Ok(()),
+            // A bare literal only. One `Text` part is `"abc"`; anything else has a hole.
+            ExprKind::Str(parts) => match parts.as_slice() {
+                [] | [ast::StrPart::Text(_)] => Ok(()),
+                _ => Err("a string interpolation runs `to_string` and a concatenation, \
+                          neither of which the compiler can fold"
+                    .into()),
+            },
+            ExprKind::Path(p) => {
+                if self.env.const_named(module, p).is_some() {
+                    Ok(())
+                } else {
+                    Err(format!("`{}` is not a `const`", p.join("::")))
+                }
+            }
+            ExprKind::Unary { rhs, .. } => {
+                if !foldable(self, rhs) {
+                    return Err("only `i64` and `bool` arithmetic folds".into());
+                }
+                self.const_expr(module, rhs)
+            }
+            ExprKind::Binary { lhs, rhs, .. } => {
+                if !foldable(self, lhs) || !foldable(self, rhs) {
+                    return Err("only `i64` and `bool` arithmetic folds; \
+                                float and string operands do not"
+                        .into());
+                }
+                self.const_expr(module, lhs)?;
+                self.const_expr(module, rhs)
+            }
+            ExprKind::Call { .. } => Err("a call runs at run time".into()),
+            ExprKind::List(_) | ExprKind::RecordLit { .. } | ExprKind::Tuple(_) => {
+                Err("a list, record or tuple is built at run time and refcounted".into())
+            }
+            _ => Err("only literals, other `const`s, and integer and boolean arithmetic \
+                      over those are constant"
+                .into()),
+        }
+    }
+
     /// A declaration with no body is a bare signature — a protocol method, say — and has
     /// nothing to check.
     fn fn_body(&mut self, module: &[String], f: &ast::FnDecl, outer: &[String]) {
@@ -1933,6 +2115,16 @@ impl Checker<'_> {
             }
         }
         let joined = p.join("::");
+        // Before functions, after locals: a local shadows a const exactly as it shadows a
+        // fn, and a const and a fn of one name in one module is a collision the author
+        // should fix rather than one this silently orders.
+        if let Some(c) = self.env.const_named(module, p) {
+            let ty = c.ty;
+            let site =
+                DefSite { module: c.module.clone(), span: c.span.clone(), kind: DefKind::Const };
+            self.result.set_def(e.id, site);
+            return ty;
+        }
         if let Some(sig) = self.env.fn_named(module, p) {
             // A function used as a value, throwing or not: its arrow carries the
             // `throws`, the closure repr carries it in turn, and the adapter thunk

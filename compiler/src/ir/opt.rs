@@ -86,6 +86,8 @@ fn fold_prim(
     match (op, args) {
         (PrimOp::Neg, [a]) => ints.get(a).map(|n| Op::ConstI64(n.wrapping_neg())),
         (PrimOp::Not, [a]) => bools.get(a).map(|x| Op::ConstBool(!x)),
+        // `(~a)` in the emitted C, which is Rust's `!` on `i64`. Total, so no decline.
+        (PrimOp::Bnot, [a]) => ints.get(a).map(|n| Op::ConstI64(!n)),
         (_, [a, b]) => {
             if let (Some(&x), Some(&y)) = (ints.get(a), ints.get(b)) {
                 return fold_int(op, x, y);
@@ -133,6 +135,17 @@ fn fold_int(op: PrimOp, x: i64, y: i64) -> Option<Op> {
         PrimOp::Band => Op::ConstI64(x & y),
         PrimOp::Bor => Op::ConstI64(x | y),
         PrimOp::Bxor => Op::ConstI64(x ^ y),
+        // The shifts mask their count to 6 bits and shift left through `uint64_t`, which is
+        // what `backend/c.rs` emits: `((int64_t)((uint64_t)a << (b & 63)))` and
+        // `(a >> (b & 63))`. Both details are load-bearing. The mask is why no shift count
+        // is out of range and neither can decline; the unsigned round-trip is why a left
+        // shift that overflows wraps rather than being UB, matching `Add`/`Sub`/`Mul`.
+        //
+        // `Bsr` is an *arithmetic* shift: `a` is `int64_t` in the emitted C, so the sign
+        // bit propagates. `wrapping_shr` on Rust's `i64` does the same, and using
+        // `(x as u64) >> ..` here instead would silently disagree for a negative operand.
+        PrimOp::Bsl => Op::ConstI64(((x as u64).wrapping_shl(y as u32 & 63)) as i64),
+        PrimOp::Bsr => Op::ConstI64(x.wrapping_shr(y as u32 & 63)),
         PrimOp::Eq => Op::ConstBool(x == y),
         PrimOp::Ne => Op::ConstBool(x != y),
         PrimOp::Lt => Op::ConstBool(x < y),

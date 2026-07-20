@@ -1,0 +1,15 @@
+//@ compile-fail
+//@ error-contains: needs a type
+//
+// A top-level `const` must be annotated. Inferring the type would mean typing initialisers
+// in dependency order before any of their types were known — `const B = A + 1` cannot be
+// typed until `A` is — and that ordering is a lot of machinery to save an annotation on
+// what is module-level API. Rust requires it for the same reason.
+
+use std::io;
+
+const LIMIT = 42
+
+fn main() {
+    io::println("#{LIMIT}");
+}

@@ -249,26 +249,56 @@ fn comparisons_are_total_and_exact() {
 
 /// The shifts are not folded at all — and this pins that, rather than leaving it implicit.
 ///
-/// `fold_int` has no `Bsl`/`Bsr` arm, so both fall to the catch-all `None`. The backend
-/// masks the amount to `& 63` (`backend/c.rs`), so a fold *could* be added, but it would
-/// have to reproduce that mask exactly; `x << y` in Rust panics for `y >= 64` in debug and
-/// is UB-adjacent otherwise, so the naive arm would abort the compiler on a shift the
-/// program defines. This harness fails the moment someone adds a shift fold, which is the
-/// point at which the mask needs proving rather than assuming.
+/// `bsl`/`bsr`: a fold is the value the emitted C computes, for every operand *and every
+/// shift amount* -- including the ones a naive fold gets wrong.
+///
+/// This harness used to assert the opposite. It read `shifts_are_not_folded` and existed as
+/// a tripwire: the folder had no shift arm, and the comment said adding one is "the point at
+/// which the mask needs proving rather than assuming". Adding `const` made shift folding
+/// worth having (`const MASK: i64 = 1 bsl 20` is otherwise a runtime shift at every use), so
+/// this is that proof, and the reason the tripwire was there in the first place is exactly
+/// what it now covers:
+///
+/// - **The mask.** `backend/c.rs` emits `b & 63`, so no shift amount is out of range --
+///   `1 bsl 64` is `1 bsl 0`, not undefined. Rust's `<<` would panic in debug for `y >= 64`
+///   and `wrapping_shl` masks to the *type* width, which happens to be the same 63 here;
+///   the reference model below writes the mask out rather than relying on that coincidence.
+///   `y` ranges over all of `i64`, negatives included, so a sign-confused mask fails here.
+/// - **The direction of `bsr`.** `a` is `int64_t` in the emitted C, so `>>` propagates the
+///   sign bit. Folding through `u64` instead would disagree for every negative operand, and
+///   this harness is what catches that.
+/// - **Left-shift overflow.** The C round-trips through `uint64_t`, so a shift off the top
+///   wraps rather than being UB -- the same treatment `Add`/`Sub`/`Mul` get.
 #[kani::proof]
-fn shifts_are_not_folded() {
+fn shifts_agree_with_the_backend() {
     let x: i64 = kani::any();
     let y: i64 = kani::any();
     let op = if kani::any() { PrimOp::Bsl } else { PrimOp::Bsr };
 
-    assert!(declines(op, x, y));
+    // Transcribed from `backend/c.rs`:
+    //   Bsl => ((int64_t)((uint64_t)a << (b & 63)))
+    //   Bsr => (a >> (b & 63))
+    let amount = (y & 63) as u32;
+    let want = match op {
+        PrimOp::Bsl => ((x as u64) << amount) as i64,
+        _ => x >> amount,
+    };
+
+    // Total, not partial: unlike `Add`, a shift can always fold, so this asserts the fold
+    // *happens* as well as agreeing. A decline here would be a silent runtime shift.
+    assert_eq!(folded_i64(op, x, y), Some(want));
 }
 
 /// The unary and short-circuit ops never come through the binary integer folder.
 ///
-/// `Neg`/`Bnot`/`Not` are unary and are handled (or not) by `fold_prim`; `And`/`Or` are the
-/// boolean primitives. Reaching `fold_int` with any of them would mean `fold_prim` had
+/// `Neg`/`Bnot`/`Not` are unary and are handled by `fold_prim`; `And`/`Or` are the boolean
+/// primitives. Reaching `fold_int` with any of them would mean `fold_prim` had
 /// mis-dispatched, so "declines" is the property worth holding.
+///
+/// Note what this does *not* cover: `fold_prim`'s own unary arms, including the `Bnot` fold
+/// added alongside shift folding. `verify::fold_int`/`fold_bool` are the only folders the
+/// proof module exposes, so a `Bnot` fold that disagreed with the backend's `(~a)` would not
+/// be caught here. Exposing `fold_prim` is the way to close that, and it is not done yet.
 #[kani::proof]
 fn non_binary_integer_ops_decline() {
     let x: i64 = kani::any();

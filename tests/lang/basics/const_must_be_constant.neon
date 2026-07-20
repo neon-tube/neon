@@ -1,0 +1,20 @@
+//@ compile-fail
+//@ error-contains: not a compile-time constant
+//
+// A `const` initialiser is evaluated by the compiler, so it admits exactly what
+// `ir::opt`'s folder folds: literals, other consts, and integer and boolean arithmetic
+// over those. String concatenation is the interesting rejection — it looks every bit as
+// constant as `1 + 2` to a reader, and is refused because `fold_int`/`fold_bool` are the
+// whole of the folder and neither touches `str`.
+//
+// The failure mode this prevents is silent rather than loud. An initialiser the folder
+// declines still compiles and still runs; it just becomes a `neon_str_concat` executed at
+// every use of the constant, which is the opposite of what `const` promises.
+
+use std::io;
+
+const GREETING: str = "hello" + " world"
+
+fn main() {
+    io::println(GREETING);
+}

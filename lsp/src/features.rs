@@ -714,7 +714,10 @@ pub fn semantic_tokens(checked: &Checked, index: &LineIndex) -> Vec<SemanticToke
         let kind = match site.kind {
             DefKind::Fn => TOK_FUNCTION,
             DefKind::Param => TOK_PARAMETER,
-            DefKind::Local => TOK_VARIABLE,
+            // A `const` highlights as a variable. LSP has no `constant` token type -- the
+            // convention is `variable` plus a `readonly` modifier, and this server does not
+            // send modifiers, so widening the legend would buy nothing a client can use.
+            DefKind::Local | DefKind::Const => TOK_VARIABLE,
         };
         found.push((e.span.clone(), kind));
     });

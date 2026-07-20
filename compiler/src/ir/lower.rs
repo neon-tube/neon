@@ -1572,6 +1572,23 @@ impl Lower<'_> {
                 return v;
             }
         }
+        // A `const` is inlined: its initialiser is lowered again here, at this use, and
+        // `ir::opt`'s folder collapses it to a single constant. That is the whole
+        // implementation -- there is no storage, no symbol and no initialisation order,
+        // because there is no runtime object. A `str` const becomes `Op::ConstStr`, which
+        // codegen emits as `neon_str_lit`, so its bytes land in `.rodata` exactly as a
+        // literal written in place would.
+        //
+        // Re-lowering rather than caching one `Value`: a `Value` belongs to the function
+        // it was emitted into, so a cached one would be out of scope at a use in any other
+        // function. The duplicated instructions fold away.
+        //
+        // The recursion terminates because `Checker::const_cycles` has already rejected a
+        // const that reaches itself. Without that pass this call does not return.
+        if let Some(c) = self.env.const_named(&self.module, p) {
+            let value = c.value.clone();
+            return self.lower_expr(&value);
+        }
         // A bare function name used as a value: a closure with no captured environment.
         if let Some(sig) = self.env.fn_named(&self.module, p) {
             let func = mangle(&sig.module, &sig.name);
