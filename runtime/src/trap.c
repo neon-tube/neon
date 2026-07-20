@@ -29,7 +29,7 @@ _Noreturn void neon_panic(neon_str msg) {
     // Flush stdout first, for the same reason a trap does: `_exit` skips stdio teardown,
     // and whatever the program printed before failing must still be seen.
     fflush(stdout);
-    fprintf(stderr, "neon: uncaught error: %.*s\n", (int)msg.len, msg.data);
+    fprintf(stderr, "neon: uncaught error: %.*s\n", (int)neon_str_len(&msg), neon_str_data(&msg));
     fflush(stderr);
     _exit(NEON_TRAP_CODE);
 }

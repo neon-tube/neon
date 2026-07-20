@@ -35,6 +35,41 @@ typedef struct {
     neon_header* owner;
 } neon_str;
 
+// ---- reaching inside a `neon_str` ----
+//
+// Nothing outside these four should touch `.data` or `.owner`. They are trivial today --
+// the layout above is exactly what they return -- and they exist so that a small-string
+// optimisation is a change to *them* rather than an audit of every field access in the
+// runtime and the backend. See `docs/design/small-strings.md`.
+//
+// **`neon_str_data` takes a pointer, deliberately.** Under SSO a short string's bytes live
+// *inside* the struct, so the address of its data depends on where that struct currently
+// is. Taking the string by value would compute the answer for the parameter copy, hand back
+// a pointer into it, and leave that pointer dangling the moment the call returned. Passing
+// the address makes the caller name the object it means, and makes it visible in the
+// signature that the result borrows from that object.
+//
+// The lifetime rule this implies -- and it is the sharp edge of SSO, not an incidental one:
+// **a pointer from `neon_str_data` is valid only while that particular string object is
+// alive and has not been copied or moved.** Copy the string and you must re-derive it from
+// the copy. `runtime/src/file.c` holds such pointers in an `iovec` across a `writev`; that
+// is sound because the array it points into outlives the call, and it is the pattern to
+// look at first when this bites.
+static inline const char* neon_str_data(const neon_str* s) {
+    return s->data;
+}
+
+// The mutable form, for a buffer this code just allocated and is filling in. Same lifetime
+// rule. Kept separate so that the read-only path, which is nearly every use, cannot hand
+// out a writable pointer into a shared string by accident.
+static inline char* neon_str_data_mut(neon_str* s) {
+    return s->data;
+}
+
+static inline size_t neon_str_len(const neon_str* s) {
+    return s->len;
+}
+
 typedef struct { char _unit; } neon_unit;
 typedef struct { void* fn; neon_header* env; } neon_closure;
 typedef void* neon_value;

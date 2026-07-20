@@ -16,12 +16,16 @@
 
 // A NUL-terminated copy of a `neon_str`, for the C APIs that demand one. `neon_str` is a
 // length-delimited *view* -- a slice of a larger buffer is not terminated -- so this cannot
-// be skipped by passing `.data`. Caller frees.
+// be skipped by passing the data pointer. Caller frees.
 static char* neon_cstr(neon_str s) {
-    char* p = (char*)malloc(s.len + 1);
+    size_t len = neon_str_len(&s);
+    char* p = (char*)malloc(len + 1);
     if (p == NULL) neon_trap("out of memory");
-    if (s.len) memcpy(p, s.data, s.len);
-    p[s.len] = 0;
+    // `&s` -- the parameter, which lives until this function returns. Under SSO that is
+    // where an inline string's bytes are, so the pointer must be derived from this copy
+    // and not from whatever the caller passed.
+    if (len) memcpy(p, neon_str_data(&s), len);
+    p[len] = 0;
     return p;
 }
 // ---- files ----
@@ -47,7 +51,7 @@ int64_t neon_io_open(neon_str path, int64_t mode) {
     int fd = open(p, flags, 0666);
     int64_t r = fd < 0 ? -(int64_t)errno : (int64_t)fd;
     free(p);
-    neon_release(path.owner);
+    neon_str_release(path);
     return r;
 }
 
@@ -107,10 +111,16 @@ int64_t neon_io_writev(int64_t fd, neon_list* parts) {
         struct iovec vec[NEON_IOV_MAX];
         size_t n = 0, total = 0;
         for (size_t j = 0; j < batch; j++) {
-            if (items[i + j].len == 0) continue; // an empty piece is not a write
-            vec[n].iov_base = items[i + j].data;
-            vec[n].iov_len = items[i + j].len;
-            total += items[i + j].len;
+            size_t plen = neon_str_len(&items[i + j]);
+            if (plen == 0) continue; // an empty piece is not a write
+            // Borrowed for the duration of the `writev` below. Sound because `items`
+            // points into the list's buffer, which outlives this call and is not mutated
+            // here -- so under SSO an inline piece's bytes stay put too. Copying the
+            // `neon_str` into a local first would NOT be sound: the local dies at the end
+            // of this iteration while the iovec is read after the loop.
+            vec[n].iov_base = (void*)(uintptr_t)neon_str_data(&items[i + j]);
+            vec[n].iov_len = plen;
+            total += plen;
             n++;
         }
         i += batch;
@@ -142,7 +152,7 @@ int64_t neon_io_remove(neon_str path) {
     char* p = neon_cstr(path);
     int64_t r = remove(p) == 0 ? 0 : -(int64_t)errno;
     free(p);
-    neon_release(path.owner);
+    neon_str_release(path);
     return r;
 }
 
@@ -150,6 +160,6 @@ bool neon_io_exists(neon_str path) {
     char* p = neon_cstr(path);
     bool ok = access(p, F_OK) == 0;
     free(p);
-    neon_release(path.owner);
+    neon_str_release(path);
     return ok;
 }

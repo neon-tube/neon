@@ -1932,7 +1932,13 @@ fn rc_parts_rec(
         return;
     }
     match repr {
-        Repr::Str => out.push(format!("{func}({expr}.owner)")),
+        // Through `neon_str_retain`/`neon_str_release` rather than reaching for `.owner`
+        // ourselves. A string's representation is the runtime's business, and this is the
+        // only place the backend would otherwise know it: routing through the accessor is
+        // what lets a small-string optimisation change the layout without regenerating or
+        // revisiting a line of emitted C. `func` is `neon_retain`/`neon_release`, so the
+        // `neon_` prefix is replaced rather than appended.
+        Repr::Str => out.push(format!("neon_str_{}({expr})", func.trim_start_matches("neon_"))),
         Repr::Closure { .. } => out.push(format!("{func}({expr}.env)")),
         Repr::List(_) | Repr::Map(_, _) | Repr::Runtime { .. } | Repr::Any => {
             out.push(format!("{func}((neon_header*){expr})"))
