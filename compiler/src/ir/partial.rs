@@ -88,7 +88,7 @@
 //! argument, since there is no result to ask.
 
 use super::repr::Repr;
-use super::ssa::{BlockId, Func, Inst, Op, Program, Term, Value};
+use super::ssa::{BlockId, Func, Inst, Op, PrimOp, Program, Term, Value};
 use std::collections::{HashMap, HashSet};
 
 /// The whole-record in-place store this pass splits up.
@@ -173,8 +173,11 @@ fn find(f: &Func) -> Vec<Site> {
             if *base != list || *idx != index {
                 continue;
             }
-            // ..and nothing may have written the list in between.
-            if writes_between(f, (*src_block, *src_at), (b.id, at), list) {
+            // ..and every write to the list in between must land on a different slot.
+            // Usually there are none; when there are, `provably_distinct` is what lets
+            // `advance`'s write to `j` survive the write to `i` that precedes it.
+            let blocking = intervening_writes(f, (*src_block, *src_at), (b.id, at), list);
+            if !blocking.iter().all(|&w| provably_distinct(f, w, index)) {
                 continue;
             }
             out.push(Site { block: b.id, at, list, index, changed });
@@ -211,36 +214,51 @@ fn unchanged_from(
 /// read, without re-entering the read's own block, declines the site. That is imprecise in
 /// the accept-nothing direction, which is the side to be wrong on — a wrongly accepted site
 /// is a silent miscompile.
-fn writes_between(f: &Func, from: (BlockId, usize), to: (BlockId, usize), list: Value) -> bool {
-    let mut writers: Vec<(BlockId, usize)> = Vec::new();
+fn intervening_writes(
+    f: &Func,
+    from: (BlockId, usize),
+    to: (BlockId, usize),
+    list: Value,
+) -> Vec<Value> {
+    // The index each write lands on, so the caller can ask whether it is a different slot.
+    // A write with no index operand (`push`, `ensure_unique`) can touch anything, so it is
+    // recorded as `None` and can never be argued away.
+    let mut writers: Vec<(BlockId, usize, Option<Value>)> = Vec::new();
     for b in &f.blocks {
         for (i, inst) in b.insts.iter().enumerate() {
             if let Op::Native { symbol, args } = &inst.op {
-                let writes_list = symbol.starts_with("neon_list_set")
-                    || symbol == "neon_list_push"
-                    || symbol == "neon_list_ensure_unique";
-                if writes_list && args.first() == Some(&list) && (b.id, i) != to {
-                    writers.push((b.id, i));
+                let indexed = symbol.starts_with("neon_list_set");
+                let whole_list = symbol == "neon_list_push" || symbol == "neon_list_ensure_unique";
+                if (indexed || whole_list) && args.first() == Some(&list) && (b.id, i) != to {
+                    writers.push((b.id, i, if indexed { args.get(1).copied() } else { None }));
                 }
             }
         }
     }
-    if from.0 == to.0 {
-        // One block. A write outside it cannot be between them without re-executing the
-        // read; a write inside it is between them exactly when it sits between them.
-        return from.1 >= to.1
-            || writers.iter().any(|&(wb, wi)| wb == from.0 && wi > from.1 && wi < to.1);
+    if from.0 == to.0 && from.1 >= to.1 {
+        // The read does not precede the store: not a shape this pass matched. One
+        // unattributable write is enough to decline.
+        return vec![Value(u32::MAX)];
     }
-    // Different blocks: anything after the read in its own block, or in any block reachable
-    // without going back through the read.
     let reach = reachable_without(f, from.0);
-    writers.iter().any(|&(wb, wi)| {
-        if wb == from.0 {
+    let between = |wb: BlockId, wi: usize| {
+        if from.0 == to.0 {
+            // One block. Leaving it and coming back re-executes the read, which rebinds it
+            // and restarts the question, so only a write lying strictly between counts.
+            wb == from.0 && wi > from.1 && wi < to.1
+        } else if wb == from.0 {
             wi > from.1
         } else {
             reach.contains(&wb)
         }
-    })
+    };
+    writers
+        .iter()
+        .filter(|&&(wb, wi, _)| between(wb, wi))
+        // `None` -- a write with no index -- becomes an index nothing can be proved distinct
+        // from, which is exactly how it should behave.
+        .map(|&(_, _, idx)| idx.unwrap_or(Value(u32::MAX)))
+        .collect()
 }
 
 /// Blocks reachable from `start`'s successors without re-entering `start` itself.
@@ -328,4 +346,230 @@ fn rewrite(f: &mut Func, block: BlockId, s: &Site) {
         });
     }
     b.insts.splice(s.at..=s.at, replacement);
+}
+
+// ---- proving two indices name different slots ----
+
+/// Whether `a` and `b` are guaranteed to differ wherever both are live.
+///
+/// One shape only, and it is the one that matters: a loop counter that starts strictly
+/// above another and only ever climbs. That is `advance`'s `j`, which runs `i+1..n` while
+/// `i` sits still — the case that, unproved, costs half the available win on n-body.
+///
+/// Deliberately narrow. This is not range analysis and does not want to become it: a wrong
+/// answer here does not crash, it silently drops a field store and prints wrong numbers. The
+/// query answers "yes" only for a shape it can walk end to end, and "no" for everything
+/// else, including plenty of pairs that do in fact differ.
+fn provably_distinct(f: &Func, a: Value, b: Value) -> bool {
+    climbs_away_from(f, a, b) || climbs_away_from(f, b, a)
+}
+
+/// `p` is a loop-header parameter that enters at `q + k` for some `k > 0`, only ever
+/// increases, and cannot wrap round to meet `q` again.
+///
+/// The three obligations, and none is optional:
+///
+/// 1. **Every incoming edge** gives `p` either `q + k` (loop entry) or `p + k` (the latch),
+///    `k` a positive constant. One unexplained edge and the answer is no.
+/// 2. **`q` does not move inside the loop.** If it did, `p > q` at entry would say nothing
+///    about the two at the write. Checked by requiring `q`'s definition to sit outside the
+///    loop body.
+/// 3. **Neither can wrap.** `prim.add` wraps, so "only increases" is not the same as "stays
+///    above", and the gap is not academic: an entry of `q + k` for a pathological constant
+///    `k` near `i64::MAX` wraps to *below* `q`, and a climbing `p` then meets `q` from
+///    underneath. Closed by requiring the stride to be exactly `1` at both the entry and the
+///    latch, and both loops to be guarded by `< L` against the *same* `L`. Then: `q < L <=
+///    i64::MAX`, so `q + 1` does not overflow and is `> q`; `p` enters there and the guard
+///    holds `p < L <= i64::MAX`, so each `p + 1` tops out at `L` rather than wrapping. `p`
+///    starts above `q`, `q` is fixed, and `p` climbs without wrapping — so `p > q` at the
+///    write. A stride of 1 is what every real counting loop uses and is n-body's; a wider or
+///    variable stride is declined rather than reasoned about.
+fn climbs_away_from(f: &Func, p: Value, q: Value) -> bool {
+    let Some((header, pos)) = param_position(f, p) else { return false };
+    let Some(guard) = loop_guard(f, header, p) else { return false };
+
+    let body = loop_body(f, header);
+    // (2) `q` must be fixed for the duration.
+    if defined_inside(f, &body, q) {
+        return false;
+    }
+    // (3) `q`'s own loop must be bounded by the same length value.
+    let Some((q_header, _)) = param_position(f, q) else { return false };
+    if loop_guard(f, q_header, q) != Some(guard) {
+        return false;
+    }
+
+    // (1) every way into the header explains `p`.
+    let mut saw_entry = false;
+    let mut edges = 0;
+    for b in &f.blocks {
+        for tgt in targets(&b.term) {
+            if tgt.to != header {
+                continue;
+            }
+            edges += 1;
+            let Some(&arg) = tgt.args.get(pos) else { return false };
+            match add_of_one(f, arg) {
+                // Loop entry: `p = q + 1`.
+                Some(base) if base == q => saw_entry = true,
+                // The latch: `p = p + 1`.
+                Some(base) if base == p => {}
+                _ => return false,
+            }
+        }
+    }
+    edges > 0 && saw_entry
+}
+
+/// The block and parameter position `v` is bound at, if it is a block parameter.
+fn param_position(f: &Func, v: Value) -> Option<(BlockId, usize)> {
+    f.blocks.iter().find_map(|b| b.params.iter().position(|&x| x == v).map(|i| (b.id, i)))
+}
+
+/// The value a header's loop is bounded by: `branch (prim.lt v, L)` gives `L`.
+fn loop_guard(f: &Func, header: BlockId, v: Value) -> Option<Value> {
+    let b = f.blocks.iter().find(|b| b.id == header)?;
+    let Term::Branch { cond, .. } = &b.term else { return None };
+    b.insts.iter().find_map(|inst| match (&inst.op, inst.result) {
+        (Op::Prim(PrimOp::Lt, args), Some(r))
+            if r == *cond && args.first() == Some(&v) =>
+        {
+            args.get(1).copied()
+        }
+        _ => None,
+    })
+}
+
+/// `Some(base)` when `v` is `base + 1`. Exactly one, not any positive constant: see
+/// obligation 3 on `climbs_away_from` for why a wider stride is refused rather than trusted.
+fn add_of_one(f: &Func, v: Value) -> Option<Value> {
+    for b in &f.blocks {
+        for inst in &b.insts {
+            if inst.result != Some(v) {
+                continue;
+            }
+            let Op::Prim(PrimOp::Add, args) = &inst.op else { return None };
+            let (&x, &y) = (args.first()?, args.get(1)?);
+            // Either operand may be the constant `1`.
+            if const_i64(f, y) == Some(1) {
+                return Some(x);
+            }
+            if const_i64(f, x) == Some(1) {
+                return Some(y);
+            }
+            return None;
+        }
+    }
+    None
+}
+
+fn const_i64(f: &Func, v: Value) -> Option<i64> {
+    f.blocks.iter().flat_map(|b| b.insts.iter()).find_map(|inst| match (&inst.op, inst.result) {
+        (Op::ConstI64(n), Some(r)) if r == v => Some(*n),
+        _ => None,
+    })
+}
+
+/// The *natural* loop `header` heads: the header, plus every block that can reach one of its
+/// back edges without passing through the header again.
+///
+/// "Reachable from the header and able to get back" is not the same thing, and was the first
+/// version's bug. In `advance`, `block4` heads the inner loop but its exit runs
+/// `block6 -> block1 -> block2 -> block4`, so the outer header is reachable from the inner one
+/// and can reach it again. That made the inner loop's body swallow the outer loop, and the
+/// outer counter `i` then looked as though it changed inside the inner loop -- which is
+/// precisely the fact this analysis needs to be false.
+///
+/// The distinguisher is dominance: `block10` is a back edge because `block4` dominates it,
+/// while `block2` is not, because control reaches it without ever entering `block4`.
+fn loop_body(f: &Func, header: BlockId) -> HashSet<BlockId> {
+    let dom = dominators(f);
+    let preds = predecessors(f);
+    let mut body: HashSet<BlockId> = std::iter::once(header).collect();
+    for b in &f.blocks {
+        let is_latch = targets(&b.term).iter().any(|t| t.to == header)
+            && dom.get(&b.id).is_some_and(|d| d.contains(&header));
+        if !is_latch {
+            continue;
+        }
+        let mut stack = vec![b.id];
+        while let Some(n) = stack.pop() {
+            if n == header || !body.insert(n) {
+                continue;
+            }
+            for &p in preds.get(&n).into_iter().flatten() {
+                stack.push(p);
+            }
+        }
+    }
+    body
+}
+
+/// Dominator sets, by the standard iterative fixpoint. The CFGs here are small, so the naive
+/// form is the right one: no dominator tree and no immediate-dominator bookkeeping to keep
+/// correct for the sake of an asymptotic nobody reaches.
+fn dominators(f: &Func) -> HashMap<BlockId, HashSet<BlockId>> {
+    let all: HashSet<BlockId> = f.blocks.iter().map(|b| b.id).collect();
+    let preds = predecessors(f);
+    let mut dom: HashMap<BlockId, HashSet<BlockId>> = f
+        .blocks
+        .iter()
+        .map(|b| {
+            let set = if b.id == f.entry { std::iter::once(b.id).collect() } else { all.clone() };
+            (b.id, set)
+        })
+        .collect();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for b in &f.blocks {
+            if b.id == f.entry {
+                continue;
+            }
+            let mut next: Option<HashSet<BlockId>> = None;
+            for p in preds.get(&b.id).into_iter().flatten() {
+                let d = &dom[p];
+                next = Some(match next {
+                    None => d.clone(),
+                    Some(acc) => acc.intersection(d).copied().collect(),
+                });
+            }
+            let mut next = next.unwrap_or_default();
+            next.insert(b.id);
+            if dom[&b.id] != next {
+                dom.insert(b.id, next);
+                changed = true;
+            }
+        }
+    }
+    dom
+}
+
+fn predecessors(f: &Func) -> HashMap<BlockId, Vec<BlockId>> {
+    let mut out: HashMap<BlockId, Vec<BlockId>> = HashMap::new();
+    for b in &f.blocks {
+        for t in targets(&b.term) {
+            out.entry(t.to).or_default().push(b.id);
+        }
+    }
+    out
+}
+
+/// Whether `v` is bound anywhere inside `body` -- as an instruction result or a block
+/// parameter. A value bound inside the loop takes a fresh value each iteration.
+fn defined_inside(f: &Func, body: &HashSet<BlockId>, v: Value) -> bool {
+    f.blocks.iter().filter(|b| body.contains(&b.id)).any(|b| {
+        b.params.contains(&v) || b.insts.iter().any(|i| i.result == Some(v))
+    })
+}
+
+fn targets(t: &Term) -> Vec<&super::ssa::Target> {
+    match t {
+        Term::Jump(tg) => vec![tg],
+        Term::Branch { then, els, .. } => vec![then, els],
+        Term::Switch { arms, default, .. } => {
+            arms.iter().map(|(_, t)| t).chain(std::iter::once(default)).collect()
+        }
+        Term::Ret(_) | Term::Throw(_) | Term::Unreachable => vec![],
+    }
 }

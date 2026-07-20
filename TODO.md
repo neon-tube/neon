@@ -399,12 +399,15 @@ purpose, because the record shape is what people write.
 `neon_list_set_field_inplace` per changed field instead of a whole-record store. n-body
 goes **4.35x C to 2.09x**; the other three benchmarks are unmoved.
 
-What it does *not* do is the third write site, and that is the remaining half. `advance`
-writes slot `i` and then slot `j`; the write to `j` has the write to `i` between it and its
-read, so the safety condition declines it. `i != j` always, since `j` runs `i+1..n`, but
-proving that needs induction-variable range analysis, which the pass has not got. Hand-
-patching that site too gets 1.43x C, so the remaining half is worth as much as the built
-half. That is the next thing to build here.
+**Now the whole of it: n-body is at parity, 1.02x C.** The third write site is taken too.
+`advance` writes slot `i` and then slot `j`, and the write to `j` reads `xs[j]` with the
+write to `i` in between; the pass keeps it only if it can prove `i != j`. It can, because
+`j` is a counter that enters the inner loop at `i + 1` and climbs by 1 while `i` stays
+fixed. `ir::partial::climbs_away_from` is that proof. It is narrow on purpose -- stride
+exactly 1, both loops guarded by `< L` against the same length, so the ordering cannot wrap
+`i64` -- and declines anything it cannot walk end to end (a descending counter, a wider
+stride, a non-constant bound). The overflow reasoning, which no test can reach, is proved in
+`verify/src/distinct.rs`.
 
 **Measured ceiling, and four things not to try.** The fix above was re-derived
 independently on 2026-07-20 and, this time, its value was measured rather than argued.

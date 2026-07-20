@@ -5,4 +5,6 @@
 //! particular functions are the ones worth a model checker.
 
 #[cfg(kani)]
+mod distinct;
+#[cfg(kani)]
 mod fold;

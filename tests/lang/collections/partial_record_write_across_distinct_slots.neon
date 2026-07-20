@@ -1,0 +1,97 @@
+// `ir::partial` narrows a record write past an *intervening* write to the same list, when it
+// can prove the two land on different slots. This is what takes n-body from 2.09x C to
+// parity: `advance`'s inner loop writes body `i` and then body `j`, and the write to `j` has
+// the write to `i` between it and its read.
+//
+// The three functions are the three answers the distinctness query gives.
+//
+// `distinct` is the shape it proves: `j` runs `i+1..n`, climbing away from a fixed `i`, so
+// the write to `i` can never be the slot the write to `j` reads. Both writes narrow.
+//
+// `overlap` is the shape it must decline: `k` runs the *same* `0..n` as `i`, so `i == k`
+// happens. With n = 1 it always does — and then the second write, built from the stale read
+// of `xs[k]`, must overwrite the `999` the first write put in `a`. If the query wrongly
+// proved these distinct, the second write would narrow to just its changed field and the
+// `999` would survive: `a` would print 999 instead of 1.
+//
+// `descending` is the shape the query does not attempt: `j` counts *down* toward `i` and can
+// meet it. The query only proves a counter climbing away, so this is declined and stays
+// correct rather than being narrowed on a guess.
+
+use std::io;
+use std::collections::list;
+
+record P { a: i64, b: i64, c: i64 }
+
+fn show(xs: List[P]) -> str {
+    let s = "";
+    let i = 0;
+    while i < list::len(xs) {
+        let p = xs[i];
+        s = s + "(#{p.a},#{p.b},#{p.c})";
+        i = i + 1;
+    };
+    s
+}
+
+fn distinct(xs: List[P]) -> List[P] {
+    let n = list::len(xs);
+    let i = 0;
+    while i < n {
+        let j = i + 1;
+        while j < n {
+            let pi = xs[i];
+            let pj = xs[j];
+            xs = try! list::set(xs, i, P { a: pi.a, b: pi.b, c: pi.c + 1 });
+            xs = try! list::set(xs, j, P { a: pj.a, b: pj.b, c: pj.c + 100 });
+            j = j + 1;
+        };
+        i = i + 1;
+    };
+    xs
+}
+
+fn overlap(xs: List[P]) -> List[P] {
+    let n = list::len(xs);
+    let i = 0;
+    while i < n {
+        let k = 0;
+        while k < n {
+            let pi = xs[i];
+            let pk = xs[k];
+            xs = try! list::set(xs, i, P { a: 999, b: pi.b, c: pi.c });
+            xs = try! list::set(xs, k, P { a: pk.a, b: pk.b, c: pk.c + 1 });
+            k = k + 1;
+        };
+        i = i + 1;
+    };
+    xs
+}
+
+fn descending(xs: List[P]) -> List[P] {
+    let n = list::len(xs);
+    let i = 0;
+    while i < n {
+        let j = n - 1;
+        while j >= i {
+            let pi = xs[i];
+            let pj = xs[j];
+            xs = try! list::set(xs, i, P { a: 888, b: pi.b, c: pi.c });
+            xs = try! list::set(xs, j, P { a: pj.a, b: pj.b, c: pj.c + 1 });
+            j = j - 1;
+        };
+        i = i + 1;
+    };
+    xs
+}
+
+fn main() {
+    let a: List[P] = [P{a:1,b:2,c:0}, P{a:3,b:4,c:0}, P{a:5,b:6,c:0}];
+    io::println(show(distinct(a)));
+
+    let b: List[P] = [P{a:1,b:2,c:0}];
+    io::println(show(overlap(b)));
+
+    let d: List[P] = [P{a:1,b:2,c:0}, P{a:3,b:4,c:0}];
+    io::println(show(descending(d)));
+}
