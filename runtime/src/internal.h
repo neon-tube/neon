@@ -21,7 +21,9 @@ static inline void neon_str_drop(void* p) {
 
 // Allocate a fresh heap string holding `len` bytes copied from `src`.
 static inline neon_str neon_str_new(const char* src, size_t len) {
-    neon_header* h = neon_alloc(len, neon_str_drop);
+    // Explicit cast: `void*` converts implicitly in C but not in C++, and this header is
+    // included from the C++ unit tests.
+    neon_header* h = (neon_header*)neon_alloc(len, neon_str_drop);
     char* data = (char*)(h + 1);
     // Worth about 1.7% on word-frequency on its own, where this is reached once per token
     // to copy the four digits `neon_i64_to_string` just produced. Much less than the same

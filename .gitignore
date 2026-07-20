@@ -2,6 +2,7 @@
 # `verify/` is a detached workspace, so it builds into its own tree.
 /verify/target/
 /runtime/build/
+/runtime/build-tests/
 _neon/
 compile_flags.txt
 .DS_Store

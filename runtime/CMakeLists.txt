@@ -83,3 +83,69 @@ neon_rt_variant(neon_rt_debug -O0 -g -DNEON_DEBUG)
 neon_rt_variant(neon_rt_san -fsanitize=address,undefined -O1 -g -fno-omit-frame-pointer)
 
 install(DIRECTORY include/ DESTINATION include)
+
+# ---- unit tests ----
+#
+# Off by default, and that default is load-bearing: `neon-runtime`'s build script drives
+# this CMakeLists on every `cargo build`, and the tests pull minunit over the network
+# (FetchContent) and add a C++ toolchain requirement. Neither belongs in a routine build.
+# CI configures with `-DNEON_RT_TESTS=ON` to build and run them; nothing else touches them.
+#
+# The runtime sources are compiled *into* the test binary rather than linked from an archive,
+# so the tests can reach `src/internal.h` and the non-exported helpers, and the sanitizers
+# below instrument the runtime itself. Not `-Werror` here: that is the archive's contract,
+# not the test build's, and the test flags (sanitizers, -O1) are a different shape.
+option(NEON_RT_TESTS "Build the C runtime's minunit unit tests" OFF)
+if(NEON_RT_TESTS)
+    enable_language(CXX)
+    set(CMAKE_CXX_STANDARD 17)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+    enable_testing()
+
+    # minunit forks each test by default (crash isolation). We turn that OFF deliberately:
+    # LeakSanitizer runs its check at process exit, and a forked child writes its pass/fail
+    # result *before* that check, so a leak in a forked test is printed to stderr but never
+    # fails the suite — the run stays green with exit 0. Running every test in one process
+    # instead means the exit-time leak check governs the process exit code, so a leak is a
+    # hard failure. The cost is that an unexpected crash aborts the whole run rather than one
+    # test — acceptable, since a crash is a non-zero exit either way, and the trap tests fork
+    # their own child (see `traps`) so the main process never traps.
+    set(FORKED_TEST_RUNNER_SELECTED OFF CACHE BOOL "" FORCE)
+
+    include(FetchContent)
+    FetchContent_Declare(
+        minunit
+        GIT_REPOSITORY https://github.com/nanolith/minunit
+        GIT_TAG        master
+    )
+    FetchContent_MakeAvailable(minunit)
+    # minunit's own headers look for its generated config.h in the binary dir.
+    target_include_directories(minunit PRIVATE ${minunit_BINARY_DIR})
+
+    add_executable(neon_rt_tests
+        ${NEON_RT_SOURCES}
+        tests/init.cpp
+        tests/arith_test.cpp
+        tests/lifecycle_test.cpp
+        tests/string_test.cpp
+        tests/list_test.cpp
+        tests/map_test.cpp
+        tests/resource_test.cpp
+        tests/any_test.cpp
+        tests/math_test.cpp
+    )
+    target_include_directories(neon_rt_tests PRIVATE include src ${minunit_SOURCE_DIR}/include)
+    target_link_libraries(neon_rt_tests PRIVATE minunit)
+
+    # Sanitizers on the whole test binary — the runtime sources included above with it, and
+    # minunit — so a memory or UB bug in the runtime is caught here, not only in the corpus.
+    # `-fno-sanitize-recover=all` so a UBSan finding aborts (non-zero exit) rather than
+    # printing and continuing — UBSan otherwise recovers by default and the run stays green.
+    set(NEON_RT_TEST_SAN -fsanitize=address,undefined -fno-sanitize-recover=all)
+    target_compile_options(neon_rt_tests PRIVATE ${NEON_RT_TEST_SAN} -g -O1 -fno-omit-frame-pointer)
+    target_link_options(neon_rt_tests PRIVATE ${NEON_RT_TEST_SAN})
+    target_compile_options(minunit PRIVATE ${NEON_RT_TEST_SAN})
+    target_link_options(minunit PRIVATE ${NEON_RT_TEST_SAN})
+
+    add_test(NAME neon_rt_tests COMMAND neon_rt_tests)
+endif()
