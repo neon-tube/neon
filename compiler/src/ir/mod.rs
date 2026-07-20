@@ -10,6 +10,7 @@ pub mod opt;
 pub mod refcount;
 pub mod repr;
 pub mod ssa;
+pub mod unique;
 
 use crate::ast::Module;
 use crate::typecheck::env::Env;
