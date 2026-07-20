@@ -290,7 +290,7 @@ local function register_parser()
   if configs.neon == nil then
     configs.neon = {
       install_info = {
-        url = 'https://github.com/jkbbwr/neon2',
+        url = 'https://github.com/jkbbwr/neon',
         location = 'extra/tree-sitter-neon',
         files = { 'src/parser.c', 'src/scanner.c' },
       },

@@ -81,7 +81,7 @@ By hand, if you would rather not take the plugin:
 ```lua
 require('nvim-treesitter.parsers').get_parser_configs().neon = {
   install_info = {
-    url = 'https://github.com/jkbbwr/neon2',
+    url = 'https://github.com/jkbbwr/neon',
     location = 'extra/tree-sitter-neon',
     files = { 'src/parser.c', 'src/scanner.c' },
   },

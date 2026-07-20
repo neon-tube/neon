@@ -31,17 +31,20 @@ Neon = "neon"
 #
 # A complete, verified tree-sitter grammar for Neon lives in THIS repository at
 # `extra/tree-sitter-neon`, with `highlights.scm`, `indents.scm`, `locals.scm` and
-# `textobjects.scm`. What blocks it is that a Zed grammar is fetched, by Zed, from a
-# git `repository` plus `rev`; `GrammarManifestEntry` makes both required and offers
-# no local-path or relative-path option, so a grammar sitting in the same directory
-# tree as the extension cannot be pointed at. `git remote -v` in this checkout
-# prints nothing -- there is no URL to write here that would resolve.
+# `textobjects.scm`. The repository now has a remote -- https://github.com/jkbbwr/neon --
+# so a `repository` URL exists. What still blocks a one-line wire-up is that a Zed grammar
+# is fetched from the *root* of that repository, and Neon's grammar sits at the subpath
+# `extra/tree-sitter-neon`. `GrammarManifestEntry` takes `repository` plus `rev` and (as of
+# the version last checked) no path field, so pointing it at `jkbbwr/neon` would have Zed
+# look for `grammar.js`/`src/` at the repo root and find neither.
 #
-# This is therefore a two-line change the day the repository has a remote. Fill in
-# both values and add `grammar = "neon"` to `languages/neon/config.toml`:
+# So the remaining work is a packaging decision, not a missing URL: either publish the
+# grammar as its own repository whose root *is* `tree-sitter-neon`, or confirm a newer Zed
+# accepts a grammar subpath and use it. Once there is a fetchable grammar root, fill in the
+# block below and add `grammar = "neon"` to `languages/neon/config.toml`:
 #
 #   [grammars.neon]
-#   repository = "https://github.com/jkbbwr/neon2"
+#   repository = "https://github.com/jkbbwr/neon"   # or a dedicated grammar repo
 #   rev = "<a commit sha, not a branch -- Zed pins by revision>"
 #
 # One thing to do at the same time, not after: `extra/tree-sitter-neon/queries/` uses

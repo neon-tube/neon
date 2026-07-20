@@ -150,24 +150,30 @@ local-path option, so a grammar cannot be vendored into this directory and used.
 `//@ compile-fail` fixtures that are supposed to be malformed — with `highlights.scm`,
 `indents.scm`, `locals.scm` and `textobjects.scm` alongside it.
 
-What is missing is a **URL**. `git remote -v` in this checkout prints nothing, so there is no
-value that would resolve if written into `repository`. That is the entire blocker.
+What is missing is a **fetchable grammar root**. The repository has a remote —
+`https://github.com/jkbbwr/neon` — so a `repository` URL now exists. But Zed fetches a
+grammar from the *root* of that repository, and this grammar lives at the subpath
+`extra/tree-sitter-neon`, so `jkbbwr/neon` on its own does not resolve to a grammar. That is
+the remaining blocker: a packaging decision (a dedicated grammar repo, or a Zed that accepts
+a subpath), not a missing URL.
 
 Zed's `LanguageConfig.grammar` field is `Option<Arc<str>>`, so omitting it is supported
 rather than a hack: the language registers, the file type is recognised, and the language
 server attaches. Only tree-sitter-driven features (highlighting, structural selection,
 code folding by syntax) are absent.
 
-### Fixing it, once this repository has a remote
+### Fixing it, once the grammar has a fetchable root
 
 Three edits, all of them small:
 
 1. Add the block to `extension.toml`, pinning a **commit sha** — Zed resolves by revision,
-   not by branch:
+   not by branch. The `repository` is `https://github.com/jkbbwr/neon` if a newer Zed
+   accepts a grammar subpath, otherwise a dedicated grammar repository whose root is the
+   grammar:
 
    ```toml
    [grammars.neon]
-   repository = "https://github.com/jkbbwr/neon2"
+   repository = "https://github.com/jkbbwr/neon"
    rev = "…"
    ```
 
@@ -185,17 +191,17 @@ Note that the grammar's external scanner is mandatory, not optional: Neon's bloc
 nest, no regular expression can count, and the depth is tracked in `src/scanner.c`. Zed
 compiles `scanner.c` automatically when it is present in `src/`, which it is.
 
-### Prior art, and a warning about it
+### A warning about older grammars
 
-The **predecessor** repository (`github.com/jkbbwr/neon`) also carries a Neon grammar. Do
-not point Zed at that one as a shortcut. It describes an older language — it has
+`github.com/jkbbwr/neon` now hosts *this* repository, whose grammar is the current one at
+`extra/tree-sitter-neon`. But an older Neon grammar circulated before this — with
 `enum_declaration`, `if_let_expr`, `map_init` and `type_nullable`, none of which exist now,
-and no rule for string interpolation, `marker`, `bench` or `assert_throws` — and its node
-names are entirely different (`binary_expr` against `binary_expression`, `int_literal`
-against `integer`, and so on). Queries written for the current grammar do not merely
-degrade against it, they fail to compile. This was observed in practice, in Neovim: an
-installed copy of the old parser makes the new `highlights.scm` error out with
-`Invalid node type "doc_comment"`.
+no rule for string interpolation, `marker`, `bench` or `assert_throws`, and entirely
+different node names (`binary_expr` against `binary_expression`, `int_literal` against
+`integer`, and so on). Do not point Zed at any such copy. Queries written for the current
+grammar do not merely degrade against it, they fail to compile — observed in practice, in
+Neovim: an installed copy of the old parser makes the new `highlights.scm` error out with
+`Invalid node type "doc_comment"`. If you pin a `rev`, pin one from the current history.
 
 ## What has and has not been verified
 
