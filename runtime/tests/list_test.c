@@ -4,22 +4,22 @@
 // (`len`, `cap`, `data`) is read directly here to inspect a list without consuming it, since
 // `neon_list_len` consumes its argument.
 
-#include <minunit/minunit.h>
+#include "tinyunit.h"
 
 #include "support.h"
 
-TEST_SUITE(list_suite);
+TEST_SUITE("list");
 
 TEST(new_is_empty) {
     neon_list* l = neon_list_new(&nt_i64_w);
-    TEST_EXPECT(l->len == 0);
+    EXPECT_EQ(l->len, 0u);
     neon_release((neon_header*)l);
 }
 
 TEST(new_with_capacity_preallocates) {
     neon_list* l = neon_list_new_with_capacity(&nt_i64_w, 16);
-    TEST_EXPECT(l->len == 0);
-    TEST_EXPECT(l->cap >= 16);
+    EXPECT_EQ(l->len, 0u);
+    EXPECT_GE(l->cap, 16u);
     neon_release((neon_header*)l);
 }
 
@@ -28,49 +28,34 @@ TEST(push_grows_and_preserves) {
     for (int64_t i = 0; i < 10; i++) {
         l = neon_list_push(l, &i);
     }
-    TEST_EXPECT(l->len == 10);
+    EXPECT_EQ(l->len, 10u);
     for (int64_t i = 0; i < 10; i++) {
-        TEST_EXPECT(*(int64_t*)neon_list_at(l, i) == i); // survived the reallocating growth
+        EXPECT_EQ(*(int64_t*)neon_list_at(l, i), i); // survived the reallocating growth
     }
     neon_release((neon_header*)l);
 }
 
-// A one-element list; indices 5 and -1 are both out of bounds. Each trap is its own test,
-// since a trap ends the process — the cleanup below the trapping call never runs, which is
-// fine (the forked child is exiting anyway).
-TEST_EXIT(at_traps_above_bounds, NEON_TRAP) {
+TEST(at_traps_out_of_bounds) {
     neon_list* l = neon_list_new(&nt_i64_w);
     int64_t v = 1;
     l = neon_list_push(l, &v);
-    neon_list_at(l, 5);
+    EXPECT_TRAP(neon_list_at(l, 5));
+    EXPECT_TRAP(neon_list_at(l, -1));
+    neon_release((neon_header*)l);
 }
 
-TEST_EXIT(at_traps_negative_index, NEON_TRAP) {
-    neon_list* l = neon_list_new(&nt_i64_w);
-    int64_t v = 1;
-    l = neon_list_push(l, &v);
-    neon_list_at(l, -1);
-}
-
-TEST(set_replaces) {
+TEST(set_replaces_and_traps) {
     neon_list* l = neon_list_new(&nt_i64_w);
     int64_t a = 1, b = 2;
     l = neon_list_push(l, &a);
     l = neon_list_push(l, &b);
     int64_t nine = 9;
     l = neon_list_set(l, 0, &nine);
-    TEST_EXPECT(*(int64_t*)neon_list_at(l, 0) == 9);
-    TEST_EXPECT(*(int64_t*)neon_list_at(l, 1) == 2);
-    neon_release((neon_header*)l);
-}
-
-TEST_EXIT(set_traps_out_of_bounds, NEON_TRAP) {
-    neon_list* l = neon_list_new(&nt_i64_w);
-    int64_t a = 1, b = 2;
-    l = neon_list_push(l, &a);
-    l = neon_list_push(l, &b);
+    EXPECT_EQ(*(int64_t*)neon_list_at(l, 0), 9);
+    EXPECT_EQ(*(int64_t*)neon_list_at(l, 1), 2);
     int64_t z = 0;
-    neon_list_set(l, 5, &z);
+    EXPECT_TRAP(neon_list_set(l, 5, &z));
+    neon_release((neon_header*)l);
 }
 
 TEST(mutating_a_shared_list_copies_it) {
@@ -82,9 +67,9 @@ TEST(mutating_a_shared_list_copies_it) {
     int64_t two = 2;
     neon_list* b = neon_list_push(a, &two); // must copy rather than mutate the shared buffer
 
-    TEST_EXPECT(a->len == 1); // the shared original is untouched
-    TEST_EXPECT(b->len == 2);
-    TEST_EXPECT(a->data != b->data); // genuinely separate buffers
+    EXPECT_EQ(a->len, 1u); // the shared original is untouched
+    EXPECT_EQ(b->len, 2u);
+    EXPECT_NE(a->data, b->data); // genuinely separate buffers
     neon_release((neon_header*)a);
     neon_release((neon_header*)b);
 }
@@ -96,13 +81,13 @@ TEST(eq_and_cmp) {
         a = neon_list_push(a, &i);
         b = neon_list_push(b, &i);
     }
-    TEST_EXPECT(neon_list_eq(a, b));
-    TEST_EXPECT(neon_list_cmp(a, b) == 0);
+    EXPECT(neon_list_eq(a, b));
+    EXPECT_EQ(neon_list_cmp(a, b), 0);
 
     int64_t big = 99;
     b = neon_list_set(b, 2, &big);
-    TEST_EXPECT(!neon_list_eq(a, b));
-    TEST_EXPECT(neon_list_cmp(a, b) == -1); // a's third element is smaller
+    EXPECT(!neon_list_eq(a, b));
+    EXPECT_EQ(neon_list_cmp(a, b), -1); // a's third element is smaller
     neon_release((neon_header*)a);
     neon_release((neon_header*)b);
 }
@@ -115,9 +100,9 @@ TEST(concat_joins_and_consumes) {
     b = neon_list_push(b, &y);
     b = neon_list_push(b, &z);
     neon_list* c = neon_list_concat(a, b); // consumes both
-    TEST_EXPECT(c->len == 3);
-    TEST_EXPECT(*(int64_t*)neon_list_at(c, 0) == 1);
-    TEST_EXPECT(*(int64_t*)neon_list_at(c, 2) == 3);
+    EXPECT_EQ(c->len, 3u);
+    EXPECT_EQ(*(int64_t*)neon_list_at(c, 0), 1);
+    EXPECT_EQ(*(int64_t*)neon_list_at(c, 2), 3);
     neon_release((neon_header*)c);
 }
 
@@ -130,7 +115,7 @@ TEST(refcounted_elements_are_released_with_the_list) {
         neon_str s = nt_owned("element");
         l = neon_list_push(l, &s); // moves the reference into the list
     }
-    TEST_EXPECT(l->len == 5);
-    TEST_EXPECT(nt_str_is(*(neon_str*)neon_list_at(l, 0), "element"));
+    EXPECT_EQ(l->len, 5u);
+    EXPECT(nt_str_is(*(neon_str*)neon_list_at(l, 0), "element"));
     neon_release((neon_header*)l);
 }

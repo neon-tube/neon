@@ -1,5 +1,5 @@
-// Shared test support: a death-test helper for traps, and the element/key witnesses the
-// container tests build lists and maps with.
+// Shared test support: the element/key witnesses the container tests build lists and maps
+// with, plus a couple of string helpers.
 //
 // The runtime is compiled *into* the test binary (see `CMakeLists.txt`), so these tests can
 // reach `src/internal.h` and the non-exported helpers, and AddressSanitizer instruments the
@@ -8,19 +8,12 @@
 #ifndef NEON_RT_TEST_SUPPORT_H
 #define NEON_RT_TEST_SUPPORT_H
 
-#include <cstdint>
-#include <cstdio>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 
-extern "C" {
 #include "libneon_rt.h"
 #include "internal.h"
-}
-
-// A trap is `_exit(101)` (`runtime/src/trap.c`): an uncatchable abort for precondition
-// violations — out-of-bounds access, division by zero, a missing map key. It cannot be
-// observed in-process, so "this input traps" is asserted with minunit's `TEST_EXIT`, whose
-// body runs in a forked child: the test passes iff that child exits with this status.
-static constexpr int NEON_TRAP = 101;
 
 // ---- witnesses ----
 //
@@ -36,7 +29,7 @@ static inline int nt_i64_cmp(const void* a, const void* b) {
     int64_t x = *(const int64_t*)a, y = *(const int64_t*)b;
     return x < y ? -1 : (x > y ? 1 : 0);
 }
-static const neon_witness nt_i64_w = {sizeof(int64_t), nullptr, nullptr, nt_i64_eq, nt_i64_cmp};
+static const neon_witness nt_i64_w = {sizeof(int64_t), NULL, NULL, nt_i64_eq, nt_i64_cmp};
 
 static inline void nt_str_retain(void* p) { neon_str_retain(*(neon_str*)p); }
 static inline void nt_str_release(void* p) { neon_str_release(*(neon_str*)p); }

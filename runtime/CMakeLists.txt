@@ -87,59 +87,61 @@ install(DIRECTORY include/ DESTINATION include)
 # ---- unit tests ----
 #
 # Off by default, and that default is load-bearing: `neon-runtime`'s build script drives
-# this CMakeLists on every `cargo build`, and the tests pull minunit over the network
-# (FetchContent) and add a C++ toolchain requirement. Neither belongs in a routine build.
-# CI configures with `-DNEON_RT_TESTS=ON` to build and run them; nothing else touches them.
+# this CMakeLists on every `cargo build`, and the tests pull tinyunit over the network
+# (FetchContent). That does not belong in a routine build. CI configures with
+# `-DNEON_RT_TESTS=ON` to build and run them; nothing else touches them.
 #
 # The runtime sources are compiled *into* the test binary rather than linked from an archive,
 # so the tests can reach `src/internal.h` and the non-exported helpers, and the sanitizers
 # below instrument the runtime itself. Not `-Werror` here: that is the archive's contract,
 # not the test build's, and the test flags (sanitizers, -O1) are a different shape.
-option(NEON_RT_TESTS "Build the C runtime's minunit unit tests" OFF)
+option(NEON_RT_TESTS "Build the C runtime's tinyunit unit tests" OFF)
 if(NEON_RT_TESTS)
-    enable_language(CXX)
-    set(CMAKE_CXX_STANDARD 17)
-    set(CMAKE_CXX_STANDARD_REQUIRED ON)
     enable_testing()
 
-    # minunit's forked runner (the default): each run is a child process, so a crash is
-    # reported instead of taking the harness down with it, and its `TEST_EXIT` macro — a test
-    # whose body must exit with a given status — is available. The trap tests below use it to
-    # assert that a precondition violation is an uncatchable `_exit(101)` (see `support.h`).
+    # tinyunit runs each test in its own forked process. A crash or trap fails only that test
+    # (the runner reports it and continues), a precondition-violation trap (`_exit(101)`) is
+    # asserted with EXPECT_TRAP, and — because the child exits normally — LeakSanitizer runs
+    # per test and fails the exact test that leaked, with no framework support code.
+    #
+    # Fetch the source but skip tinyunit's own build (SOURCE_SUBDIR points at a directory with
+    # no CMakeLists, so MakeAvailable populates without add_subdirectory): tinyunit.c is
+    # compiled straight into the test binary below, like the runtime sources, so one set of
+    # sanitizer flags instruments everything.
     include(FetchContent)
     FetchContent_Declare(
-        minunit
-        GIT_REPOSITORY https://github.com/jkbbwr/minunit
-        GIT_TAG        master
+        tinyunit
+        GIT_REPOSITORY https://github.com/jkbbwr/tinyunit
+        GIT_TAG        main
+        SOURCE_SUBDIR  do-not-build
     )
-    FetchContent_MakeAvailable(minunit)
-    # minunit's own headers look for its generated config.h in the binary dir.
-    target_include_directories(minunit PRIVATE ${minunit_BINARY_DIR})
+    FetchContent_MakeAvailable(tinyunit)
 
     add_executable(neon_rt_tests
         ${NEON_RT_SOURCES}
-        tests/init.cpp
-        tests/arith_test.cpp
-        tests/lifecycle_test.cpp
-        tests/string_test.cpp
-        tests/list_test.cpp
-        tests/map_test.cpp
-        tests/resource_test.cpp
-        tests/any_test.cpp
-        tests/math_test.cpp
+        ${tinyunit_SOURCE_DIR}/tinyunit.c
+        tests/init.c
+        tests/arith_test.c
+        tests/lifecycle_test.c
+        tests/string_test.c
+        tests/list_test.c
+        tests/map_test.c
+        tests/resource_test.c
+        tests/any_test.c
+        tests/math_test.c
     )
-    target_include_directories(neon_rt_tests PRIVATE include src ${minunit_SOURCE_DIR}/include)
-    target_link_libraries(neon_rt_tests PRIVATE minunit)
+    # The rich assertion and TEST macros use GNU C (__auto_type, constructors, _Generic).
+    set_target_properties(neon_rt_tests PROPERTIES C_STANDARD 11 C_EXTENSIONS ON)
+    target_include_directories(neon_rt_tests PRIVATE include src ${tinyunit_SOURCE_DIR})
+    target_link_libraries(neon_rt_tests PRIVATE m)
 
-    # Sanitizers on the whole test binary — the runtime sources included above with it, and
-    # minunit — so a memory or UB bug in the runtime is caught here, not only in the corpus.
+    # Sanitizers on the whole test binary — the runtime sources and tinyunit compiled in with
+    # it — so a memory or UB bug in the runtime is caught here, not only in the corpus.
     # `-fno-sanitize-recover=all` so a UBSan finding aborts (non-zero exit) rather than
     # printing and continuing — UBSan otherwise recovers by default and the run stays green.
     set(NEON_RT_TEST_SAN -fsanitize=address,undefined -fno-sanitize-recover=all)
     target_compile_options(neon_rt_tests PRIVATE ${NEON_RT_TEST_SAN} -g -O1 -fno-omit-frame-pointer)
     target_link_options(neon_rt_tests PRIVATE ${NEON_RT_TEST_SAN})
-    target_compile_options(minunit PRIVATE ${NEON_RT_TEST_SAN})
-    target_link_options(minunit PRIVATE ${NEON_RT_TEST_SAN})
 
     add_test(NAME neon_rt_tests COMMAND neon_rt_tests)
 endif()

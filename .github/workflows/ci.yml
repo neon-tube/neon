@@ -51,19 +51,19 @@ jobs:
       - name: Test
         run: cargo nextest run --workspace --locked
 
-  # The C runtime's own minunit unit tests, under ASan/UBSan. Separate from the cargo run
-  # because they are a CMake+C++ build gated behind `-DNEON_RT_TESTS=ON` (off in every
-  # normal build, so `cargo build` never pays for them) and pull minunit over the network.
+  # The C runtime's own tinyunit unit tests, under ASan/UBSan. Separate from the cargo run
+  # because they are a CMake build gated behind `-DNEON_RT_TESTS=ON` (off in every normal
+  # build, so `cargo build` never pays for them) and pull tinyunit over the network.
   # Not fuzz and not the CBMC models — those stay out, as asked.
   runtime-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # cmake, gcc/g++ are preinstalled on ubuntu-latest; git (present) is needed for the
-      # FetchContent pull of minunit.
-      - name: Check C/C++ toolchain
-        run: cmake --version && gcc --version && g++ --version
+      # cmake, gcc are preinstalled on ubuntu-latest; git (present) is needed for the
+      # FetchContent pull of tinyunit.
+      - name: Check C toolchain
+        run: cmake --version && gcc --version
 
       - name: Configure
         run: >
@@ -71,13 +71,12 @@ jobs:
           -DNEON_RT_TESTS=ON
           -DCMAKE_BUILD_TYPE=Debug
           -DCMAKE_C_COMPILER=gcc
-          -DCMAKE_CXX_COMPILER=g++
 
       - name: Build
         run: cmake --build runtime/build-tests --target neon_rt_tests
 
-      # ctest surfaces a leak (LeakSanitizer at exit) or a UB finding
-      # (-fno-sanitize-recover) as a non-zero exit — see runtime/CMakeLists.txt for why the
-      # runner is unforked.
+      # tinyunit forks per test: a leak (LeakSanitizer at exit) or a UB finding
+      # (-fno-sanitize-recover) makes that test's child exit non-zero, which fails the run;
+      # ctest surfaces the non-zero exit.
       - name: Test
         run: ctest --test-dir runtime/build-tests --output-on-failure
