@@ -144,3 +144,32 @@ TEST(to_string_family) {
     EXPECT(nt_str_is(t, "passthrough"));
     neon_str_release(t);
 }
+
+TEST(join_inserts_the_separator_between_parts) {
+    // Consumes both the list (with its elements) and the separator. Owned strings all round,
+    // so ASan witnesses that every one is released exactly once.
+    neon_list* parts = neon_list_new(&nt_str_w);
+    neon_str a = nt_owned("a"), b = nt_owned("b"), c = nt_owned("c");
+    parts = neon_list_push(parts, &a);
+    parts = neon_list_push(parts, &b);
+    parts = neon_list_push(parts, &c);
+    neon_str r = neon_str_join(parts, nt_owned(", ")); // consumes parts and the separator
+    EXPECT(nt_str_is(r, "a, b, c"));
+    neon_str_release(r);
+}
+
+TEST(join_edge_cases) {
+    // Empty list: the empty string, and the separator appears nowhere.
+    neon_list* none = neon_list_new(&nt_str_w);
+    neon_str r0 = neon_str_join(none, nt_owned("-"));
+    EXPECT_EQ(neon_str_len(&r0), 0u);
+    neon_str_release(r0);
+
+    // One element: no separator, since a separator only sits *between* parts.
+    neon_list* one = neon_list_new(&nt_str_w);
+    neon_str solo = nt_owned("solo");
+    one = neon_list_push(one, &solo);
+    neon_str r1 = neon_str_join(one, nt_owned("-"));
+    EXPECT(nt_str_is(r1, "solo"));
+    neon_str_release(r1);
+}

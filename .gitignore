@@ -3,6 +3,7 @@
 /verify/target/
 /runtime/build/
 /runtime/build-tests/
+/runtime/models/build/
 _neon/
 compile_flags.txt
 .DS_Store

@@ -166,6 +166,10 @@ if(NEON_RT_TESTS)
         tests/resource_test.c
         tests/any_test.c
         tests/math_test.c
+        tests/io_test.c
+        tests/file_test.c
+        tests/trap_test.c
+        tests/core_test.c
     )
     # The rich assertion and TEST macros use GNU C (__auto_type, constructors, _Generic).
     set_target_properties(neon_rt_tests PROPERTIES C_STANDARD 11 C_EXTENSIONS ON)

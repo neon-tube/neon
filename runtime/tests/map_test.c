@@ -154,3 +154,15 @@ TEST(keys_and_values_lists) {
     neon_release((neon_header*)keys);
     neon_release((neon_header*)vals);
 }
+
+TEST(len_reports_the_count_and_consumes_the_map) {
+    neon_map* empty = neon_map_new(&nt_i64_key, &nt_i64_w);
+    EXPECT_EQ(neon_map_len(empty), 0); // consumes it
+
+    neon_map* m = neon_map_new(&nt_i64_key, &nt_i64_w);
+    int64_t k1 = 1, v1 = 10, k2 = 2, v2 = 20;
+    m = neon_map_set(m, &k1, &v1);
+    m = neon_map_set(m, &k2, &v2);
+    m = neon_map_set(m, &k1, &v2); // same key overwrites: still two entries
+    EXPECT_EQ(neon_map_len(m), 2); // consumes m
+}

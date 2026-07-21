@@ -77,6 +77,7 @@ jobs:
 
       # tinyunit forks per test: a leak (LeakSanitizer at exit) or a UB finding
       # (-fno-sanitize-recover) makes that test's child exit non-zero, which fails the run;
-      # ctest surfaces the non-zero exit.
+      # ctest surfaces the non-zero exit. `-V` prints tinyunit's per-test list on every run,
+      # not just failures, so a green CI log still shows what ran.
       - name: Test
-        run: ctest --test-dir runtime/build-tests --output-on-failure
+        run: ctest --test-dir runtime/build-tests -V

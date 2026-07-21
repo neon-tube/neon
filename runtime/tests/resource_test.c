@@ -40,6 +40,14 @@ static neon_resource* make(int64_t payload) {
     return neon_resource_new(&payload, &nt_i64_w, c, armed_drop);
 }
 
+// A refcounted closure environment, so `cleanup`'s retain-before-release is observable: the
+// drop flips `env_dropped`, and a surviving reference is what keeps it false.
+static bool env_dropped = false;
+static void env_drop(void* p) {
+    env_dropped = true;
+    neon_free(p); // a drop owns freeing the allocation, like every real one
+}
+
 TEST(get_hands_back_the_payload_and_stays_armed) {
     cleanup_count = 0;
     neon_resource* r = make(42);
@@ -94,4 +102,28 @@ TEST(is_live_reports_armed_state) {
     int64_t out = 0;
     neon_resource_take(r, &out);
     EXPECT(!neon_resource_is_live(r)); // disarmed; consumes the last reference
+}
+
+TEST(cleanup_hands_back_the_closure_and_retains_its_env) {
+    cleanup_count = 0;
+    env_dropped = false;
+
+    // The resource owns the one reference to `env` (its `finish` releases it). The closure
+    // is `{cleanup_fn, env}`.
+    neon_header* env = (neon_header*)neon_alloc(0, env_drop); // rc == 1
+    neon_closure c = {(void*)cleanup_fn, env};
+    int64_t payload = 5;
+    neon_resource* r = neon_resource_new(&payload, &nt_i64_w, c, armed_drop);
+
+    // `cleanup` retains `env`, then consumes `r`. `r` is the last reference, so its drop runs
+    // (armed -> cleanup_fn once) and `finish` releases the resource's own `env` reference.
+    // The reference `cleanup` retained keeps `env` alive across that.
+    neon_closure got = neon_resource_cleanup(r);
+    EXPECT_EQ(got.fn, (void*)cleanup_fn);
+    EXPECT(got.env == env);
+    EXPECT(!env_dropped);        // survived: cleanup retained it before releasing r
+    EXPECT_EQ(cleanup_count, 1); // r was armed, so its drop cleaned up exactly once
+
+    neon_release(got.env); // release the reference cleanup handed back
+    EXPECT(env_dropped);   // now the last reference is gone
 }
