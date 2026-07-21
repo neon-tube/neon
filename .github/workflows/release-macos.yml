@@ -1,10 +1,17 @@
-name: Release
+name: Release (aarch64 macos)
 
 # Manual. Produces the toolchain a user installs: the `neon`/`neon-lsp` binaries with the
 # sysroot (include/, lib/<flavor>/, stdlib/) they resolve relative to themselves, packaged
 # in the install layout, as a workflow artifact. Nothing is published anywhere by this
 # workflow. The VS Code extension has its own workflow (vscode.yml), so it can ship without
 # cutting a toolchain release.
+#
+# One workflow per target: an artifact is native to the machine that built it (the runtime
+# archives are that platform's object code, and the arm64/Apple Clang archive is only
+# LTO-usable when built on macOS — see runtime/CMakeLists.txt), so each target builds on its
+# own runner. macOS runners bill at 10x, so this is kept separate from release-linux.yml
+# rather than sharing a matrix: a linux-only cut never pays for one. Keep the steps here in
+# sync with it.
 
 on:
   workflow_dispatch:
@@ -14,7 +21,7 @@ permissions:
 
 jobs:
   toolchain:
-    runs-on: ubuntu-latest
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
 
@@ -34,7 +41,7 @@ jobs:
       - name: Stage prefix
         run: |
           set -eux
-          prefix=neon-x86_64-linux
+          prefix=neon-aarch64-macos
           mkdir -p "$prefix/bin"
           cp target/release/neon target/release/neon-lsp "$prefix/bin/"
           cp -r target/release/include target/release/lib target/release/stdlib "$prefix/"
@@ -45,10 +52,10 @@ jobs:
       - name: Smoke test the package
         run: |
           set -eux
-          cd neon-x86_64-linux
+          cd neon-aarch64-macos
           NEON_SYSROOT="$PWD" ./bin/neon doctor
 
       - uses: actions/upload-artifact@v4
         with:
-          name: neon-x86_64-linux
-          path: neon-x86_64-linux.tar.gz
+          name: neon-aarch64-macos
+          path: neon-aarch64-macos.tar.gz
