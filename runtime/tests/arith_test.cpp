@@ -27,16 +27,12 @@ TEST(div_rem_values) {
     TEST_EXPECT(neon_i64_rem(-17, 5) == -2);
 }
 
-TEST(div_rem_trap_on_zero) {
-    TEST_EXPECT(traps([] { neon_i64_div(1, 0); }));
-    TEST_EXPECT(traps([] { neon_i64_rem(1, 0); }));
-}
+TEST_EXIT(div_traps_on_zero, NEON_TRAP) { neon_i64_div(1, 0); }
+TEST_EXIT(rem_traps_on_zero, NEON_TRAP) { neon_i64_rem(1, 0); }
 
-TEST(div_rem_trap_on_signed_overflow) {
-    // INT64_MIN / -1 is +2^63, unrepresentable — a trap, not a wrap.
-    TEST_EXPECT(traps([] { neon_i64_div(INT64_MIN, -1); }));
-    TEST_EXPECT(traps([] { neon_i64_rem(INT64_MIN, -1); }));
-}
+// INT64_MIN / -1 is +2^63, unrepresentable — a trap, not a wrap.
+TEST_EXIT(div_traps_on_signed_overflow, NEON_TRAP) { neon_i64_div(INT64_MIN, -1); }
+TEST_EXIT(rem_traps_on_signed_overflow, NEON_TRAP) { neon_i64_rem(INT64_MIN, -1); }
 
 TEST(neg_wraps_at_min) {
     TEST_EXPECT(neon_i64_neg(5) == -5);

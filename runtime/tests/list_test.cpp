@@ -35,16 +35,24 @@ TEST(push_grows_and_preserves) {
     neon_release((neon_header*)l);
 }
 
-TEST(at_traps_out_of_bounds) {
+// A one-element list; indices 5 and -1 are both out of bounds. Each trap is its own test,
+// since a trap ends the process — the cleanup below the trapping call never runs, which is
+// fine (the forked child is exiting anyway).
+TEST_EXIT(at_traps_above_bounds, NEON_TRAP) {
     neon_list* l = neon_list_new(&nt_i64_w);
     int64_t v = 1;
     l = neon_list_push(l, &v);
-    TEST_EXPECT(traps([&] { neon_list_at(l, 5); }));
-    TEST_EXPECT(traps([&] { neon_list_at(l, -1); }));
-    neon_release((neon_header*)l);
+    neon_list_at(l, 5);
 }
 
-TEST(set_replaces_and_traps) {
+TEST_EXIT(at_traps_negative_index, NEON_TRAP) {
+    neon_list* l = neon_list_new(&nt_i64_w);
+    int64_t v = 1;
+    l = neon_list_push(l, &v);
+    neon_list_at(l, -1);
+}
+
+TEST(set_replaces) {
     neon_list* l = neon_list_new(&nt_i64_w);
     int64_t a = 1, b = 2;
     l = neon_list_push(l, &a);
@@ -53,11 +61,16 @@ TEST(set_replaces_and_traps) {
     l = neon_list_set(l, 0, &nine);
     TEST_EXPECT(*(int64_t*)neon_list_at(l, 0) == 9);
     TEST_EXPECT(*(int64_t*)neon_list_at(l, 1) == 2);
-    TEST_EXPECT(traps([&] {
-        int64_t z = 0;
-        neon_list_set(l, 5, &z);
-    }));
     neon_release((neon_header*)l);
+}
+
+TEST_EXIT(set_traps_out_of_bounds, NEON_TRAP) {
+    neon_list* l = neon_list_new(&nt_i64_w);
+    int64_t a = 1, b = 2;
+    l = neon_list_push(l, &a);
+    l = neon_list_push(l, &b);
+    int64_t z = 0;
+    neon_list_set(l, 5, &z);
 }
 
 TEST(mutating_a_shared_list_copies_it) {

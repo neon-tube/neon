@@ -10,34 +10,17 @@
 
 #include <cstdint>
 #include <cstdio>
-#include <sys/wait.h>
-#include <unistd.h>
 
 extern "C" {
 #include "libneon_rt.h"
 #include "internal.h"
 }
 
-// True when `fn` traps. A trap is `_exit(101)` (`runtime/src/trap.c`), which cannot be
-// caught in-process, so the only way to assert "this input traps" is to run it in a child
-// and inspect the exit status. If `fn` returns without trapping the child exits 0 and this
-// reports false; a real trap exits 101 and this reports true.
-//
-// Deliberately forks per call rather than sharing a child: a test that expects several
-// distinct inputs to trap wants each isolated, and a trap leaves no state to reuse anyway.
-// stdio is flushed first so the parent's buffered output is not duplicated by the fork.
-template <class F>
-static inline bool traps(F&& fn) {
-    fflush(nullptr);
-    pid_t pid = fork();
-    if (pid == 0) {
-        fn();
-        _exit(0); // reached only if fn did not trap
-    }
-    int status = 0;
-    waitpid(pid, &status, 0);
-    return WIFEXITED(status) && WEXITSTATUS(status) == 101;
-}
+// A trap is `_exit(101)` (`runtime/src/trap.c`): an uncatchable abort for precondition
+// violations — out-of-bounds access, division by zero, a missing map key. It cannot be
+// observed in-process, so "this input traps" is asserted with minunit's `TEST_EXIT`, whose
+// body runs in a forked child: the test passes iff that child exits with this status.
+static constexpr int NEON_TRAP = 101;
 
 // ---- witnesses ----
 //

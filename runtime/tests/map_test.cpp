@@ -55,15 +55,12 @@ TEST(find_and_contains) {
     TEST_EXPECT(neon_map_contains(m, &k));
 }
 
-TEST(at_traps_on_missing_key) {
+TEST_EXIT(at_traps_on_missing_key, NEON_TRAP) {
     neon_map* m = neon_map_new(&nt_i64_key, &nt_i64_w);
     int64_t k = 1, v = 9;
     m = neon_map_set(m, &k, &v);
-    TEST_EXPECT(traps([&] {
-        int64_t absent = 42;
-        neon_map_at(m, &absent);
-    }));
-    neon_release((neon_header*)m);
+    int64_t absent = 42;
+    neon_map_at(m, &absent);
 }
 
 TEST(remove) {

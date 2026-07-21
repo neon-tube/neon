@@ -102,16 +102,10 @@ if(NEON_RT_TESTS)
     set(CMAKE_CXX_STANDARD_REQUIRED ON)
     enable_testing()
 
-    # minunit forks each test by default (crash isolation). We turn that OFF deliberately:
-    # LeakSanitizer runs its check at process exit, and a forked child writes its pass/fail
-    # result *before* that check, so a leak in a forked test is printed to stderr but never
-    # fails the suite — the run stays green with exit 0. Running every test in one process
-    # instead means the exit-time leak check governs the process exit code, so a leak is a
-    # hard failure. The cost is that an unexpected crash aborts the whole run rather than one
-    # test — acceptable, since a crash is a non-zero exit either way, and the trap tests fork
-    # their own child (see `traps`) so the main process never traps.
-    set(FORKED_TEST_RUNNER_SELECTED OFF CACHE BOOL "" FORCE)
-
+    # minunit's forked runner (the default): each run is a child process, so a crash is
+    # reported instead of taking the harness down with it, and its `TEST_EXIT` macro — a test
+    # whose body must exit with a given status — is available. The trap tests below use it to
+    # assert that a precondition violation is an uncatchable `_exit(101)` (see `support.h`).
     include(FetchContent)
     FetchContent_Declare(
         minunit
