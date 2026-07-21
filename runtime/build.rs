@@ -17,6 +17,14 @@ fn main() {
     // building the same compiler twice under two names would stage a lie. A family whose
     // compiler is absent is skipped — the CLI reports a missing flavor at link time,
     // naming what this machine had when the toolchain was built.
+    // `-march=native` in the runtime archives is opt-in and only sound from source: this
+    // build script runs on the machine that will run the program, so tuning for its CPU is
+    // safe here in a way it never is for a shipped archive. `NEON_RT_NATIVE` in the
+    // environment turns it on; the release CI that packages downloadable archives leaves it
+    // unset. `CMakeLists.txt` still probes that the compiler accepts the flag.
+    println!("cargo:rerun-if-env-changed=NEON_RT_NATIVE");
+    let native = std::env::var_os("NEON_RT_NATIVE").is_some();
+
     let out = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
     let mut built: Vec<&str> = Vec::new();
     for flavor in ["gcc", "clang"] {
@@ -29,6 +37,7 @@ fn main() {
             .no_default_flags(true)
             .define("CMAKE_BUILD_TYPE", "None")
             .define("CMAKE_C_COMPILER", flavor)
+            .define("NEON_RT_NATIVE", if native { "ON" } else { "OFF" })
             .out_dir(out.join(flavor))
             .build();
         built.push(flavor);

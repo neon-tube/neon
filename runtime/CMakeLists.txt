@@ -32,34 +32,59 @@ set(NEON_RT_SOURCES
 # Two deliberate differences from what `cc_args` would have produced when the runtime was
 # compiled from source alongside the program:
 #
-#   * `-flto` only as FAT objects, and only where the compiler supports them. The
-#     objection to a plain `-flto` archive stands: it carries compiler-version-specific
-#     bitcode and nothing else, and the compiler that built the toolchain is not the `cc`
-#     that links a user's program. `-ffat-lto-objects` emits both -- bitcode *and* real
-#     machine code -- so an LTO-capable matching `cc` inlines through the archive and any
-#     other compiler links the `.text` exactly as before. Verified on this archive: the
-#     objects carry `.gnu.lto_*` sections and a populated `.text`.
+#   * `-flto`, as FAT objects where the compiler emits them and plain bitcode otherwise.
+#     `-ffat-lto-objects` emits both -- bitcode *and* real machine code -- so an LTO-capable
+#     matching `cc` inlines through the archive and *any other* compiler still links the
+#     `.text`. That last property matters only across compiler *families*: a gcc-built
+#     bitcode-only archive cannot be linked by clang at all (it is not machine code and the
+#     bitcode dialects do not cross). But the archives are split by family already
+#     (`lib/<flavor>/`, chosen by `cli/src/buildcfg.rs::cc_flavor`), so the clang archive is
+#     only ever linked by a clang `cc` -- which means a bitcode-only `-flto` archive is
+#     perfectly linkable there, and refusing LTO to a clang that lacks fat objects (Apple
+#     Clang rejects the flag on arm64) throws away the entire inlining win for insurance the
+#     flavor split already provides. So: fat objects when available, plain `-flto` when only
+#     that is (still family-locked, still linkable), no LTO only when neither is.
+#
+#     The one residual is cross-*version* within a family, in the prebuilt-download install
+#     path: CI's clang builds the archive and the user's clang links it. LLVM bitcode
+#     auto-upgrades across versions, so this degrades gracefully rather than hard-failing
+#     like the cross-family case; and the from-source install (`cargo build --release`,
+#     `NEON_BUILD_FROM_SOURCE`) uses one compiler for both, where plain `-flto` is exact.
 #
 #     It is worth the archive size. The runtime's primitives are small and called from
 #     the innermost loops a program has -- `neon_list_at` is four lines and a bounds
 #     check -- so leaving them un-inlinable costs more than it sounds: on the brainfuck
 #     benchmark (10^8 ops) an un-inlinable runtime ran 3.66s against 1.08s for the same
-#     program compiled whole, and `neon_list_at` alone was 22% of the profile.
-#   * No `-march=native` (see the `OptRelease` note in `runtime_variant`): a prebuilt
-#     archive is built once, for an unknown target.
+#     program compiled whole (2.21s vs 0.87s measured again on arm64/Apple Clang, which is
+#     exactly the flavor the no-LTO fallback used to strand), and `neon_list_at` alone was
+#     22% of the profile.
+#   * No `-march=native` by default: a prebuilt archive is built once, for a target it does
+#     not know, and native code for the build machine SIGILLs on a user's older CPU. But a
+#     from-source install *does* know its target is the machine it runs on, so
+#     `-DNEON_RT_NATIVE=ON` (set by build.rs when `NEON_RT_NATIVE` is in the environment)
+#     opts in. The release CI that produces downloadable archives never sets it.
 #
 # Also: `cflags`/`-D` a user passes reach their program only. They no longer reach the
 # runtime, because the runtime is no longer compiled per build.
-# Fat LTO objects are a GCC spelling; clang has historically not accepted the flag. Probe
-# rather than assume, and fall back to no LTO at all rather than to a plain `-flto` -- a
-# bitcode-only archive is the thing that cannot be linked by a different compiler, which
-# is the whole reason this is conditional.
 include(CheckCCompilerFlag)
 check_c_compiler_flag("-flto -ffat-lto-objects" NEON_RT_HAS_FAT_LTO)
+check_c_compiler_flag("-flto" NEON_RT_HAS_LTO)
 if(NEON_RT_HAS_FAT_LTO)
     set(NEON_RT_LTO -flto -ffat-lto-objects)
+elseif(NEON_RT_HAS_LTO)
+    set(NEON_RT_LTO -flto)
 else()
     set(NEON_RT_LTO)
+endif()
+
+# `-march=native` only when a from-source build opts in (see the note above): safe because
+# such a build targets the machine compiling it, never safe for a shipped archive.
+option(NEON_RT_NATIVE "Build the runtime archives with -march=native (from-source only)" OFF)
+if(NEON_RT_NATIVE)
+    check_c_compiler_flag("-march=native" NEON_RT_HAS_NATIVE)
+    if(NEON_RT_HAS_NATIVE)
+        list(APPEND NEON_RT_LTO -march=native)
+    endif()
 endif()
 
 function(neon_rt_variant name)

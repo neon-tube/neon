@@ -223,3 +223,29 @@ impl Sysroot {
         self.0.join("stdlib")
     }
 }
+
+/// Whether a runtime archive carries LTO material a matching `cc` can inline through. A
+/// build that passes `-flto` against an archive that does not is not an error — it links
+/// and runs correctly — but the runtime's primitives stay un-inlinable in hot loops, which
+/// on tight code is a ~2.5x regression with no other symptom. `emit::link` warns on it.
+///
+/// A raw byte scan rather than shelling out to `ar`/`nm`/`llvm-bcanalyzer`: it needs no
+/// tools present on the user's machine, and the two markers are unambiguous. Both ship
+/// shapes are covered — clang emits LLVM bitcode (checked against gcc-15 and Apple Clang
+/// archives here), gcc emits fat objects whose ELF section names carry `.gnu.lto_`:
+///   * LLVM bitcode: the wrapper magic `0x0B17C0DE` (little-endian `DE C0 17 0B`) or the
+///     raw bitcode magic `BC\xC0\xDE`.
+///   * GCC fat LTO: the literal section-name substring `.gnu.lto_`.
+/// A read error returns `true`: the warning must never itself break a build, and assuming
+/// an archive is fine is the safe direction for a diagnostic.
+pub fn archive_has_lto(path: &std::path::Path) -> bool {
+    let Ok(bytes) = std::fs::read(path) else {
+        return true;
+    };
+    const LLVM_WRAPPER: &[u8] = &[0xDE, 0xC0, 0x17, 0x0B];
+    const LLVM_RAW: &[u8] = &[0x42, 0x43, 0xC0, 0xDE];
+    const GCC_FAT: &[u8] = b".gnu.lto_";
+    bytes.windows(LLVM_WRAPPER.len()).any(|w| w == LLVM_WRAPPER)
+        || bytes.windows(LLVM_RAW.len()).any(|w| w == LLVM_RAW)
+        || bytes.windows(GCC_FAT.len()).any(|w| w == GCC_FAT)
+}

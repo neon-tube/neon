@@ -301,6 +301,14 @@ impl BuildConfig {
         ))
     }
 
+    /// Whether this build passes `-flto`, and so expects the runtime archive to carry LTO
+    /// bitcode it can inline through. The single source of truth for that condition —
+    /// `cc_args` emits `-flto` exactly when this is true, and the link path checks the
+    /// archive can honor it against the same predicate (see `emit::link`).
+    pub fn uses_lto(&self) -> bool {
+        !self.mode.is_debug()
+    }
+
     /// Which archive flavor this build's `cc` needs, probed from `cc --version` rather
     /// than the name — `cc` is usually a symlink, and on macOS `gcc` *is* clang. Not
     /// cached: it runs once per build, at link time, and a probe that cannot run at all
@@ -388,7 +396,7 @@ impl BuildConfig {
         // un-inlinable call — and measured on this workload LTO is both *faster to build*
         // and better optimised than not having it. `debug` skips it: at -O0 there is no
         // inlining to gain, and LTO degrades the debug info that mode exists for.
-        if !self.mode.is_debug() {
+        if self.uses_lto() {
             args.push("-flto".into());
         }
         // `opt-release` trims the frame pointer, which is exactly what a stacktrace needs

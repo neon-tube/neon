@@ -61,6 +61,21 @@ fn link(c_source: &str, out: &Path, cfg: &BuildConfig) -> Result<()> {
     if let Some(note) = &archive.note {
         eprintln!("{note}");
     }
+    // The build passes `-flto` but the archive it links carries no LTO material for this
+    // `cc` to inline through. Correct, just slow — and otherwise silent, which is exactly
+    // how a no-LTO runtime once shipped on Apple Clang (which rejected the fat-objects
+    // flag the archive was built with). A warning, never a failure: same policy as above.
+    if cfg.uses_lto() && !crate::sysroot::archive_has_lto(&archive.path) {
+        eprintln!(
+            "warning: this build passes `-flto`, but the runtime archive at {} carries no \
+             LTO bitcode, so the runtime's primitives (`neon_list_at`, retain/release, \
+             element writes) stay un-inlinable in hot loops — measured ~2.5x on tight code. \
+             Rebuild or reinstall the toolchain so its archive for `{}` carries LTO \
+             material (a from-source `cargo build --release` on this machine does).",
+            archive.path.display(),
+            cfg.cc,
+        );
+    }
     let mut cmd = Command::new(&cfg.cc);
     cmd.args(cfg.cc_args(variant))
         .arg("-o")
