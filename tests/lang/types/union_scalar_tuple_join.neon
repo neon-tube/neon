@@ -1,0 +1,44 @@
+// An `if`/`match` join into `(union, scalar)` keeps the scalar (formerly TODO #8d).
+// The two arms build tuples whose first elements are DIFFERENT members of the union
+// (`bool` vs `null`), so the join is typed at `(bool, i64) | (null, i64)` — a union of
+// tuple shapes — and flowing it into the annotated `(J, i64)` needs the live arm's
+// tuple rebuilt element-wise. Codegen used to fall through to a zeroed literal there:
+// `k` came back 0, not 4 — compiled, exited 0, wrong data. The coercion now switches
+// on the discriminant and widens each variant into the target shape.
+//
+// The shapes that always worked are pinned alongside: arms agreeing on the member,
+// and widening each element to the union before the tuple. Found originally writing a
+// DOM JSON parser, where every `parse_value` arm returns `(Json, next)`.
+
+use std::io;
+
+type J = null | bool | i64 | f64 | str
+
+fn disagree(cond: bool) -> (J, i64) {
+    if cond { (true, 4) } else { (null, 5) }
+}
+
+fn agree(cond: bool) -> (J, i64) {
+    if cond { (true, 4) } else { (false, 5) }
+}
+
+fn prewidened(cond: bool) -> (J, i64) {
+    let j: J = if cond { true } else { null };
+    (j, if cond { 4 } else { 5 })
+}
+
+fn main() {
+    let (v, k) = disagree(true);
+    io::println(to_string(k));
+    let (v2, k2) = disagree(false);
+    io::println(to_string(k2));
+    let (v3, k3) = agree(true);
+    io::println(to_string(k3));
+    let (v4, k4) = prewidened(false);
+    io::println(to_string(k4));
+    // The union half survives too: the first element really is the arm's member.
+    let (j, _) = disagree(true);
+    io::println(to_string(j is bool));
+    let (j2, _) = disagree(false);
+    io::println(to_string(j2 == null));
+}

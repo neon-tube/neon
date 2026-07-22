@@ -2004,6 +2004,23 @@ fn coerce_expr(types: &TypeTable, expr: &str, src: &Repr, target: &Repr) -> Stri
         if let Some(i) = from.iter().position(|vr| vr == target) {
             return format!("{expr}.u._{i}");
         }
+        // No exact member: switch on the discriminant and widen EACH variant into the
+        // target. This is how a join typed at a union of shapes flows into one wider
+        // shape — `if c { (true, 4) } else { (null, 5) }` is a `(bool, i64) |
+        // (null, i64)` at the join, and an annotated `(J, i64)` slot needs the live
+        // arm's tuple rebuilt element-wise, not the union's bytes reinterpreted.
+        // Falling to the zeroed literal here is how the `i64` tail of that tuple came
+        // back 0 (TODO §8d). A variant that genuinely cannot widen still zeroes — but
+        // per variant, on an arm the checker proved dead.
+        let last = from.len() - 1;
+        let mut out = coerce_expr(types, &format!("{expr}.u._{last}"), &from[last], target);
+        for (i, sv) in from.iter().enumerate().take(last).rev() {
+            out = format!(
+                "({expr}.tag == {i} ? {} : {out})",
+                coerce_expr(types, &format!("{expr}.u._{i}"), sv, target)
+            );
+        }
+        return out;
     }
     // Narrowed `any`: the checker refined an erased value to a concrete type; unbox it
     // through the tag check. Sound because tags are canonical — and if the refinement is

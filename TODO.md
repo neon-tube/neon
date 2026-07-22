@@ -53,26 +53,6 @@ The block parses and type-checks. The failing assert does nothing, and there is 
 `decisions.md` chose assert intrinsics over a library specifically for the reporting they
 would give, and that reporting does not exist.
 
-### 8d. An `if`/`match` join into `(union, scalar)` mislays the scalar
-
-```neon
-type J = null | bool | i64 | f64 | str
-fn f(cond: bool) -> (J, i64) { if cond { (true, 4) } else { (null, 5) } }
-let (v, k) = f(true);      // k is 0, not 4 — compiles, exits 0, wrong data
-```
-
-The two arms build tuples whose first elements are *different* members of the union (`bool`
-vs `null`), so each arm boxes that element at its own repr; the join adopts one arm's tuple
-layout and the `i64` tail is then read at the wrong offset for the other arm's value. The
-same disease canonical tags fixed at the `any` boundary (docs/design/checked-casts.md,
-decision 5) — a union laid out by one arm and read by another — still live at tuple joins.
-
-Not triggered when the arms agree: `(true, 4)`/`(false, 5)` is correct, and a single-arm
-`(true, 4)` at `(J, i64)` is correct. Recursion is not required — the union above is a plain
-`type`. Widening each arm's element to the union *before* the tuple (one `J`-typed binding,
-one tuple built after the join) is correct, as is returning a record instead of a tuple.
-Found writing a DOM JSON parser, where every `parse_value` arm returns `(Json, next)`.
-
 ---
 
 ## P1 — structural. These are why P0 items keep appearing.
