@@ -1,42 +1,18 @@
 # TODO
 
 Everything known-broken or undecided as of 2026-07-22, distilled from six middle-end
-audits, a compiler-wide collapsing-key sweep, the CBMC models and a fuzzing run.
-Resolved items are removed, not struck through — their write-ups live in the design docs
-they produced (`docs/design/identity.md`, `docs/design/opacity.md`,
-`docs/design/checked-casts.md`).
+audits, a compiler-wide collapsing-key sweep, the CBMC models and a fuzzing run — and
+then burned down: **the P0 section is empty.** Every known miscompile and
+wrong-program-accepted defect it held is fixed and corpus-pinned; resolved items are
+removed, not struck through, and their write-ups live in the design docs they produced
+(`docs/design/identity.md`, `docs/design/opacity.md`, `docs/design/checked-casts.md`)
+and in the corpus files the fixes are pinned by.
 
-Each item has a repro or a file:line. Nothing here is speculative — the unproven leads are
-in their own section at the bottom and marked as such.
-
----
-
-## P0 — soundness. These miscompile or accept wrong programs.
-
-### 7b. Generic impls never apply
-
-```neon
-impl[T] Tag for Pair[T] { ... }
-Tag::tag(p)                      // no impl of `Tag` for `Pair[i64]`
-```
-
-The target's `T` is rigid, so the emptiness query that decides applicability is always
-empty. `ImplDef.generics` is stored and **consumed by nothing**. A whole feature that
-parses, type-checks its own body, and never matches.
-
-Bounded impls do not parse at all: `ast::ImplDecl` has no `wheres` and `parser::impl_decl`
-has no `where`. `dispatch.md` describes both as design rather than as built.
-
-### 8b. `test` blocks are silently inert
-
-```neon
-test "arithmetic" { assert(1 + 1 == 3); }   // compiles; the program prints "main ran"
-```
-
-The block parses and type-checks. The failing assert does nothing, and there is no
-`neon test` verb in `cli/src/cmd/`. The language has testing syntax that runs nothing —
-`decisions.md` chose assert intrinsics over a library specifically for the reporting they
-would give, and that reporting does not exist.
+What remains is of a different kind: one structural gap awaiting infrastructure (§19),
+one language decision (§16), the perf programs, one verification-tooling gap (13c), the
+serialization roadmap (the plan-of-record for finishing dispatch, including generic
+impls — former §7b), and the deliberately-separate unproven leads and environment
+hazards. Each item still has a repro or a file:line.
 
 ---
 
@@ -330,11 +306,17 @@ finished. The concrete pieces, in order, each closing an item already listed abo
 2. **Parse `where` on impls.** `ast::ImplDecl` has no `wheres` and `parser::impl_decl` has no
    `where` clause. Cheap; unblocks bounded impls, which do not parse today.
 
-3. **Impl-head unification, not intersection** (item 7b). Applicability at `dispatch.rs:220`
-   does `intersect(receiver, target)`, so `impl[T] Serialize for List[T]` never matches — its
-   `T` is rigid, the meet is empty. Treat the impl's own generics as flexible holes and
-   *match* the receiver against the head, yielding a substitution (`T ↦ i64`).
-   `ImplDef.generics` is stored and consumed by nothing today; this is what consumes it.
+3. **Impl-head unification, not intersection** (absorbs former item 7b — generic impls
+   never apply). Applicability in `dispatch.rs::applicable` does
+   `intersect(receiver, target)`, so `impl[T] Tag for Pair[T]` never matches anything —
+   its `T` is rigid, the meet is always empty; the whole feature parses, type-checks its
+   own body, and never fires (`Tag::tag(p)` → "no impl of `Tag` for `Pair[i64]`").
+   Treat the impl's own generics as flexible holes and *match* the receiver against the
+   head (`generic::infer`, the same machinery `solve_generics` uses), yielding a
+   substitution (`T ↦ i64`) that must also flow into the selection's ret/throws and
+   into lowering's instance key — the `InstanceJob` machinery that already
+   monomorphises method-level generics per call site. `ImplDef.generics` is stored and
+   consumed by nothing today; this is what consumes it.
 
 4. **Discharge the context under the subst.** With `T ↦ i64`, `where T: Serialize` becomes a
    subgoal resolved by another applicability query → `Direct(impl Serialize for i64)`. It
