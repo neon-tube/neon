@@ -9,9 +9,12 @@
 # (see cli/build.rs), which is exactly the layout Sysroot::find resolves:
 #
 #     prefix/bin/neon             prefix/lib/gcc/libneon_rt{,_debug,_san}.a
-#     prefix/bin/neon-lsp         prefix/lib/clang/libneon_rt{,_debug,_san}.a
+#                                 prefix/lib/clang/libneon_rt{,_debug,_san}.a
 #     prefix/include/             prefix/stdlib/
-#     prefix/extra/
+#
+# The language server (`neon-lsp`) and the editor plugins live in their own repos under
+# github.com/neon-tube now, so this repo's build no longer produces `neon-lsp`. The
+# guarded copies below still pick one up if a release asset happens to carry it.
 #
 # lib/ carries one archive set per compiler family present on the build machine; the
 # compiler picks the flavor matching its `cc` at link time and `neon doctor` reports
@@ -54,7 +57,7 @@ fi
 info "Neon toolchain action: ${CYAN}$ACTION${NC}"
 info "Target prefix: ${CYAN}$PREFIX${NC}"
 
-mkdir -p "$PREFIX/bin" "$PREFIX/lib" "$PREFIX/include" "$PREFIX/stdlib" "$PREFIX/extra"
+mkdir -p "$PREFIX/bin" "$PREFIX/lib" "$PREFIX/include" "$PREFIX/stdlib"
 
 if [ -n "$NEON_BUILD_FROM_SOURCE" ] && [ "$NEON_BUILD_FROM_SOURCE" != "0" ] && [ "$NEON_BUILD_FROM_SOURCE" != "false" ]; then
     BUILD_FROM_SOURCE=true
@@ -116,7 +119,7 @@ if [ "$BUILD_FROM_SOURCE" = true ]; then
         if git -C "$SCRIPT_DIR_ABS" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
             REPO_URL="$(git -C "$SCRIPT_DIR_ABS" rev-parse --show-toplevel)"
         else
-            REPO_URL=$(git remote get-url origin 2>/dev/null || echo "https://github.com/jkbbwr/neon.git")
+            REPO_URL=$(git remote get-url origin 2>/dev/null || echo "https://github.com/neon-tube/neon.git")
         fi
         info "Cloning Neon repository into ${CYAN}$PREFIX/release${NC}..."
         if [ -d "$PREFIX/release" ]; then
@@ -128,7 +131,7 @@ if [ "$BUILD_FROM_SOURCE" = true ]; then
         info "Updating Neon repository in ${CYAN}$PREFIX/release${NC}..."
         if [ ! -d "$PREFIX/release" ]; then
             warn "Release directory $PREFIX/release does not exist. Cloning it..."
-            git clone "https://github.com/jkbbwr/neon.git" "$PREFIX/release"
+            git clone "https://github.com/neon-tube/neon.git" "$PREFIX/release"
         else
             git -C "$PREFIX/release" pull
         fi
@@ -163,13 +166,13 @@ else
     info "Mode: ${CYAN}installing latest prebuilt release from GitHub${NC}"
 
     if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-        REPO_URL="$(git remote get-url origin 2>/dev/null || echo "https://github.com/jkbbwr/neon.git")"
+        REPO_URL="$(git remote get-url origin 2>/dev/null || echo "https://github.com/neon-tube/neon.git")"
     else
-        REPO_URL="https://github.com/jkbbwr/neon.git"
+        REPO_URL="https://github.com/neon-tube/neon.git"
     fi
     REPO_NAME=$(echo "$REPO_URL" | sed -E 's/.*github\.com[:\/]([^\/]+\/[^\/\.]+).*/\1/')
     if [ -z "$REPO_NAME" ] || [[ "$REPO_NAME" == *.* ]] || [[ "$REPO_NAME" == *:* ]]; then
-        REPO_NAME="jkbbwr/neon"
+        REPO_NAME="neon-tube/neon"
     fi
 
     API_URL="https://api.github.com/repos/$REPO_NAME/releases/latest"

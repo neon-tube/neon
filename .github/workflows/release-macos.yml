@@ -1,6 +1,6 @@
 name: Release (aarch64 macos)
 
-# Manual. Produces the toolchain a user installs: the `neon`/`neon-lsp` binaries with the
+# Manual. Produces the toolchain a user installs: the `neon` binary with the
 # sysroot (include/, lib/<flavor>/, stdlib/) they resolve relative to themselves, packaged
 # in the install layout, as a workflow artifact. Nothing is published anywhere by this
 # workflow. The VS Code extension has its own workflow (vscode.yml), so it can ship without
@@ -36,14 +36,13 @@ jobs:
 
       # `cargo build` already staged include/, lib/, stdlib/ next to the binaries. Assemble
       # a prefix: bin/ beside them, which is what `Sysroot::find` resolves from bin/neon's
-      # parent. Both binaries go in bin/ — neon-lsp is the language server the editor plugins
-      # launch.
+      # parent. (`neon-lsp` ships from its own repo now, so it is not bundled here.)
       - name: Stage prefix
         run: |
           set -eux
           prefix=neon-aarch64-macos
           mkdir -p "$prefix/bin"
-          cp target/release/neon target/release/neon-lsp "$prefix/bin/"
+          cp target/release/neon "$prefix/bin/"
           cp -r target/release/include target/release/lib target/release/stdlib "$prefix/"
           tar -czf "$prefix.tar.gz" "$prefix"
 

@@ -30,7 +30,7 @@ RUN cargo build --release --locked
 # which is the layout `Sysroot::find` resolves from the binary's parent directory.
 RUN set -eux; \
     mkdir -p /out/bin; \
-    cp target/release/neon target/release/neon-lsp /out/bin/; \
+    cp target/release/neon /out/bin/; \
     cp -r target/release/include target/release/lib target/release/stdlib /out/
 
 # ---- final ----
