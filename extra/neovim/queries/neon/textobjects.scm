@@ -1,1 +1,0 @@
-../../../tree-sitter-neon/queries/textobjects.scm

@@ -1,8 +1,0 @@
-# Build artifacts. `src/` is committed on purpose so consumers need no
-# tree-sitter CLI; everything below is produced from it.
-*.so
-*.dylib
-*.dll
-*.wasm
-node_modules/
-target/
