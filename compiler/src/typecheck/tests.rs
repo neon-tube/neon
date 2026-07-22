@@ -599,15 +599,47 @@ fn nested_member_of_the_recursive_type() {
 }
 
 #[test]
-fn recursion_with_no_base_case_is_empty() {
+fn recursion_through_a_slot_alone_is_inhabited() {
     let mut s = s();
-    // `mu B = Box[B]` — no finite value inhabits it. The coinductive assumption is
-    // what decides this: assume B empty, and the derivation finds no contradiction.
+    // `mu B = Box[B]` where `Box` has NO fields: the only tie to `B` is the
+    // type-argument slot, which is identity rather than data, so a fieldless `Box`
+    // value inhabits the type whatever `B` is (`empty.rs::field_empty` — the rule
+    // that makes `record Tree { kids: List[Tree] }` a usable type). This used to
+    // assert empty, which is the inductive reading of a phantom position; the slot
+    // still decides *disjointness* (`Box[i64] ∧ Box[str]` is empty through a closed
+    // never in the slot), just not inhabitedness through a cycle.
     let b = s.t.reserve();
     let box_b = boxed(&mut s, b);
     let d = s.t.data(box_b);
     s.t.define(b, d);
+    assert!(!s.is_empty(b));
+}
+
+#[test]
+fn recursion_through_a_data_field_with_no_base_case_is_empty() {
+    let mut s = s();
+    // The counterpart: the cycle runs through a real field, no finite value exists,
+    // and the inductive reading holds.
+    let b = s.t.reserve();
+    let n = s.t.name("Box");
+    let item = s.t.name("item");
+    let box_b = s.t.nominal(n, vec![], vec![(item, b)]);
+    let d = s.t.data(box_b);
+    s.t.define(b, d);
     assert!(s.is_empty(b));
+}
+
+#[test]
+fn slot_disjointness_survives_the_slot_rule() {
+    let mut s = s();
+    // The slot still carries nominal argument identity: two instantiations meet to a
+    // closed `never` in the slot, and THAT emptiness is untainted and counts.
+    let i = s.t.i64();
+    let st = s.t.str();
+    let bi = boxed(&mut s, i);
+    let bs = boxed(&mut s, st);
+    let meet = s.t.intersect(bi, bs);
+    assert!(s.is_empty(meet), "Box[i64] ∧ Box[str] stays empty");
 }
 
 #[test]

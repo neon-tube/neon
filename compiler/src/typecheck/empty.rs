@@ -210,7 +210,7 @@ impl Solver {
         }
 
         for &l in &labels {
-            if self.is_empty(map[&l]) {
+            if self.field_empty(l, map[&l]) {
                 return true;
             }
         }
@@ -220,6 +220,41 @@ impl Solver {
 
         map.insert(REST, rest);
         self.rec_neg(&labels, &map, neg)
+    }
+
+    /// A field's emptiness as it counts against its atom's inhabitedness.
+    ///
+    /// A type-argument slot (`#0`, `#1`, …) is identity, not data: no value of
+    /// `List[Tree]` contains a `Tree`-typed member for the slot — the empty list
+    /// inhabits `List[Tree]` whatever `Tree` is. So a slot kills its atom only when it
+    /// is empty *without leaning on the in-progress assumption*: `List[i64] ∧
+    /// List[str]`'s slot is `i64 ∧ str`, a closed `never`, and nominal argument
+    /// disjointness lives exactly there — while `record Tree { kids: List[Tree] }`
+    /// reaches the slot only through its own cycle, and the assumption-tainted "empty"
+    /// that comes back is the inductive reading of a phantom position, which made every
+    /// record whose recursion runs through a container falsely uninhabited (`Tree` had
+    /// "no field `v`", because no projection path survived).
+    ///
+    /// Data fields stay inductive, deliberately: a record cycle with no base case
+    /// (`record Wrap { t: Tree }  record Tree { kids: Wrap }`) has no finite values,
+    /// and reporting it empty is correct.
+    pub fn field_empty(&mut self, l: NameId, ty: TyId) -> bool {
+        if !self.arg_slot(l) {
+            return self.is_empty(ty);
+        }
+        let outer = self.tainted;
+        self.tainted = false;
+        let r = self.is_empty(ty);
+        let leaned = self.tainted;
+        self.tainted = outer || leaned;
+        r && !leaned
+    }
+
+    /// Whether `l` is a nominal type-argument slot: `#` followed by digits. `#nominal`
+    /// and `#inner` do not match — the tag is an atom and the newtype payload is data.
+    fn arg_slot(&self, l: NameId) -> bool {
+        let n = self.t.name_str(l);
+        n.len() > 1 && n.starts_with('#') && n[1..].bytes().all(|b| b.is_ascii_digit())
     }
 
     /// To escape every negative, the record must differ from each on *some* field.

@@ -840,8 +840,13 @@ mod tests {
         assert_eq!(p(&mut s, f), "mu A0 = null | ((i64) -> A0)");
     }
 
-    /// `mu B = Box[B]` is empty, but it is not the `never` descriptor, and a printer
-    /// does not get to decide emptiness. What it prints is what the type is.
+    /// `mu B = Box[B]` prints as itself — the printer does not get to decide
+    /// emptiness. And it is NOT empty: `Box` here has no fields, so its only tie to
+    /// `B` is the type-argument slot, which is identity rather than data — a fieldless
+    /// `Box` value inhabits `Box[B]` whatever `B` is (`empty.rs::field_empty`; the
+    /// rule that makes `record Tree { kids: List[Tree] }` inhabited). A recursion with
+    /// no base case through a *data* field is still empty — see
+    /// `a_data_cycle_with_no_base_case_is_empty` below.
     #[test]
     fn a_recursion_with_no_base_case_still_prints() {
         let mut s = s();
@@ -853,6 +858,22 @@ mod tests {
         let d = s.t.data(box_b);
         s.t.define(b, d);
         assert_eq!(p(&mut s, b), "mu A0 = Box[A0]");
+        assert!(!s.is_empty(b));
+    }
+
+    /// The counterpart: recursion through a real field has no finite values, and the
+    /// inductive reading holds — data cycles stay empty.
+    #[test]
+    fn a_data_cycle_with_no_base_case_is_empty() {
+        let mut s = s();
+        let b = s.t.reserve();
+        let box_b = {
+            let n = s.t.name("Box");
+            let item = s.t.name("item");
+            s.t.nominal(n, vec![], vec![(item, b)])
+        };
+        let d = s.t.data(box_b);
+        s.t.define(b, d);
         assert!(s.is_empty(b));
     }
 

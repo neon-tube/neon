@@ -295,7 +295,10 @@ fn rec_path_field(
     }
 
     for &l in &labels {
-        if s.is_empty(map[&l]) {
+        // Slot-aware, as in `rec_path_empty`: a type-argument slot made empty only by
+        // the recursion cycle must not kill the projection path, or every field of a
+        // record whose recursion runs through a container reads as absent.
+        if s.field_empty(l, map[&l]) {
             return;
         }
     }

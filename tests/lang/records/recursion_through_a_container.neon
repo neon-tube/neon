@@ -1,0 +1,31 @@
+// A record whose recursion runs through `List` is a usable type (formerly TODO #8):
+// construction worked, but reading ANY field back reported "`Tree` has no field" --
+// even the scalar. The cycle reached `List[Tree]`'s type-argument slot, the emptiness
+// derivation's inductive re-entry assumption judged the slot empty, the atom
+// uninhabited, and every projection path died.
+//
+// The rule that fixes it (`empty.rs::field_empty`): an argument slot is identity, not
+// data -- the empty list inhabits `List[Tree]` whatever `Tree` is -- so a slot kills
+// its atom only through a CLOSED never (`List[i64] ∧ List[str]`'s slot; nominal
+// argument disjointness lives exactly there), never through the cycle's own
+// assumption. Data fields stay inductive: a record cycle with no base case through a
+// real field is still empty, and still reported.
+
+use std::io;
+use std::collections::list;
+
+record Tree { v: i64, kids: List[Tree] }
+
+fn sum(t: Tree) -> i64 {
+    list::fold(t.kids, t.v, (a: i64, k: Tree) => a + sum(k))
+}
+
+fn main() {
+    let leaf2 = Tree { v: 3, kids: [] };
+    let leaf = Tree { v: 2, kids: [leaf2] };
+    let root = Tree { v: 1, kids: [leaf] };
+    io::println(to_string(root.v));
+    io::println(to_string(list::len(root.kids)));
+    io::println(to_string(root.kids[0].v));
+    io::println(to_string(sum(root)));
+}

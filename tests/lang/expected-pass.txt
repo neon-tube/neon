@@ -246,6 +246,7 @@ records/opaque_no_structural_views.neon
 records/opaque_no_union_field_read.neon
 records/opaque_nominal_flows_stay_legal.neon
 records/opaque_values_still_travel.neon
+records/recursion_through_a_container.neon
 records/recursive_equality.neon
 records/recursive_mutual.neon
 records/recursive_self.neon

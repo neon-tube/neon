@@ -56,11 +56,6 @@ has no `where`. `dispatch.md` describes both as design rather than as built.
 A two-impl union receiver compiles, exits 0, and prints `<todo: dispatch switch>`. Same
 family as item 7 and wants the same variant-switch machinery.
 
-### 8. Reading a field off a record whose recursion runs through `List`
-
-Reports ``L has no field `xs` `` for a field that is declared. Construction works; only the
-read fails.
-
 ### 8b. `test` blocks are silently inert
 
 ```neon
