@@ -101,26 +101,6 @@ function, not as a doc. No verifier can be written until someone defines it.
 
 This is the shape that *precedes* a Class B bug rather than an instance of one.
 
-### 12. Collapsing keys — the class has no bottom yet
-
-A lossy projection used as an identity. Not a fallback: these functions are total and every
-arm is correct *as a description*; the codomain is just smaller than the domain.
-
-Fixed in the 2026-07-20 sweep: `repr_key`, `type_tag_name` (three separate times), `field_name`, closure tags.
-Still open: `repr_from_typespec` drops type arguments so `ident[Box[i64]]` and
-`ident[Box[str]]` collide (currently caught by gcc — "correct by coincidence");
-`impl_head`'s `_ => String::new()` makes two tuple impls collide into one symbol.
-
-The sweep's own verdict: *"I kept finding more, and the rate did not fall."* Each fix pushed
-the question one layer up — fix the tag, the repr feeding it is collapsed; fix the repr, the
-type it came from is collapsed. It terminates at whatever the compiler treats as a primitive
-name — which, since the identity fix (`docs/design/identity.md`), is the qualified
-declaration key rather than a bare string, so the class now has its bottom.
-
-**Tell, for future readers:** a `match` over a structured type whose arms return string or
-integer constants, where the result is used as a name, key or tag. Every such function
-should carry an injectivity obligation in its doc — *backed by an assertion, not prose*.
-
 ### 13. Stdlib diagnostics render against the user's file at a fabricated location
 
 An error injected into `std/io.neon` printed with the **user's** path, underlining `}` on

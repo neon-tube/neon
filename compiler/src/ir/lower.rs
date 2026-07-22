@@ -234,7 +234,19 @@ fn repr_from_typespec(spec: &ast::TypeSpec) -> Repr {
                     Box::new(args.first().map_or(Repr::Any, repr_from_typespec)),
                     Box::new(args.get(1).map_or(Repr::Any, repr_from_typespec)),
                 ),
-                other => Repr::Record { name: Some(other.to_string()), fields: vec![] },
+                // The head alone is not the identity: `repr_key` spells a generic
+                // record through its fields, so the arguments ride along as arg-slot
+                // pseudo-fields — without them, `ident[Box[i64]]` and `ident[Box[str]]`
+                // mangled to one monomorphisation instance, and only gcc's duplicate-
+                // symbol complaint stood between that and one body serving both.
+                other => Repr::Record {
+                    name: Some(other.to_string()),
+                    fields: args
+                        .iter()
+                        .enumerate()
+                        .map(|(i, a)| (format!("#{i}"), repr_from_typespec(a)))
+                        .collect(),
+                },
             }
         }
         _ => Repr::Any,
@@ -268,6 +280,14 @@ fn mangle_instance(base: &str, subst: &std::collections::HashMap<String, Repr>) 
 /// Same caveat as `ctype::type_tag_name` on nominal names: `Record { name: Some(n), .. }`
 /// spells the bare `n`, so two modules declaring one record name collide. See
 /// `tests/lang/types/a_nominal_name_is_not_a_module_identity.neon`.
+///
+/// THE TELL, for future readers hunting this class (the 2026-07-20 collapsing-key
+/// sweep found seven): a `match` over a structured type whose arms return string or
+/// integer constants, where the result is used as a name, key or tag. Every such
+/// function is a lossy projection wearing an identity's job, and should carry an
+/// injectivity obligation in its doc — backed by an assertion or a spelled-out
+/// structure, not prose. The class bottoms out at the qualified declaration key
+/// (docs/design/identity.md); anything shorter is a fragment.
 fn repr_key(r: &Repr) -> String {
     match r {
         Repr::I64 => "i64".into(),
@@ -720,11 +740,13 @@ fn impl_head(env: &Env, impl_def: &crate::typecheck::env::ImplDef) -> String {
     }
     match impl_def.target.map(|t| repr_of(&env.solver.t, t)) {
         Some(Repr::Record { name: Some(n), .. }) => n,
-        Some(Repr::I64) => "i64".into(),
-        Some(Repr::F64) => "f64".into(),
-        Some(Repr::Str) => "str".into(),
-        Some(Repr::Bool) => "bool".into(),
-        _ => String::new(),
+        // Everything else spells its full structure through `repr_key`, which carries
+        // an injectivity obligation of its own. The `_ => String::new()` this replaces
+        // collided every two tuple impls into one symbol — the collapsing-key class
+        // (formerly TODO #12), whose remedy is always the same: spell the structure,
+        // never a fragment of it.
+        Some(other) => repr_key(&other),
+        None => String::new(),
     }
 }
 
