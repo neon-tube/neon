@@ -26,16 +26,6 @@ expression's own `ExprId`**, overwriting that expression's call resolution. Lowe
 Two things keyed on one id. Not fixable in `lower.rs` — the resolution is destroyed before
 lowering runs. Needs `set_call` keyed on something other than the hole's id.
 
-### 3. A bare type name in a match arm is silently an irrefutable binder
-
-```neon
-match x { A => ..., B => ... }    // on x: A | B
-```
-
-Lowers to `block0: jump block2` — arm 1 unconditionally, arm 2 dead, no diagnostic. `A` is
-parsed as an identifier pattern shadowing the type name. `is A =>` is correct. The binder
-semantics may be intended; the second arm silently becoming unreachable is not.
-
 ### 5. Unsolved generics reach codegen as an ICE
 
 ```neon

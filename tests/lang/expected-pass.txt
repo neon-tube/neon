@@ -160,6 +160,7 @@ integers/shift_negative_amount.neon
 integers/wrapping_add_sub.neon
 integers/wrapping_mul.neon
 integers/wrapping_neg.neon
+match/arm_below_a_binder_is_diagnosed.neon
 match/atom_patterns.neon
 match/guards.neon
 match/impossible_arm_on_a_type_parameter.neon

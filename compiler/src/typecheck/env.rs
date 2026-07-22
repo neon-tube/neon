@@ -128,6 +128,11 @@ pub enum TypeErrorKind {
     /// out of an erased value, and may not order values of it. Testing (`is`, `as?`)
     /// stays legal — a test can only recognise a value the owner really built.
     SealedRecord { record: String, module: String, what: String },
+    /// A match arm below an unguarded binder or `_`: the arm above swallows every
+    /// value, so this one can never run. `names_type` is the trap that motivates the
+    /// diagnostic — `match x { A => .., B => .. }` parses `A` as a fresh binding
+    /// shadowing the type, and the second arm silently died.
+    UnreachableArm { pattern: String, names_type: bool },
     /// `break` or `continue` with no enclosing loop -- including one that only *looks*
     /// enclosing, because a lambda sits in between.
     OutsideLoop(String),
@@ -327,6 +332,22 @@ impl fmt::Display for TypeError {
                  be held, passed, and tested (`is`, `as?`) anywhere -- go through a \
                  function `{module}` provides"
             ),
+            TypeErrorKind::UnreachableArm { pattern, names_type } => {
+                if *names_type {
+                    write!(
+                        f,
+                        "this arm is unreachable: the `{pattern}` arm above it is a new \
+                         binding that matches every value -- it shadows the type \
+                         `{pattern}`, it does not test for it. Write `is {pattern}` to test"
+                    )
+                } else {
+                    write!(
+                        f,
+                        "this arm is unreachable: the `{pattern}` arm above it matches \
+                         every value"
+                    )
+                }
+            }
             TypeErrorKind::OutsideLoop(kw) => write!(
                 f,
                 "`{kw}` has no loop to act on. A lambda is a function of its own, so a \

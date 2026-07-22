@@ -2497,7 +2497,21 @@ impl Checker<'_> {
         // as the whole `bool` and cannot be subtracted precisely. Track the two
         // values by hand: seeing both, unguarded, exhausts `bool`.
         let (mut saw_true, mut saw_false) = (false, false);
+        // An unguarded binder or `_` swallows everything, so any arm below it can
+        // never run. Reported here, on the AST shape, rather than waiting on the
+        // residual: `match x { A => .., B => .. }` parses `A` as a fresh binding that
+        // shadows the type — the arm below silently lowered to dead code, and the
+        // diagnostic must say the spelling that tests (`is A`). A catch-all as the
+        // LAST arm is the ordinary idiom and triggers nothing. Reported once per
+        // swallowing arm, on the first arm it kills.
+        let mut swallowed: Option<(String, bool)> = None;
         for arm in arms {
+            if let Some((pattern, names_type)) = swallowed.take() {
+                self.error(
+                    arm.pat.span.clone(),
+                    TypeErrorKind::UnreachableArm { pattern, names_type },
+                );
+            }
             let test = self.arm_test(module, arm, subject);
             self.locals.push(vec![]);
             // An arm whose test is disjoint from the *subject* can never run, and binding
@@ -2561,6 +2575,20 @@ impl Checker<'_> {
             if let ast::PatternKind::Literal(lit) = &arm.pat.kind {
                 if let (ExprKind::Bool(b), None) = (&lit.kind, &arm.guard) {
                     if *b { saw_true = true } else { saw_false = true }
+                }
+            }
+            if arm.guard.is_none() {
+                match &arm.pat.kind {
+                    ast::PatternKind::Bind(n) => {
+                        // `names_type` drives the "write `is A`" half of the message:
+                        // a binder that happens to spell a type name in scope is the
+                        // shadowing trap, not a deliberate catch-all.
+                        let names_type =
+                            self.env.lookup(module, std::slice::from_ref(n)).is_some();
+                        swallowed = Some((n.clone(), names_type));
+                    }
+                    ast::PatternKind::Wildcard => swallowed = Some(("_".into(), false)),
+                    _ => {}
                 }
             }
         }
