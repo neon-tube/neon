@@ -264,6 +264,7 @@ resources/resource_cleanup_runs_at_last_use.neon
 resources/resource_lifecycle.neon
 resources/resource_with_refcounted_payload.neon
 resources/using_holds_a_resource_across_a_region.neon
+strings/interpolated_dispatch.neon
 strings/interpolation_basic.neon
 strings/interpolation_display.neon
 strings/interpolation_literal_braces.neon

@@ -1018,10 +1018,6 @@ struct Lower<'a> {
     subst: std::collections::HashMap<String, Repr>,
     /// Generic instances discovered at call sites, to be lowered in turn.
     instances: Vec<InstanceJob>,
-    /// While non-zero, a call is lowered without consulting its recorded resolution.
-    /// String interpolation records a `to_string` dispatch on the *interpolated
-    /// expression's* id, so lowering that expression's own value must ignore it.
-    suppress_dispatch: usize,
 }
 
 impl<'a> Lower<'a> {
@@ -1057,7 +1053,6 @@ impl<'a> Lower<'a> {
             pending: vec![],
             subst,
             instances: vec![],
-            suppress_dispatch: 0,
         }
     }
 }
@@ -1535,13 +1530,12 @@ impl Lower<'_> {
             let piece = match part {
                 ast::StrPart::Text(s) => self.b.emit(Op::ConstStr(s.clone()), Repr::Str, ty),
                 ast::StrPart::Interp(e) => {
-                    // Lower the hole's value without dispatching (its id carries the
-                    // `to_string` resolution, not the value's own call), then apply that
-                    // recorded Display dispatch to convert it to a string.
-                    self.suppress_dispatch += 1;
+                    // Lower the hole's value — including its own dispatched call, if it
+                    // is one — then apply the interpolation's recorded `to_string`
+                    // dispatch, which lives in its own table precisely so the two never
+                    // collide on the id.
                     let v = self.lower_expr(e);
-                    self.suppress_dispatch -= 1;
-                    match self.result.call(e.id).cloned() {
+                    match self.result.interp_call(e.id).cloned() {
                         Some(res) => self.lower_dispatch(&res, "to_string", vec![v], Repr::Str, ty),
                         None => {
                             let vr = self.b.value_repr(v).clone();
@@ -1800,18 +1794,16 @@ impl Lower<'_> {
         repr: Repr,
         ty: TyId,
     ) -> Value {
-        // A dispatched call: the checker already chose the impl. Suppressed while
-        // lowering the value of an interpolated expression (whose id carries the
-        // interpolation's own `to_string` resolution, not this call's).
-        if self.suppress_dispatch == 0 {
-            if let Some(res) = self.result.call(id) {
-                let res = res.clone();
-                let method = match &callee.kind {
-                    ExprKind::Path(p) => p.last().cloned().unwrap_or_default(),
-                    _ => String::new(),
-                };
-                return self.lower_dispatch(&res, &method, arg_vs, repr, ty);
-            }
+        // A dispatched call: the checker already chose the impl. An interpolation
+        // hole's `to_string` resolution lives in its own table (`interp_call`), so
+        // this consult never needs suppressing.
+        if let Some(res) = self.result.call(id) {
+            let res = res.clone();
+            let method = match &callee.kind {
+                ExprKind::Path(p) => p.last().cloned().unwrap_or_default(),
+                _ => String::new(),
+            };
+            return self.lower_dispatch(&res, &method, arg_vs, repr, ty);
         }
 
         // A call through a local of arrow type is a closure call.

@@ -1336,7 +1336,10 @@ impl Checker<'_> {
                             match dispatch::resolve(self.env, "to_string", None, &[t], None) {
                                 Ok(sel) => {
                                     self.dispatch_gate(module, &inner.span, &sel, &[t]);
-                                    self.result.set_call(inner.id, sel.resolution)
+                                    // Its own table: the hole may itself be a
+                                    // dispatched call whose resolution already lives
+                                    // under this id (formerly TODO #2).
+                                    self.result.set_interp_call(inner.id, sel.resolution)
                                 }
                                 Err(err) => self.dispatch_error(inner.span.clone(), err),
                             }

@@ -66,6 +66,13 @@ pub struct DefSite {
 pub struct TypecheckResult {
     expr_types: HashMap<ExprId, TyId>,
     resolved_calls: HashMap<ExprId, Resolution>,
+    /// The `to_string` dispatch of a string-interpolation hole, keyed by the hole
+    /// expression's id — in its own table because the hole may itself be a dispatched
+    /// call whose resolution lives in `resolved_calls` under the same id. One id, two
+    /// resolutions, two tables: storing both in one overwrote the call's, and lowering
+    /// then had to suppress dispatch for the whole subtree, which mislowered
+    /// `"#{area(q)}"` into `<todo: path-as-value>` on a string constant.
+    interp_calls: HashMap<ExprId, Resolution>,
     /// Where each name-shaped expression's referent was defined.
     ///
     /// Nothing in the compiler reads this: lowering resolves names through the same
@@ -131,6 +138,16 @@ impl TypecheckResult {
     /// the argument types the checker had.
     pub fn call(&self, e: ExprId) -> Option<&Resolution> {
         self.resolved_calls.get(&e)
+    }
+
+    /// The `to_string` resolution of an interpolation hole. Distinct from `call` on
+    /// the same id — see `interp_calls`.
+    pub fn interp_call(&self, e: ExprId) -> Option<&Resolution> {
+        self.interp_calls.get(&e)
+    }
+
+    pub fn set_interp_call(&mut self, e: ExprId, r: Resolution) {
+        self.interp_calls.insert(e, r);
     }
 
     /// Where the name this expression writes was defined, if it resolved to one.

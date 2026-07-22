@@ -1,0 +1,22 @@
+// A dispatched call inside a string interpolation lowers as BOTH calls (formerly TODO
+// #2): the hole's own protocol dispatch, then the interpolation's `to_string`. The two
+// resolutions used to share one ExprId in one table -- the `to_string` write clobbered
+// the call's, lowering suppressed dispatch for the whole subtree to compensate, and
+// `"#{area(q)}"` printed `<todo: path-as-value>` applied to a string constant. They
+// now live in separate tables (`resolved_calls` / `interp_calls`) and the suppression
+// machinery is gone.
+//
+use std::io;
+
+protocol Area for T {
+    fn area(s: T) -> i64
+}
+record Sq { side: i64 }
+impl Area for Sq {
+    fn area(s: Sq) -> i64 { s.side * s.side }
+}
+
+fn main() {
+    let q = Sq { side: 4 };
+    io::println("#{Area::area(q)}");
+}

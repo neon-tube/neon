@@ -13,20 +13,6 @@ in their own section at the bottom and marked as such.
 
 ## P0 — soundness. These miscompile or accept wrong programs.
 
-### 2. Interpolating a dispatched call miscompiles
-
-```neon
-"#{area(q)}"        // area(q) resolves through a protocol
-```
-
-`check.rs:619` writes the interpolation's `to_string` resolution to the **hole
-expression's own `ExprId`**, overwriting that expression's call resolution. Lowering's
-`suppress_dispatch` counter then over-suppresses the subtree and the call falls through to
-`<todo: path-as-value>` → `call.closure` on a string constant.
-
-Two things keyed on one id. Not fixable in `lower.rs` — the resolution is destroyed before
-lowering runs. Needs `set_call` keyed on something other than the hole's id.
-
 ### 7. `Resolution::Bound` on a union receiver prints a compiler marker as program output
 
 ```neon
