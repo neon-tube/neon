@@ -1,0 +1,5 @@
+# neon_str_cmp casts each byte `(unsigned char)pa[i]` before comparing -- a well-defined
+# narrowing that --conversion-check flags as a lossy conversion for any byte over 127, which
+# is precisely the byte range this model exists to exercise. The check is the wrong oracle
+# for that cast, not a caught defect. See the model header's note on the unsigned compare.
+--conversion-check

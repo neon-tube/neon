@@ -1,0 +1,3 @@
+# The f64->i64 conversion, and the trap its range/NaN guard lands on.
+src/math.c
+src/trap.c

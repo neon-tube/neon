@@ -2,8 +2,9 @@
 
 Each model is a directory:
 
-    <name>/main.c        the harness
-    <name>/sources.txt   the runtime .c files it verifies, one per line, relative to runtime/
+    <name>/main.c          the harness
+    <name>/sources.txt     the runtime .c files it verifies, one per line, relative to runtime/
+    <name>/checks-off.txt  optional: default checks this model must run WITHOUT, one flag per line
 
 CMake globs `*/main.c`, so adding a model touches no shared file.
 
@@ -85,6 +86,20 @@ containing the bug still reports success **and looks like evidence**.
 
 Prefer a literal bound in the harness's control flow over an assumption where you can: a
 hardcoded `3` is visible in the code, while an assumption is something CBMC is told.
+
+**A disabled check is a hole of the same kind, and `checks-off.txt` is where you declare
+it.** The default `CBMC_ARGS` turn on `--conversion-check`, `--unsigned-overflow-check` and
+the rest because most runtime code should satisfy them. A few functions must not: the wrap
+in `neon_i64_add` and the `(unsigned char)` cast in `neon_str_cmp` are *defined* behaviour
+those checks flag anyway, and CBMC has no `--no-...` form for either. Such a model names the
+flags it drops, one per line, in `checks-off.txt`; each is removed from `CBMC_ARGS` for that
+model alone. Two guard rails make this honest rather than a silent narrowing: a listed flag
+that is not actually a default is a **hard configure error** (so the file cannot rot into a
+no-op when the defaults change), and the model's header must justify every drop exactly as
+it justifies an `ASSUME`. Turn off only the check that is the wrong oracle, never one that is
+merely inconvenient — `wrapping-arithmetic-is-a-ring-mod-2-to-the-64` keeps
+`--signed-overflow-check` on for precisely this reason, and catches a reversion to signed UB
+with it.
 
 ### 6. A passing model is not a result until you have seen it fail.
 

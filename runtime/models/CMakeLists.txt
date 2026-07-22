@@ -88,12 +88,45 @@ function(add_cbmc_model name)
         endforeach()
     endif()
 
+    # ---- optional per-model check opt-out ----
+    #
+    # A model may name default checks it must run WITHOUT, one flag per line, in
+    # `<name>/checks-off.txt`. Each named flag is removed from CBMC_ARGS for this model only.
+    #
+    # This exists for one honest reason: a check like `--conversion-check` or
+    # `--unsigned-overflow-check` flags the runtime's *intentional* well-defined narrowing
+    # and two's-complement wrapping -- `neon_str_cmp`'s `(unsigned char)` cast, `neon_i64_add`'s
+    # unsigned round-trip -- as if they were bugs. For those functions the check is the wrong
+    # oracle, not a caught defect, and no `--no-...` form exists to disable it (CBMC has none
+    # for these two), so the model has to run without it. The opt-out lives in the model's
+    # own directory, visible like sources.txt, and is a hole in the proof exactly as an
+    # ASSUME is (rule 5): the model's header must justify every check it drops. A listed flag
+    # that is not actually a default is a hard error, so the file cannot rot into a no-op.
+    set(model_args ${CBMC_ARGS})
+    set(checks_off ${dir}/checks-off.txt)
+    if(EXISTS ${checks_off})
+        file(STRINGS ${checks_off} off_flags)
+        foreach(flag ${off_flags})
+            string(STRIP "${flag}" flag)
+            if(flag STREQUAL "" OR flag MATCHES "^#")
+                continue()
+            endif()
+            if(NOT flag IN_LIST model_args)
+                message(FATAL_ERROR
+                    "model '${name}': checks-off.txt names '${flag}', which is not one of "
+                    "the default CBMC_ARGS. A model cannot opt out of a check that is not on, "
+                    "and a stale opt-out that quietly does nothing is worse than none.")
+            endif()
+            list(REMOVE_ITEM model_args ${flag})
+        endforeach()
+    endif()
+
     add_custom_target(verify-${name}
         COMMAND ${CBMC_EXECUTABLE}
                 ${inputs}
                 -I ${RUNTIME_ROOT}/include
                 --unwind ${CBMC_UNWIND}
-                ${CBMC_ARGS}
+                ${model_args}
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
         DEPENDS ${inputs}
         COMMENT "CBMC: ${name}"

@@ -1,0 +1,5 @@
+# The two string-joining entry points that differ only in ownership, and the refcount and
+# trap their allocation and release paths go through.
+src/string.c
+src/lifecycle.c
+src/trap.c

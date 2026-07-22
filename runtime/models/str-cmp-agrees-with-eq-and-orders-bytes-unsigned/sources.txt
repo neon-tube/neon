@@ -1,0 +1,4 @@
+# The str comparison pair, and the refcount/trap the rest of string.c links against.
+src/string.c
+src/lifecycle.c
+src/trap.c

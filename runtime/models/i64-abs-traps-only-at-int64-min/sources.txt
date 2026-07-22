@@ -1,0 +1,3 @@
+# i64 absolute value, and the trap its overflow guard lands on.
+src/math.c
+src/trap.c

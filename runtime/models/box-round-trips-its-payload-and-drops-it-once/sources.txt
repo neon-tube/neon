@@ -1,0 +1,5 @@
+# The `any` boxing boundary, the retain/release its drop consumes a reference through,
+# and the trap its allocation check lands on.
+src/any.c
+src/lifecycle.c
+src/trap.c
