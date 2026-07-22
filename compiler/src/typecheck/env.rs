@@ -133,6 +133,10 @@ pub enum TypeErrorKind {
     /// diagnostic — `match x { A => .., B => .. }` parses `A` as a fresh binding
     /// shadowing the type, and the second arm silently died.
     UnreachableArm { pattern: String, names_type: bool },
+    /// A generic call where no argument or expected type pins a parameter the result
+    /// mentions. Every pre-existing variant misdescribed this — it is not a mismatch,
+    /// not an arity error, and (before this) it reached codegen as an ICE.
+    CannotInferTypeParam { param: String, function: String },
     /// `break` or `continue` with no enclosing loop -- including one that only *looks*
     /// enclosing, because a lambda sits in between.
     OutsideLoop(String),
@@ -331,6 +335,12 @@ impl fmt::Display for TypeError {
                 "`{record}` is sealed, so {what} only inside `{module}`. A value of it can \
                  be held, passed, and tested (`is`, `as?`) anywhere -- go through a \
                  function `{module}` provides"
+            ),
+            TypeErrorKind::CannotInferTypeParam { param, function } => write!(
+                f,
+                "cannot infer the type parameter `{param}` of `{function}`: no argument \
+                 or expected type pins it. Give the type arguments explicitly -- \
+                 `{function}[...]` -- or use the result where its type is known"
             ),
             TypeErrorKind::UnreachableArm { pattern, names_type } => {
                 if *names_type {

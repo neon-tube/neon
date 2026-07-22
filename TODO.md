@@ -26,19 +26,6 @@ expression's own `ExprId`**, overwriting that expression's call resolution. Lowe
 Two things keyed on one id. Not fixable in `lower.rs` — the resolution is destroyed before
 lowering runs. Needs `set_call` keyed on something other than the hole's id.
 
-### 5. Unsolved generics reach codegen as an ICE
-
-```neon
-fn make[T]() -> List[T] { list::new() }
-let a = make();      // internal error: type variable 'T reached codegen
-```
-
-`solve_generics` is first-wins and silently returns what it managed; `direct_call`
-substitutes anyway without checking coverage. Fix is mechanical — after `solve_generics`,
-substitute the unsolved names with poison and compare against the real substitution; if
-`sig.ret` changes it mentioned an unpinned variable — but it needs a new
-`TypeErrorKind::CannotInferTypeParam`, since every existing variant misdescribes it.
-
 ### 6. Default protocol method bodies are never type-checked
 
 `check.rs:217` calls `fn_body(module, m, &[])`, so the protocol's subject is unbound and

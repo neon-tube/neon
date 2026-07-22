@@ -71,6 +71,18 @@ fn const_refs(e: &Expr, out: &mut Vec<Vec<String>>) {
     ast::visit::Visitor::expr(&mut Refs(out), e);
 }
 
+/// Whether `t` mentions the type variable `var`. Substitution is not identity-stable —
+/// a rebuild interns to a fresh `TyId` even when nothing changed — so the test is two
+/// rebuilds against each other: substitute `var` with two *different* types, and the
+/// results differ exactly when `var` actually occurs.
+fn mentions_var(c: &mut Checker, t: TyId, var: super::types::NameId) -> bool {
+    let a = c.env.solver.t.null();
+    let b = c.env.solver.t.bool();
+    let sub_a = c.env.solver.t.substitute(t, &std::collections::HashMap::from([(var, a)]));
+    let sub_b = c.env.solver.t.substitute(t, &std::collections::HashMap::from([(var, b)]));
+    sub_a != sub_b
+}
+
 pub fn check_all(
     env: &mut Env,
     modules: &[(Vec<String>, &ast::Module)],
@@ -91,9 +103,28 @@ pub fn check_all(
         capture_floors: vec![],
         hidden_cache: std::collections::HashMap::new(),
         sealed_cache: std::collections::HashMap::new(),
+        pending_infer: vec![],
     };
     for (path, m) in modules {
         c.decls(path, &m.decls);
+    }
+    // Unsolved-type-parameter candidates, resolved against the FINAL recorded types.
+    // `direct_call` cannot tell a probe from a real check — `solve_generics` checks
+    // arguments speculatively with no expected type, so a nested generic call
+    // (`map::set(map::new(), ..)`) legitimately fails to solve on the probe and then
+    // solves on the second pass, which overwrites the expression's recorded type. So
+    // an unsolved-parameter sighting is only a *candidate*; it becomes an error iff
+    // the type that survived every pass still mentions the variable — the exact value
+    // that would otherwise reach codegen as the "type variable 'T" ICE.
+    let pending = std::mem::take(&mut c.pending_infer);
+    for (id, var, param, function, span) in pending {
+        let Some(t) = c.result.ty(id) else { continue };
+        if mentions_var(&mut c, t, var) {
+            c.errors.push(TypeError {
+                span,
+                kind: TypeErrorKind::CannotInferTypeParam { param, function },
+            });
+        }
     }
     // After the walk, because it reads the const table the environment finished building,
     // and *before* anything is lowered: lowering inlines a const's initialiser at each use
@@ -188,6 +219,12 @@ struct Checker<'a> {
         Vec<String>,
         std::rc::Rc<std::collections::HashMap<super::types::NameId, Vec<String>>>,
     >,
+    /// Generic calls whose result mentioned a parameter `solve_generics` could not pin:
+    /// `(call expr, the unsolved variable, its written name, the callee, the span)`.
+    /// Candidates, not errors — the probing pass legitimately fails to solve what the
+    /// second pass then solves. `check_all` promotes the ones whose final recorded
+    /// type still carries the variable.
+    pending_infer: Vec<(ast::ExprId, super::types::NameId, String, String, Span)>,
 }
 
 impl Checker<'_> {
@@ -2976,6 +3013,33 @@ impl Checker<'_> {
 
         // A generic fn: solve its type parameters, then check under the solution.
         let subst = self.solve_generics(module, sig, generics, args, expected);
+        // `solve_generics` is first-wins and returns what it managed; a parameter no
+        // argument or expected type pinned is simply absent. If such a parameter is
+        // mentioned in the return type, the call's result carries a rigid variable —
+        // which used to reach codegen as the "type variable 'T" ICE. Detected by the
+        // substitution itself: substitute the one unsolved name with poison, and if
+        // `sig.ret` changes, the type mentioned it. Recorded as a CANDIDATE, not an
+        // error — this very call may be a probe inside an enclosing `solve_generics`,
+        // whose second pass supplies the expected type that solves it; `check_all`
+        // promotes only the candidates whose final recorded type still carries the
+        // variable. (A parameter mentioned only in `throws` is not caught by the
+        // final-type test and is left to the ICE for now; a parameter mentioned only
+        // in the params is the argument re-check's business.)
+        for g in &sig.generics {
+            let n = self.env.solver.t.name(g);
+            if subst.contains_key(&n) {
+                continue;
+            }
+            if mentions_var(self, sig.ret, n) {
+                self.pending_infer.push((
+                    e.id,
+                    n,
+                    g.clone(),
+                    sig.name.clone(),
+                    e.span.clone(),
+                ));
+            }
+        }
         // Hand the solution to lowering, which needs the *types* the parameters were bound
         // to in order to lay the instance out.
         let solved: Vec<(String, TyId)> = sig

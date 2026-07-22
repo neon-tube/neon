@@ -1,0 +1,23 @@
+//@ compile-fail
+//@ error-contains: cannot infer the type parameter
+
+// A generic call where nothing pins a parameter the result mentions used to sail
+// through the checker and die in codegen -- "internal error: type variable 'T reached
+// codegen" (formerly TODO #5). It is a checker error now, named for what it is: not a
+// mismatch, an inference failure, with the repairs spelled out (turbofish, or use the
+// result where its type is known).
+//
+// The detection is deferred: `solve_generics` legitimately fails to pin parameters on
+// its probing pass -- `map::set(map::new(), k, v)` solves the inner `new` only when
+// the second pass supplies the expected type -- so an unsolved sighting is a
+// candidate, promoted to an error only when the expression's FINAL recorded type
+// still carries the variable. The annotated and turbofish spellings of this same call
+// infer fine and are pinned across the collections corpus.
+
+use std::collections::list;
+
+fn make[T]() -> List[T] { list::new() }
+
+fn main() {
+    let a = make();
+}

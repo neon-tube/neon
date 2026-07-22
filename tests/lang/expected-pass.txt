@@ -338,3 +338,4 @@ types/union_of_records_is_a_sum_type.neon
 types/union_rejects_non_member.neon
 types/union_variant_is_a_subtype_of_the_union.neon
 types/unknown_type_in_a_body_is_reported.neon
+types/unpinned_type_param_is_diagnosed.neon
