@@ -1335,10 +1335,16 @@ fn emit_term(out: &mut String, types: &TypeTable, f: &Func, term: &Term) {
             let _ = writeln!(out, "return {};", coerce(types, f, *v, &f.ret));
         }
         Term::Ret(None) => out.push_str("return;\n"),
-        // A throw in a function that declares no `throws` is an error escaping `main`.
-        Term::Throw(v) => {
-            let _ = writeln!(out, "neon_panic({});", var(*v));
-        }
+        // Unreachable by construction: the one `Term::Throw` constructor
+        // (`lower.rs::throw_or_escape`) only emits it when the function has a throws
+        // slot, and that shape is the guarded arm above. A throw with no handler and
+        // no throws clause is stringified there (`error_message`) and panics through
+        // `Op::Native` instead — `neon_panic` takes a `neon_str`, and the raw error
+        // value this arm used to pass it was never the right type.
+        Term::Throw(_) => unreachable!(
+            "codegen: `Term::Throw` in a function with no throws slot; \
+             `throw_or_escape` cannot produce this"
+        ),
         Term::Jump(t) => emit_jump(out, types, f, t),
         Term::Branch { cond, then, els } => {
             let _ = writeln!(out, "if ({}) {{", var(*cond));

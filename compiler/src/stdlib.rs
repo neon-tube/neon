@@ -39,13 +39,27 @@ pub fn parse_from(
 ) -> Result<(Vec<(Vec<String>, Module)>, u32), String> {
     let mut out = Vec::with_capacity(sources.len());
     let mut next = base;
+    // The stdlib goes through `expand` like any user module — here, at the one
+    // assembly point, so every consumer (the cli, the test harnesses) agrees. A
+    // stdlib `@cfg` therefore works, and a typo'd stdlib annotation is a broken
+    // toolchain rather than a silent no-op. Processors only keep or omit; the
+    // annotations stay on the AST for the `@runtime`/`@pure` readers that consult it.
+    let config = crate::expand::Config::with([
+        std::env::consts::OS.to_string(),
+        std::env::consts::ARCH.to_string(),
+    ]);
     for (rel, src) in sources {
         let tokens = lexer::lex(src).map_err(|e| format!("stdlib `{rel}` did not lex: {e:?}"))?;
         let (module, errors) = parser::parse(&tokens, src.len());
         if !errors.is_empty() {
             return Err(format!("stdlib `{rel}` did not parse: {errors:?}"));
         }
-        let mut module = module.ok_or_else(|| format!("stdlib `{rel}` produced no module"))?;
+        let module = module.ok_or_else(|| format!("stdlib `{rel}` produced no module"))?;
+        let (mut module, _meta, expand_errors) = crate::expand::expand(module, &config);
+        if !expand_errors.is_empty() {
+            let shown: Vec<String> = expand_errors.iter().map(|e| e.message.clone()).collect();
+            return Err(format!("stdlib `{rel}` did not expand: {}", shown.join("; ")));
+        }
         next = crate::ast::number_exprs_from(&mut module, next);
         out.push((module_path(rel), module));
     }

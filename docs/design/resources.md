@@ -52,7 +52,7 @@ transactions, one-shot tokens. A file handle is not one of those.
 ## The type
 
     // stdlib/std/resource.neon
-    @runtime("neon_resource") opaque record Resource[T, E] {}
+    @runtime("neon_resource") sealed opaque record Resource[T, E] {}
 
 A refcounted runtime object holding a payload, a cleanup closure, and an armed flag
 (`runtime/include/neon/resource.h`).

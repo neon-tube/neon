@@ -43,7 +43,9 @@ pub enum Repr {
     Tuple(Vec<Repr>),
     /// A `List[T]` — a runtime container holding `T` inline.
     List(Box<Repr>),
-    /// A `Map[K, V]` — an immutable HAMT.
+    /// A `Map[K, V]` — an open-addressed table with control bytes, copied on write
+    /// above `rc > 1` (`runtime/src/map.c`). Value semantics at the surface; the
+    /// sharing is a runtime property nobody spells.
     Map(Box<Repr>, Box<Repr>),
     /// A refcounted object the runtime owns, carrying whatever generic arguments the
     /// backend needs to see (a payload's element type, so a witness can be emitted for it).

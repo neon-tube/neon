@@ -25,6 +25,13 @@ typedef struct neon_header {
     void (*drop)(void*);
 } neon_header;
 
+// An object whose header carries this flag ignores retain and release entirely.
+// Nothing in the shipping runtime sets it yet: a string literal is a view with
+// `owner == NULL` (below) and never owns a header at all, so today the flag has no
+// producer. It is kept — and its exact semantics are proved by the model
+// `an-immortal-object-is-never-dropped` — as the mechanism for future truly-static
+// heap objects (interned strings, static containers), whose headers would set it at
+// construction and never be freed.
 #define NEON_IMMORTAL 1u
 
 // A string is a view: a data pointer and length (the pair libc wants), plus the
