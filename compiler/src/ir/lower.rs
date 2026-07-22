@@ -281,13 +281,12 @@ fn mangle_instance(base: &str, subst: &std::collections::HashMap<String, Repr>) 
 /// spells the bare `n`, so two modules declaring one record name collide. See
 /// `tests/lang/types/a_nominal_name_is_not_a_module_identity.neon`.
 ///
-/// THE TELL, for future readers hunting this class (the 2026-07-20 collapsing-key
-/// sweep found seven): a `match` over a structured type whose arms return string or
-/// integer constants, where the result is used as a name, key or tag. Every such
-/// function is a lossy projection wearing an identity's job, and should carry an
-/// injectivity obligation in its doc — backed by an assertion or a spelled-out
-/// structure, not prose. The class bottoms out at the qualified declaration key
-/// (docs/design/identity.md); anything shorter is a fragment.
+/// THE TELL, for future readers hunting this class of bug: a `match` over a
+/// structured type whose arms return string or integer constants, where the result is
+/// used as a name, key or tag. Every such function is a lossy projection wearing an
+/// identity's job, and should carry an injectivity obligation in its doc — backed by
+/// an assertion or a spelled-out structure, not prose. The class bottoms out at the
+/// qualified declaration key; anything shorter is a fragment.
 fn repr_key(r: &Repr) -> String {
     match r {
         Repr::I64 => "i64".into(),
@@ -742,9 +741,8 @@ fn impl_head(env: &Env, impl_def: &crate::typecheck::env::ImplDef) -> String {
         Some(Repr::Record { name: Some(n), .. }) => n,
         // Everything else spells its full structure through `repr_key`, which carries
         // an injectivity obligation of its own. The `_ => String::new()` this replaces
-        // collided every two tuple impls into one symbol — the collapsing-key class
-        // (formerly TODO #12), whose remedy is always the same: spell the structure,
-        // never a fragment of it.
+        // collided every two tuple impls into one symbol; the remedy for a collapsing
+        // key is always the same — spell the structure, never a fragment of it.
         Some(other) => repr_key(&other),
         None => String::new(),
     }
@@ -2019,7 +2017,7 @@ impl Lower<'_> {
             Resolution::Switch(arms) => {
                 // The checker computed the arms (coverage-checked, most-specific
                 // filtered); lowering used to throw them away here and print
-                // `<todo: dispatch switch>` as program output (TODO #7c).
+                // `<todo: dispatch switch>` as program output.
                 let arms: Vec<(Repr, crate::typecheck::env::ImplId)> =
                     arms.iter().map(|&(t, id)| (self.repr_of_ty(t), id)).collect();
                 self.lower_dispatch_switch(&arms, &method, args, repr, ty)
@@ -2050,8 +2048,8 @@ impl Lower<'_> {
                         }
                     }
                     None => {
-                        // A UNION receiver in a monomorphic instance (TODO #7): the
-                        // head is per variant, so the dispatch is the same switch a
+                        // A UNION receiver in a monomorphic instance: the head is
+                        // per variant, so the dispatch is the same switch a
                         // `Resolution::Switch` lowers to — one impl per variant,
                         // chosen by the variant's own head.
                         if let Some(&recv) = args.first() {

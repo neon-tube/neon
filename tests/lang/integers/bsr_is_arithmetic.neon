@@ -1,12 +1,11 @@
-// `bsr` is ARITHMETIC: the sign extends. This was true by accident -- codegen emitted
-// a bare `>>` on int64_t, which C11 makes implementation-defined for negative values,
-// and gcc and clang both happened to choose arithmetic -- and is now guaranteed: the
-// emission spells the shift in defined unsigned operations (`a >> n == ~(~a >> n)` for
-// negative `a`), so the answer no longer depends on which C compiler built the
-// program (formerly TODO #8c).
+// `bsr` is ARITHMETIC: the sign extends. This was true by accident -- codegen emitted a
+// bare `>>` on int64_t, which C11 makes implementation-defined for negative values, and
+// gcc and clang both happened to choose arithmetic -- and is now guaranteed: the emission
+// spells the shift in defined unsigned operations (`a >> n == ~(~a >> n)` for negative
+// `a`), so the answer no longer depends on which C compiler built the program.
 //
-// `id` keeps the operands opaque so a constant folder cannot answer instead of the
-// emitted shift.
+// `id` keeps the operands opaque so a constant folder cannot answer instead of the emitted
+// shift.
 
 use std::io;
 

@@ -2,9 +2,9 @@
 //!
 //! These guards previously lowered with `libs = &[]`, parsed the stdlib without
 //! renumbering (so `ExprId`s collided and stdlib bodies went unchecked), and scanned
-//! `f.values()` only. Rebuilt correctly the answers were still 0 — that latent gap was
-//! TODO §10 — but a guard aimed at a program the compiler never builds proves nothing
-//! about the one it does. This harness now mirrors `cli/src/frontend.rs` exactly:
+//! `f.values()` only. Rebuilt correctly the answers were still 0 — latent, not live —
+//! but a guard aimed at a program the compiler never builds proves nothing about the
+//! one it does. This harness now mirrors `cli/src/frontend.rs` exactly:
 //! stdlib parsed and numbered first (`stdlib::parse_from`), the program numbered after
 //! it, `check_all` over the whole compilation, and lowering handed the stdlib as
 //! `libs`. The invariant scans cover every repr position a `Func` and a `Program`
@@ -259,9 +259,9 @@ fn unsubstituted_var(r: &Repr) -> Option<String> {
     }
 }
 
-/// The verifier for `Repr::assignable`, which is the block-parameter relation TODO §11
-/// said could not be checked until someone defined it. Every predecessor edge in every
-/// lowered corpus program: the argument's repr must be assignable to the parameter's.
+/// The verifier for `Repr::assignable`, the block-parameter relation. Every
+/// predecessor edge in every lowered corpus program: the argument's repr must be
+/// assignable to the parameter's.
 /// Equality here flagged 9,226 sites (the emitter widens); assignable must flag none —
 /// and when a lowering change starts passing something inconvertible, this names the
 /// function and edge instead of letting the join read garbage.

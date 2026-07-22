@@ -1,13 +1,12 @@
 //@ exit: 101
 
-// The cast triad (docs/design/checked-casts.md): `as` is for casts that cannot fail;
-// a fallible cast must say what a mismatch does. `as? T` tests and yields `T | null`,
-// composing with `orelse`; `as! T` asserts and TRAPS on mismatch (exit 101), the
-// `try`/`try?`/`try!` discipline applied to casts. Bare `as` on a fallible cast is a
-// compile error -- pinned in bare_cast_must_be_infallible.neon -- but stays legal
-// wherever the checker can prove success: widening, newtype bridges, and uses refined
-// by narrowing (the `w is i64` guard below).
-//
+// The cast triad: `as` is for casts that cannot fail; a fallible cast must say what a
+// mismatch does. `as? T` tests and yields `T | null`, composing with `orelse`; `as! T`
+// asserts and TRAPS on mismatch (exit 101), the `try`/`try?`/`try!` discipline applied to
+// casts. Bare `as` on a fallible cast is a compile error -- pinned in
+// bare_cast_must_be_infallible.neon -- but stays legal wherever the checker can prove
+// success: widening, newtype bridges, and uses refined by narrowing (the `w is i64` guard
+// below).
 use std::io;
 
 record A { x: i64 }

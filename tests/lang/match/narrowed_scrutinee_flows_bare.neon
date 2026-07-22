@@ -1,11 +1,10 @@
-// A match arm's narrowed scrutinee flows BARE at the arm's type -- as a call argument,
-// not just through field reads. Before narrowing was wired end-to-end (docs/design/
-// checked-casts.md, decision 4), the checker rebound `v` to `A` in the arm but lowering
-// never converted the value: the bare use fell through coercion's dead branch and
-// `takes_a(v)` received a ZEROED `A` -- this program printed 0, silently. The fix is
-// the projection at the variable-use funnel (`lower_path` emits the cast when the use's
-// repr is narrower than the binding's), which is the same mechanism `if`/`while`
-// narrowing rides on (control/narrowing_in_if_and_while.neon).
+// A match arm's narrowed scrutinee flows BARE at the arm's type -- as a call argument, not
+// just through field reads. Before narrowing was wired end-to-end, the checker rebound `v`
+// to `A` in the arm but lowering never converted the value: the bare use fell through
+// coercion's dead branch and `takes_a(v)` received a ZEROED `A` -- this program printed 0,
+// silently. The fix is the projection at the variable-use funnel (`lower_path` emits the
+// cast when the use's repr is narrower than the binding's), which is the same mechanism
+// `if`/`while` narrowing rides on (control/narrowing_in_if_and_while.neon).
 
 use std::io;
 

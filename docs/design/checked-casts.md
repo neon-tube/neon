@@ -6,13 +6,15 @@ same day, in dependency order: canonical tags (former TODO §4), narrowing (form
 out of `any` never checks the tag). Resolves TODO §§14 and 15 and closes opacity.md
 residues 1 and 2.
 
-One residue of its own: the sealed assertion ban does not yet fire through a generic
-instantiation (`fn launder[T](a: any) -> T { a as! T }` at `T = Secret`) — the checker
-checks a generic body once with `T` rigid, and instantiation happens at lowering,
-which has no diagnostics channel (the TODO §5 infrastructure family). The hole is
-soundness-guarded meanwhile — the `as!` still compiles to the canonical tag check, so
-only a genuinely-constructed value launders, which `as?` would equally recover — and
-is pinned off-ratchet as `records/sealed_no_generic_assert_laundering.neon`.
+The generic-instantiation residue closed 2026-07-22: a signature records which of its
+own type parameters the body asserts with `as!` (`FnSig::asserts`, collected
+syntactically at declaration), and every call site discharges the obligation against
+the solved substitution — binding an asserted parameter to a type with a sealed leaf
+foreign to the callee's module is rejected at the call, which is where the
+monomorphised assertion comes into existence. Direct spelling only: a wrapper that
+forwards to another generic's `as!` is not traced, and that depth stays guarded by the
+canonical tag check at run time. Pinned on-ratchet as
+`records/sealed_no_generic_assert_laundering.neon`.
 
 Implementation landmarks, for the next reader: canonical erasure/recovery in
 `backend/c.rs::coerce_expr`/`unbox_expr`; narrowing in `check.rs::cond_refinements` /

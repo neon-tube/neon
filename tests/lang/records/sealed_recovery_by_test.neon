@@ -1,10 +1,10 @@
-// The testing forms stay legal on a foreign `sealed` type (docs/design/checked-casts.md,
-// decision 3): `is` and `as?` can only RECOGNISE a value the owner really built, because
-// a nominal tag is stamped exclusively at genuine construction -- so a test forges
-// nothing and reveals one bit. A genuine Secret erased into `any` recovers through
-// `as?` and flows back into the owner's API; a structural counterfeit answers `is`
-// false and `as?` null. `==` also stays legal -- identity of contents is one bit per
-// comparison; ordering is the oracle, and `<` is barred (sealed_bars_ord.neon).
+// The testing forms stay legal on a foreign `sealed` type: `is` and `as?` can only
+// RECOGNISE a value the owner really built, because a nominal tag is stamped exclusively
+// at genuine construction -- so a test forges nothing and reveals one bit. A genuine
+// Secret erased into `any` recovers through `as?` and flows back into the owner's API; a
+// structural counterfeit answers `is` false and `as?` null. `==` also stays legal --
+// identity of contents is one bit per comparison; ordering is the oracle, and `<` is
+// barred (sealed_bars_ord.neon).
 
 use std::io;
 

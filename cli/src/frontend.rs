@@ -26,7 +26,7 @@ pub struct Checked {
 /// Render a type error against the file its span actually indexes: the user's program
 /// when the error's module is the root, the owning stdlib source otherwise. Before
 /// this, a stdlib mistake rendered with the user's path and underlined whatever token
-/// sat at that byte offset in the user's file (compiler TODO §13).
+/// sat at that byte offset in the user's file.
 pub fn eprint_type_error(
     e: &neon_compiler::typecheck::env::TypeError,
     user_path: &Path,

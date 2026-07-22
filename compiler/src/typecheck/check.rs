@@ -117,9 +117,15 @@ pub fn check_all(
     // the type that survived every pass still mentions the variable — the exact value
     // that would otherwise reach codegen as the "type variable 'T" ICE.
     let pending = std::mem::take(&mut c.pending_infer);
-    for (id, var, param, function, span, module) in pending {
-        let Some(t) = c.result.ty(id) else { continue };
-        if mentions_var(&mut c, t, var) {
+    for (id, _var, param, function, span, module) in pending {
+        // The final solution for this call, after every pass has overwritten it: the
+        // parameter is genuinely unpinned iff it is absent there. Testing membership
+        // in the recorded solution — rather than mentions in the final type — is what
+        // covers a parameter mentioned only in `throws`, whose variable propagates
+        // through the throw channel and not the expression's recorded type.
+        let solved =
+            c.result.generics(id).is_some_and(|g| g.iter().any(|(n, _)| *n == param));
+        if !solved {
             c.errors.push(TypeError {
                 span,
                 kind: TypeErrorKind::CannotInferTypeParam { param, function },
@@ -320,9 +326,10 @@ impl Checker<'_> {
     /// The first foreign `sealed` record among `ty`'s nominal leaves, with its owner —
     /// the head-and-union-leaves scan the assertion ban and the `Ord` bar key on. The
     /// scan is deliberately leaf-level, not `mentions`-deep: a caller's own newtype
-    /// *wrapping* a sealed type is the caller's type, and asserting it is legal — only
-    /// the sealed type itself, named at the top or as a union member, is banned
-    /// (docs/design/checked-casts.md, decisions and the newtype note).
+    /// *wrapping* a sealed type is the caller's type, and asserting it is legal — the
+    /// tag check makes it sound, since a box tagged with the newtype can only have
+    /// been built around a genuinely-constructed payload. Only the sealed type
+    /// itself, named at the top or as a union member, is banned.
     fn sealed_leaf(&mut self, module: &[String], ty: TyId) -> Option<(String, Vec<String>)> {
         let sealed = self.hidden_sealed(module);
         if sealed.is_empty() {
@@ -414,11 +421,12 @@ impl Checker<'_> {
         // `seal(to) <: from` is that second test exactly — sealed, so it asks whether the
         // source admits the opaque's *identity*, not its contents.
         //
-        // What this deliberately does not do is make an unguarded `(a: any) as Secret`
-        // safe. That cast is unchecked at run time — a general `as`-from-`any` hole, not
-        // an opacity one — and the language's answer is `is` before `as`, where `is`
-        // does compare nominal tags. Closing it belongs with the runtime tag check; see
-        // docs/design/opacity.md.
+        // What this deliberately does not do is decide the `(a: any) as Secret` case
+        // statically: `any` legitimately holds opaques, so recovery and forgery share a
+        // spelling here. That cast is checked at run time instead — the box's tag is
+        // compared and a mismatch traps — so honest recovery passes and a forged value
+        // dies either way; for `sealed` types the assertive spelling is additionally
+        // rejected outright in the cast's own arm.
         let sealed_to = self.env.solver.t.seal(to, &tags);
         let recovers = self.env.solver.is_subtype(sealed_to, from);
         for &tag in &tags {
@@ -1341,7 +1349,7 @@ impl Checker<'_> {
                                     self.dispatch_gate(module, &inner.span, &sel, &[t]);
                                     // Its own table: the hole may itself be a
                                     // dispatched call whose resolution already lives
-                                    // under this id (formerly TODO #2).
+                                    // under this id.
                                     self.result.set_interp_call(inner.id, sel.resolution)
                                 }
                                 Err(err) => self.dispatch_error(inner.span.clone(), err),
@@ -1442,8 +1450,8 @@ impl Checker<'_> {
                 let from = self.expr(module, lhs, None);
                 let scope = self.type_scope(module);
                 let to = self.env.resolve(&scope, ty);
-                // The trichotomy (docs/design/checked-casts.md, decision 8). Every cast
-                // is one of three classes, and each class has one legal spelling:
+                // The trichotomy: every cast is one of three classes, and each
+                // class has one legal spelling —
                 //
                 //   always succeeds  — subsumption, widening, newtype wrap/unwrap: bare `as`
                 //   might succeed    — the types overlap, neither contains the other: `as?`/`as!`
@@ -1521,8 +1529,8 @@ impl Checker<'_> {
                         to
                     }
                     ast::CastForm::Soften => {
-                        // `T | null` is only an answer when `null` unambiguously means
-                        // "wasn't one" (decision 7).
+                        // `T | null` is only an answer when `null` unambiguously
+                        // means "wasn't one".
                         let n = self.env.solver.t.null();
                         let null_meet = self.env.solver.t.intersect(to, n);
                         if !self.env.solver.is_empty(null_meet) {
@@ -2443,11 +2451,10 @@ impl Checker<'_> {
                         let shown = self.show(meet);
                         self.error(e.span.clone(), TypeErrorKind::Unordered { ty: shown });
                     } else if let Some((record, owner)) = self.sealed_leaf(module, meet) {
-                        // The Ord bar (docs/design/checked-casts.md, decision 2;
-                        // opacity.md residue 2): ordering foreign sealed values is an
-                        // oracle — with chosen seals in hand, relative order supports
-                        // binary search of the hidden contents. `==` stays: identity
-                        // of contents is one bit per comparison.
+                        // Ordering foreign sealed values is an oracle — with chosen
+                        // seals in hand, relative order supports binary search of the
+                        // hidden contents. `==` stays: identity of contents is one
+                        // bit per comparison.
                         let shown = owner.join("::");
                         self.error(
                             e.span.clone(),
@@ -3068,22 +3075,20 @@ impl Checker<'_> {
         let subst = self.solve_generics(module, sig, generics, args, expected);
         // `solve_generics` is first-wins and returns what it managed; a parameter no
         // argument or expected type pinned is simply absent. If such a parameter is
-        // mentioned in the return type, the call's result carries a rigid variable —
-        // which used to reach codegen as the "type variable 'T" ICE. Detected by the
-        // substitution itself: substitute the one unsolved name with poison, and if
-        // `sig.ret` changes, the type mentioned it. Recorded as a CANDIDATE, not an
-        // error — this very call may be a probe inside an enclosing `solve_generics`,
-        // whose second pass supplies the expected type that solves it; `check_all`
-        // promotes only the candidates whose final recorded type still carries the
-        // variable. (A parameter mentioned only in `throws` is not caught by the
-        // final-type test and is left to the ICE for now; a parameter mentioned only
-        // in the params is the argument re-check's business.)
+        // mentioned in the return or throws type, the call carries a rigid variable
+        // onward — which used to reach codegen as the "type variable 'T" ICE.
+        // Recorded as a CANDIDATE, not an error: this very call may be a probe inside
+        // an enclosing `solve_generics`, whose second pass supplies the expected type
+        // that solves it. `check_all` promotes only the candidates whose FINAL
+        // recorded solution (`result.generics`, overwritten per pass like every other
+        // table) still lacks the parameter. (A parameter mentioned only in the params
+        // is the argument re-check's business.)
         for g in &sig.generics {
             let n = self.env.solver.t.name(g);
             if subst.contains_key(&n) {
                 continue;
             }
-            if mentions_var(self, sig.ret, n) {
+            if mentions_var(self, sig.ret, n) || mentions_var(self, sig.throws, n) {
                 self.pending_infer.push((
                     e.id,
                     n,
@@ -3145,6 +3150,33 @@ impl Checker<'_> {
                 // and hands it to that impl. Every covering impl target is a view the
                 // value flows into; gate each.
                 self.bound_gate(module, &e.span, concrete, pid);
+            }
+        }
+        // The sealed assertion ban, discharged AT THE INSTANTIATION: the callee's
+        // body contains `as! T`, and binding
+        // `T` to a type with a sealed leaf foreign to the CALLEE's module is the
+        // generic spelling of the assertion the ban rejects when written directly —
+        // after monomorphisation, that body IS `a as! vault::Secret` in the callee's
+        // module. A still-rigid binding (the enclosing generic's own parameter) is
+        // not traced further; the canonical tag check guards that depth at run time.
+        for p in &sig.asserts {
+            let pn = self.env.solver.t.name(p);
+            let Some(&concrete) = subst.get(&pn) else { continue };
+            if self.env.is_error(concrete)
+                || super::generic::is_var(&self.env.solver.t, concrete)
+            {
+                continue;
+            }
+            if let Some((record, owner)) = self.sealed_leaf(&sig.module.clone(), concrete) {
+                let shown = owner.join("::");
+                self.error(
+                    e.span.clone(),
+                    TypeErrorKind::SealedRecord {
+                        record,
+                        module: shown,
+                        what: "it can be asserted with `as!`".into(),
+                    },
+                );
             }
         }
         for (a, (_, template)) in args.iter().zip(&sig.params) {

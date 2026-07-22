@@ -2,13 +2,12 @@
 //@ error-contains: this arm is unreachable
 //@ error-contains: Write `is A` to test
 
-// A bare type name in a match arm is a BINDER, not a test: `A` parses as a fresh
-// binding that shadows the type and matches every value, so the arm below it can never
-// run. This used to lower silently -- `block0: jump block2`, arm two dead, no
-// diagnostic (formerly TODO #3). The binder semantics stay (a catch-all as the LAST
-// arm is the ordinary idiom, pinned all over the corpus); what is rejected is an arm
-// BELOW an unguarded binder or `_`, and when the binder's name is also a type in
-// scope the message says the spelling that tests: `is A`.
+// A bare type name in a match arm is a BINDER, not a test: `A` parses as a fresh binding
+// that shadows the type and matches every value, so the arm below it can never run. This
+// used to lower silently -- `block0: jump block2`, arm two dead, no diagnostic. The binder
+// semantics stay (a catch-all as the LAST arm is the ordinary idiom, pinned all over the
+// corpus); what is rejected is an arm BELOW an unguarded binder or `_`, and when the
+// binder's name is also a type in scope the message says the spelling that tests: `is A`.
 
 use std::io;
 

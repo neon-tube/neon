@@ -1,30 +1,29 @@
 //@ exit: 101
 
-// The two things `any` used to let through, now both answered at run time. History and
-// the decision are in docs/design/opacity.md (residue 1); the short form:
+// The two things `any` used to let through, now both answered at run time:
 //
-// 1. THE READ (`thief::read`). An opaque widens to `any` and a structural `is` probes
-//    it. The checker accepts this because the type in play is `any` -- module-blind by
-//    construction -- but it does NOT leak: a boxed value carries a *nominal* runtime
-//    tag, so `is { code: i64 }` compares Secret's tag against the structural shape's,
-//    they differ, and the branch is dead. Statically-legal, runtime-always-false --
-//    an incoherence, not a disclosure. This file pins the `0` it returns.
+// 1. THE READ (`thief::read`). An opaque widens to `any` and a structural `is` probes it.
+// The checker accepts this because the type in play is `any` -- module-blind by
+// construction -- but it does NOT leak: a boxed value carries a *nominal* runtime tag, so
+// `is { code: i64 }` compares Secret's tag against the structural shape's, they differ,
+// and the branch is dead. Statically-legal, runtime-always-false -- an incoherence, not a
+// disclosure. This file pins the `0` it returns.
 //
 // 2. THE FORGE (`thief::forge`). A structural value widens to `any` and casts to the
-//    nominal. This used to WORK -- the runtime cast read the payload bytes without
-//    checking the tag, producing a working `Secret` from `{ code: 99 }`.
+// nominal. This used to WORK -- the runtime cast read the payload bytes without checking
+// the tag, producing a working `Secret` from `{ code: 99 }`.
 //
-//    It cannot be closed statically without breaking legitimate code: `any` can
-//    genuinely hold an opaque -- widening into `any` is a legal flow -- so a cast out
-//    of `any` is indistinguishable at the type level from the pinned erased-recovery
-//    idiom `(li: any) as List[i64]` (types/list_literal_erased_into_any_recovered.neon).
-//    A static rule strict enough to stop the forge also rejects that; verified by
-//    trying it, which broke five corpus files.
+// It cannot be closed statically without breaking legitimate code: `any` can genuinely
+// hold an opaque -- widening into `any` is a legal flow -- so a cast out of `any` is
+// indistinguishable at the type level from the pinned erased-recovery idiom `(li: any) as
+// List[i64]` (types/list_literal_erased_into_any_recovered.neon). A static rule strict
+// enough to stop the forge also rejects that; verified by trying it, which broke five
+// corpus files.
 //
-//    So the cast is checked where the two ARE distinguishable: `as` from `any`
-//    compares the box tag against the target's and TRAPS on mismatch. Honest recovery
-//    passes; forgery exits 101 here. The general-semantics pin (every type, not just
-//    opaque ones) is types/any_cast_checks_the_tag.neon.
+// So the cast is checked where the two ARE distinguishable: `as` from `any` compares the
+// box tag against the target's and TRAPS on mismatch. Honest recovery passes; forgery
+// exits 101 here. The general-semantics pin (every type, not just opaque ones) is
+// types/any_cast_checks_the_tag.neon.
 //
 // The direct, non-`any` spellings of both are closed statically and pinned:
 // opaque_no_structural_cast.neon and opaque_no_anonymous_forgery.neon.

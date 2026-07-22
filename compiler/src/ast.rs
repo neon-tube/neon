@@ -104,7 +104,7 @@ pub struct RecordDecl {
     /// erased value (`as!`), and may not order values of it. `sealed` implies
     /// `opaque`; the explicit pair `sealed opaque` is permitted. Capability types —
     /// `File`, `Resource` — are sealed; data types with hidden layout are merely
-    /// opaque. See docs/design/checked-casts.md.
+    /// opaque.
     pub sealed: bool,
     pub fields: Vec<Field>,
     pub annotations: Vec<Annotation>,
@@ -351,8 +351,8 @@ pub enum TryForm {
     Assert,
 }
 
-/// The cast triad, the `try` triad's twin (docs/design/checked-casts.md): a cast that
-/// cannot fail is spelled bare, one that can must say what a mismatch does.
+/// The cast triad, the `try` triad's twin: a cast that cannot fail is spelled bare,
+/// one that can must say what a mismatch does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CastForm {
     /// `as` — infallible coercions only: subsumption, widening, newtype wrap/unwrap.

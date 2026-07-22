@@ -5,10 +5,10 @@
 // traps -- and a trap is a cut path (`_exit` -> `assume(0)`), so a mismatched pair that
 // *returned* would flow straight into the assertions below and fail them.
 //
-// This is the runtime half of `as`-from-`any` (docs/design/opacity.md, residue 1): the
-// cast out of `any` asserts the box holds the target type, and this function is where
-// that assertion is discharged. The property that matters is the implication "returned
-// => tags equal": it is exactly what stops a structural `{ code: 99 }` boxed into `any`
+// This is the runtime half of `as`-from-`any`: the cast out of `any` asserts the box
+// holds the target type, and this function is where that assertion is discharged. The
+// property that matters is the implication "returned => tags equal": it is exactly
+// what stops a structural `{ code: 99 }` boxed into `any`
 // from being read back as an opaque record -- or a boxed `str`'s pointer word being read
 // as an `i64` -- because the wrong-tag read never happens; the path dies in the trap.
 //

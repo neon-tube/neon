@@ -1601,7 +1601,7 @@ fn cast_expr(types: &TypeTable, expr: &str, src: &Repr, target: &Repr) -> String
     // payload came back reinterpreted at whatever the target claimed — and the working
     // forge of an opaque record (`let a: any = { code: 99 }; a as vault::Secret`), which
     // no static rule can reject without also rejecting the recovery idiom, because `any`
-    // can legitimately hold either. See docs/design/opacity.md, residue 1.
+    // can legitimately hold either.
     //
     // Tags are canonical (see `coerce_expr`): a box always carries a concrete member's
     // tag, never a union's. So a union or nullable TARGET is a membership question, not
@@ -1938,9 +1938,9 @@ fn coerce_expr(types: &TypeTable, expr: &str, src: &Repr, target: &Repr) -> Stri
     // as null); a nullable is the two-variant case of the same rule. Boxing the union
     // whole stamped `type_tag(union)`, so the same logical value carried a different tag
     // depending on which site erased it, and every `is`/cast on the erased value then
-    // answered from the wrong tag — `e(a) is A` false on a genuine `A` (TODO §4). The
-    // checked-cast contract rests on this invariant: a tag proves what was genuinely
-    // constructed (docs/design/checked-casts.md, decision 5).
+    // answered from the wrong tag — erasing a narrowed member at a union-typed join made
+    // `is A` false on a value that was exactly an `A`. Every checked cast rests on this
+    // invariant: a tag proves what was genuinely constructed.
     if matches!(target, Repr::Any) {
         if let Repr::Union(from) = src {
             let last = from.len() - 1;
@@ -2010,7 +2010,7 @@ fn coerce_expr(types: &TypeTable, expr: &str, src: &Repr, target: &Repr) -> Stri
         // (null, i64)` at the join, and an annotated `(J, i64)` slot needs the live
         // arm's tuple rebuilt element-wise, not the union's bytes reinterpreted.
         // Falling to the zeroed literal here is how the `i64` tail of that tuple came
-        // back 0 (TODO §8d). A variant that genuinely cannot widen still zeroes — but
+        // back 0. A variant that genuinely cannot widen still zeroes — but
         // per variant, on an arm the checker proved dead.
         let last = from.len() - 1;
         let mut out = coerce_expr(types, &format!("{expr}.u._{last}"), &from[last], target);

@@ -1,0 +1,20 @@
+//@ compile-fail
+//@ error-contains: cannot infer the type parameter
+
+// A type parameter mentioned only in the THROWS clause is still an inference
+// obligation: nothing here pins `T`, and the unsolved variable would ride the throw
+// channel into codegen as an internal error. The checker promotes the candidate by
+// checking the call's final recorded solution for the parameter — the throw channel
+// has no per-expression type to consult, so membership in the solved-generics record
+// is the test that covers both the return and throws positions.
+
+record Boom { msg: str }
+impl Error for Boom {
+    fn message(b: Boom) -> str { b.msg }
+}
+
+fn risky[T]() throws T -> i64 { 1 }
+
+fn main() {
+    let x = try? risky();
+}

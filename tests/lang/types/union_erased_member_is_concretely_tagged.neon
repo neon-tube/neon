@@ -1,18 +1,17 @@
-// Tags are canonical: a function of the value's concrete type, not of the static type
-// at the erasure site. A member of a union erased into `any` — whether the union was
-// erased directly or widened back at a match join — carries the MEMBER's tag, and
-// answers `is` and `as` exactly as a directly-erased value does.
+// Tags are canonical: a function of the value's concrete type, not of the static type at
+// the erasure site. A member of a union erased into `any` — whether the union was erased
+// directly or widened back at a match join — carries the MEMBER's tag, and answers `is`
+// and `as` exactly as a directly-erased value does.
 //
-// This pins the fix for the join bug (TODO §4): the match arms below narrow to the
-// concrete types, the join re-widens to `A | B`, and the erasure at `ret` used to stamp
-// `type_tag(A | B)` — so `e(A{..}) is A` answered false on a value that was exactly an
-// `A`, and under checked casts `as` would have falsely trapped. Canonical tags are the
-// invariant the checked-cast contract rests on: a box's tag proves what was genuinely
-// constructed (docs/design/checked-casts.md, decision 5).
+// This pins the join case: the match arms below narrow to the concrete types, the join re-
+// widens to `A | B`, and the erasure at `ret` used to stamp `type_tag(A | B)` — so
+// `e(A{..}) is A` answered false on a value that was exactly an `A`, and under checked
+// casts `as` would have falsely trapped. Canonical tags are the invariant every checked
+// cast rests on: a box's tag proves what was genuinely constructed.
 //
 // The union-typed cast out of `any` is the companion direction: no box carries a union
-// tag, so `back as A | B` is a membership test over the members' tags, injecting the
-// one that matches.
+// tag, so `back as A | B` is a membership test over the members' tags, injecting the one
+// that matches.
 
 use std::io;
 

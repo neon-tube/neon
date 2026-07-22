@@ -1,11 +1,10 @@
-// Destructuring a tuple out of a `(tuple) | null` return after an `is null` guard
-// (formerly TODO #8e). This used to fail the C compile -- the destructure read
-// `._0`/`._1` off the union struct, which has no tuple members -- and the workaround
-// was returning a two-field record instead. Fixed by the narrowing work
-// (docs/design/checked-casts.md, decision 4): the guarded `r` is refined to the tuple
-// and the value-side projection at the variable-use funnel hands the destructure a
-// value at the tuple's own repr. Both branches pinned; the record shape was never
-// broken and needs no pin.
+// Destructuring a tuple out of a `(tuple) | null` return after an `is null` guard. This
+// used to fail the C compile -- the destructure read `._0`/`._1` off the union struct,
+// which has no tuple members -- and the workaround was returning a two-field record
+// instead. Fixed by the narrowing work: the guarded `r` is refined to the tuple and the
+// value-side projection at the variable-use funnel hands the destructure a value at the
+// tuple's own repr. Both branches pinned; the record shape was never broken and needs no
+// pin.
 
 use std::io;
 

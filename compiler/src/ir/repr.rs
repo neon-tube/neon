@@ -113,7 +113,7 @@ pub enum Repr {
 }
 
 impl Repr {
-    /// THE BLOCK-PARAMETER RELATION (formerly TODO §11): a predecessor may pass an
+    /// THE BLOCK-PARAMETER RELATION: a predecessor may pass an
     /// argument of repr `self` to a parameter of repr `target` iff this holds. It is
     /// not equality — the emitter widens at flow sites, so `str` and `Null` both flow
     /// into a `str?` join and a bare `i64` into an `i64 | null` parameter — and until

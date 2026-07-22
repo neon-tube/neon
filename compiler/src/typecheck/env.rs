@@ -44,8 +44,8 @@ pub struct TypeError {
     /// The module whose SOURCE the span indexes. Spans are byte offsets into some
     /// file, and a compilation covers many — the program plus every stdlib module —
     /// so an error without this rendered against whichever file the caller had in
-    /// hand: a stdlib mistake underlined an arbitrary token of the *user's* program
-    /// (formerly TODO §13). Empty means the root program.
+    /// hand: a stdlib mistake underlined an arbitrary token of the *user's* program.
+    /// Empty means the root program.
     pub module: Vec<String>,
 }
 
@@ -90,8 +90,8 @@ pub enum TypeErrorKind {
     IfWithoutElse,
     /// `x as T` where the value could never be a `T`.
     ImpossibleCast { from: String, to: String },
-    /// A bare `as` on a cast that can fail at runtime: the might-class of the
-    /// trichotomy (docs/design/checked-casts.md) demands a visible failure policy.
+    /// A bare `as` on a cast that can fail at runtime. Bare `as` is for casts that
+    /// cannot fail; a fallible one must wear its failure policy (`as?` or `as!`).
     FallibleCast { from: String, to: String },
     /// `as?` where the target overlaps `null`: the softened result cannot say which
     /// null it is.
@@ -580,6 +580,15 @@ pub struct FnSig {
     pub throws: TyId,
     /// `where T: Display` — the protocol path, not a type.
     pub wheres: Vec<(String, Vec<String>)>,
+    /// The generic parameters the BODY asserts with `as!` — `fn launder[T](a: any) ->
+    /// T { a as! T }` asserts `T`. Collected syntactically at declaration time and
+    /// discharged at each call site: binding an asserted parameter to a type with a
+    /// sealed leaf foreign to this function's own module is the generic spelling of
+    /// the assertion the sealed ban rejects when written directly — after
+    /// monomorphisation, the body IS `a as! vault::Secret` in this module. Direct
+    /// spelling only: a wrapper that forwards to another generic's `as!` is not
+    /// traced, and stays guarded by the canonical tag check at run time.
+    pub asserts: Vec<String>,
     /// The signature as an arrow, for a value-position use of the name.
     pub ty: TyId,
     /// `false` for a protocol's required method.
@@ -759,7 +768,7 @@ pub struct Env {
     unit: Unit,
     /// The module whose source is currently being processed — build loop, instantiate,
     /// or (synced by the checker) the module being checked. Stamped onto every
-    /// `TypeError` so the renderer can pick the right file (TODO §13).
+    /// `TypeError` so the renderer can pick the right file.
     current_module: Vec<String>,
 }
 
@@ -1467,6 +1476,7 @@ impl Env {
             inline: f.annotations.iter().any(|a| a.name == "inline"),
             module: module.to_vec(),
             generics: f.generics.clone(),
+            asserts: asserted_params(f),
             params,
             ret,
             throws,
@@ -1897,10 +1907,9 @@ impl Env {
     }
 
     /// The `#nominal` tags of every `sealed` record `module` may not see into, each
-    /// with its owner: the subset of `foreign_opaque_tags` carrying the trust boundary
-    /// (docs/design/checked-casts.md). The structural gates key on the opaque set; the
-    /// assertion ban (`as!` naming a foreign sealed type) and the `Ord` bar key on
-    /// this one.
+    /// with its owner: the subset of `foreign_opaque_tags` carrying the trust
+    /// boundary. The structural gates key on the opaque set; the assertion ban
+    /// (`as!` naming a foreign sealed type) and the `Ord` bar key on this one.
     pub fn foreign_sealed_tags(
         &mut self,
         module: &[String],
@@ -2159,6 +2168,37 @@ impl Env {
         self.solver.t.nominal(n, args, fields)
     }
 
+}
+
+/// The generic parameters a body asserts with `as!` — the direct spelling only: a
+/// bare `x as! T` where `T` is one of the function's own parameters. See
+/// `FnSig::asserts` for what consumes this and why.
+fn asserted_params(f: &ast::FnDecl) -> Vec<String> {
+    use crate::ast::visit::{walk_block, walk_expr, Visitor};
+    struct W<'g> {
+        generics: &'g [String],
+        out: Vec<String>,
+    }
+    impl<'a> Visitor<'a> for W<'_> {
+        fn expr(&mut self, e: &'a ast::Expr) {
+            if let ast::ExprKind::As { form: ast::CastForm::Assert, ty, .. } = &e.kind {
+                if let ast::TypeSpecKind::Named { path, args } = &ty.kind {
+                    if args.is_empty() {
+                        if let [one] = path.as_slice() {
+                            if self.generics.contains(one) && !self.out.contains(one) {
+                                self.out.push(one.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            walk_expr(self, e);
+        }
+    }
+    let Some(body) = &f.body else { return vec![] };
+    let mut w = W { generics: &f.generics, out: vec![] };
+    walk_block(&mut w, body);
+    w.out
 }
 
 /// The name a *type* declaration introduces. Everything else answers `""`, which never

@@ -1,17 +1,15 @@
-// `if`/`while` narrow (docs/design/checked-casts.md, decision 4; formerly TODO §9).
-// A condition of the form `x is T`, `x == null` / `x != null`, or an `and`/`or`/`not`
-// composition of those, refines a bare-local subject: the then-branch sees the matched
-// type, the else-branch its complement, and a `while` body the matched type. The
-// refined value flows at its narrowed type with NO written cast -- bare use as a call
-// argument, in arithmetic, and through field reads.
+// `if`/`while` narrow. A condition of the form `x is T`, `x == null` / `x != null`, or an
+// `and`/`or`/`not` composition of those, refines a bare-local subject: the then-branch
+// sees the matched type, the else-branch its complement, and a `while` body the matched
+// type. The refined value flows at its narrowed type with NO written cast -- bare use as a
+// call argument, in arithmetic, and through field reads.
 //
-// Assignment checks against the DECLARED type and dissolves the refinement: the
-// canonical list walk `while cur is Node { cur = cur.next }` writes a `Node | null`
-// into a variable currently refined to `Node`, legally.
+// Assignment checks against the DECLARED type and dissolves the refinement: the canonical
+// list walk `while cur is Node { cur = cur.next }` writes a `Node | null` into a variable
+// currently refined to `Node`, legally.
 //
 // The else-branch of an `any` subject deliberately does NOT refine: `any \ T` is a
 // complement with no runtime representation of its own, so the branch keeps `any`.
-//
 use std::io;
 
 record Node { val: i64, next: Node | null }

@@ -253,6 +253,7 @@ records/recursive_mutual.neon
 records/recursive_self.neon
 records/sealed_bars_ord.neon
 records/sealed_no_assertive_recovery.neon
+records/sealed_no_generic_assert_laundering.neon
 records/sealed_recovery_by_test.neon
 records/structural_param_accepts_nominal.neon
 records/structural_param_missing_field.neon
@@ -345,4 +346,5 @@ types/union_rejects_non_member.neon
 types/union_scalar_tuple_join.neon
 types/union_variant_is_a_subtype_of_the_union.neon
 types/unknown_type_in_a_body_is_reported.neon
+types/unpinned_throws_param_is_diagnosed.neon
 types/unpinned_type_param_is_diagnosed.neon

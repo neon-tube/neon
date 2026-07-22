@@ -1,12 +1,12 @@
 //@ compile-fail
 //@ error-contains: expected
 
-// A protocol method's DEFAULT BODY is type-checked like any other body (formerly TODO
-// #6): the subject is bound as a rigid variable, obliged by the protocol itself and
-// its `where`s -- which is what lets a default body call the protocol's other methods
-// on the subject. Before, the subject was unbound, every `T` in the body was `unknown
-// type T`, and mistakes like the one below sailed through (leaking `#error` into
-// follow-on messages instead of reporting here).
+// A protocol method's DEFAULT BODY is type-checked like any other body: the subject is
+// bound as a rigid variable, obliged by the protocol itself and its `where`s -- which is
+// what lets a default body call the protocol's other methods on the subject. Before, the
+// subject was unbound, every `T` in the body was `unknown type T`, and mistakes like the
+// one below sailed through (leaking `#error` into follow-on messages instead of reporting
+// here).
 //
 // The mistake: `name(g)` is a `str`, and a `str` does not add to an integer.
 

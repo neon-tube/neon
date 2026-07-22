@@ -1,18 +1,17 @@
 //@ compile-fail
 //@ error-contains: is sealed
 
-// The sealed assertion ban must fire POST-MONOMORPHIZATION (docs/design/checked-casts.md,
-// decision 6): a generic launderer whose `as! T` only becomes `as! vault::Secret` at the
-// instantiation must hit the same wall the direct spelling does.
+// The sealed assertion ban fires through a generic instantiation. A signature records
+// which of its own type parameters the body asserts with `as!`; each call site then
+// checks the types those parameters are bound to. Binding one to a type with a sealed
+// leaf foreign to the CALLEE's module is rejected, because after monomorphisation the
+// body is literally `a as! vault::Secret` running in the callee's module — the exact
+// spelling the ban rejects when written directly.
 //
-// Deliberately absent from expected-pass.txt until it closes. The checker checks a
-// generic body once, with `T` rigid — `T` has no sealed leaf, so the ban cannot see the
-// instantiation there, and instantiation happens at lowering, which today has no
-// diagnostics channel (the same infrastructure gap as TODO §5's unsolved-generics ICE).
-// The hole is SOUNDNESS-guarded meanwhile: the `as!` still compiles to the canonical
-// tag check, so a forged value traps and only a genuinely-constructed Secret can be
-// laundered — which the holder could equally have recovered with `as?`. What is
-// missing is the compile-time rejection, not the runtime defence.
+// Direct spelling only: a wrapper that forwards to another generic's `as!` is not
+// traced. That depth stays sound at run time regardless — the cast compiles to the
+// tag check, so only a value the owner genuinely constructed can be asserted, which
+// the holder could equally have recovered with `as?`.
 
 use std::io;
 

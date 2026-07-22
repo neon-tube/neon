@@ -1,10 +1,10 @@
 //@ compile-fail
 //@ error-contains: null-as-value vs null-as-failure
 
-// `as? T` answers "wasn't one" with null, so a target that itself overlaps null makes
-// the answer unreadable -- a null result cannot say whether the value was a null it
-// holds or a type it isn't (docs/design/checked-casts.md, decision 7). Rejected with
-// the repair spelled out: test with `is`, or assert the non-null part.
+// `as? T` answers "wasn't one" with null, so a target that itself overlaps null makes the
+// answer unreadable -- a null result cannot say whether the value was a null it holds or a
+// type it isn't. Rejected with the repair spelled out: test with `is`, or assert the non-
+// null part.
 
 fn main() {
     let a: any = 5;

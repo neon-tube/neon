@@ -1,14 +1,14 @@
-// An `if`/`match` join into `(union, scalar)` keeps the scalar (formerly TODO #8d).
-// The two arms build tuples whose first elements are DIFFERENT members of the union
-// (`bool` vs `null`), so the join is typed at `(bool, i64) | (null, i64)` — a union of
-// tuple shapes — and flowing it into the annotated `(J, i64)` needs the live arm's
-// tuple rebuilt element-wise. Codegen used to fall through to a zeroed literal there:
-// `k` came back 0, not 4 — compiled, exited 0, wrong data. The coercion now switches
-// on the discriminant and widens each variant into the target shape.
+// An `if`/`match` join into `(union, scalar)` keeps the scalar. The two arms build tuples
+// whose first elements are DIFFERENT members of the union (`bool` vs `null`), so the join
+// is typed at `(bool, i64) | (null, i64)` — a union of tuple shapes — and flowing it into
+// the annotated `(J, i64)` needs the live arm's tuple rebuilt element-wise. Codegen used
+// to fall through to a zeroed literal there: `k` came back 0, not 4 — compiled, exited 0,
+// wrong data. The coercion now switches on the discriminant and widens each variant into
+// the target shape.
 //
-// The shapes that always worked are pinned alongside: arms agreeing on the member,
-// and widening each element to the union before the tuple. Found originally writing a
-// DOM JSON parser, where every `parse_value` arm returns `(Json, next)`.
+// The shapes that always worked are pinned alongside: arms agreeing on the member, and
+// widening each element to the union before the tuple. Found originally writing a DOM JSON
+// parser, where every `parse_value` arm returns `(Json, next)`.
 
 use std::io;
 

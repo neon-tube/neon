@@ -16,26 +16,6 @@ hazards. Each item still has a repro or a file:line.
 
 ---
 
-## P1 — structural. These are why P0 items keep appearing.
-
-### 19. No diagnostics channel survives monomorphization
-
-The checker checks a generic body once, with its parameters rigid; instantiation happens
-at lowering, which cannot report. Two known consequences, both from the checked-casts
-work (`docs/design/checked-casts.md`):
-
-- the `sealed` assertion ban does not fire through a generic launderer
-  (`fn f[T](a: any) -> T { a as! T }` at `T = Secret`) — off-ratchet pin
-  `records/sealed_no_generic_assert_laundering.neon`; soundness-guarded meanwhile by the
-  canonical tag check;
-- a type parameter mentioned only in `throws` still reaches codegen as the "type
-  variable 'T" ICE — the former §5 fix promotes candidates against the final *recorded*
-  type, and throws types are not recorded per expression.
-
-Either per-instance re-checking or a lowering-side error path closes both.
-
----
-
 ## P2 — decisions. These need an owner's call, not an implementation.
 
 ### 16. Should block comments exist?

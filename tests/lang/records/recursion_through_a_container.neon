@@ -1,15 +1,14 @@
-// A record whose recursion runs through `List` is a usable type (formerly TODO #8):
-// construction worked, but reading ANY field back reported "`Tree` has no field" --
-// even the scalar. The cycle reached `List[Tree]`'s type-argument slot, the emptiness
-// derivation's inductive re-entry assumption judged the slot empty, the atom
-// uninhabited, and every projection path died.
+// A record whose recursion runs through `List` is a usable type: construction worked, but
+// reading ANY field back reported "`Tree` has no field" -- even the scalar. The cycle
+// reached `List[Tree]`'s type-argument slot, the emptiness derivation's inductive re-entry
+// assumption judged the slot empty, the atom uninhabited, and every projection path died.
 //
-// The rule that fixes it (`empty.rs::field_empty`): an argument slot is identity, not
-// data -- the empty list inhabits `List[Tree]` whatever `Tree` is -- so a slot kills
-// its atom only through a CLOSED never (`List[i64] ∧ List[str]`'s slot; nominal
-// argument disjointness lives exactly there), never through the cycle's own
-// assumption. Data fields stay inductive: a record cycle with no base case through a
-// real field is still empty, and still reported.
+// The rule that fixes it (`empty.rs::field_empty`): an argument slot is identity, not data
+// -- the empty list inhabits `List[Tree]` whatever `Tree` is -- so a slot kills its atom
+// only through a CLOSED never (`List[i64] ∧ List[str]`'s slot; nominal argument
+// disjointness lives exactly there), never through the cycle's own assumption. Data fields
+// stay inductive: a record cycle with no base case through a real field is still empty,
+// and still reported.
 
 use std::io;
 use std::collections::list;
