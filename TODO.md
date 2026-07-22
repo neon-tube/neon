@@ -74,17 +74,6 @@ else-branch of an `any` subject deliberately does not refine (`any \ T` is a com
 with no repr of its own), and only bare locals narrow — a field or call result has no
 binding to shadow.
 
-### 11. The block-parameter repr invariant is *undefined*, not merely unchecked
-
-`ssa.rs` says predecessors pass arguments in parameter order. It does not say what relation
-the **reprs** must satisfy. It is not equality — a verifier asserting equality flags
-**9,226 sites** across the corpus (`str` and `Null` into a `str?` join, bare `i64` into an
-`i64 | null` parameter), and every one of those programs runs correctly, so the emitter is
-widening. The real invariant is "assignable", and that relation exists nowhere — not as a
-function, not as a doc. No verifier can be written until someone defines it.
-
-This is the shape that *precedes* a Class B bug rather than an instance of one.
-
 ### 19. No diagnostics channel survives monomorphization
 
 The checker checks a generic body once, with its parameters rigid; instantiation happens
@@ -338,35 +327,6 @@ by 5% and n-body by 3.9×. Neither dominates; benchmark tables should say which 
 built the Neon row.
 
 ---
-
-## P3 — cleanup
-
-- `docs/design/ir.md` refers to `rt.h` in one remaining place; it no longer exists (the
-  umbrella is `libneon_rt.h`).
-- `docs/design/resources.md` is stale three ways: the throwing-closure prerequisite is met,
-  cleanup is `(T) throws E -> null` (`()` is not a type in this language), and `File` is
-  implemented.
-- `lexer/error.rs::UnmatchedCloseBrace` — never constructed.
-
----
-
-### 13a. Code comments contradicted by the code they document
-
-Found while rewriting the design docs; all flagged rather than fixed.
-
-- `ir/repr.rs` — `Repr::Map`'s doc says "an immutable HAMT". `runtime/src/map.c` is an
-  open-addressed table with control bytes, copy-on-write above `rc > 1`.
-- `NEON_IMMORTAL` is read by `neon_retain`/`neon_release` and **set by nothing**. Either
-  string literals are not actually immortal, or the flag is dead.
-- `backend/c.rs::emit_term` — `Term::Throw` in a non-throwing function emits
-  `neon_panic(var(v))` with the value raw, while `neon_panic` takes a `neon_str`. Whether
-  lowering can produce that shape is unconfirmed.
-
-### 13b. The stdlib never goes through `expand`
-
-So a stdlib `@cfg` is silently ignored, and a typo'd stdlib annotation is undiagnosed.
-`@runtime` and `@pure` still work because their readers go to the AST rather than to
-`Meta`. No reasoning for this exists anywhere in the code.
 
 ### 13c. CBMC cannot reach map resize, clone or drop
 

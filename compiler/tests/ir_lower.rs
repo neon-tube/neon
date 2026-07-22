@@ -258,3 +258,64 @@ fn unsubstituted_var(r: &Repr) -> Option<String> {
         _ => None,
     }
 }
+
+/// The verifier for `Repr::assignable`, which is the block-parameter relation TODO §11
+/// said could not be checked until someone defined it. Every predecessor edge in every
+/// lowered corpus program: the argument's repr must be assignable to the parameter's.
+/// Equality here flagged 9,226 sites (the emitter widens); assignable must flag none —
+/// and when a lowering change starts passing something inconvertible, this names the
+/// function and edge instead of letting the join read garbage.
+#[test]
+fn block_arguments_are_assignable_to_their_parameters() {
+    use neon_compiler::ir::ssa::Term;
+    let mut checked_edges = 0usize;
+    let mut offenders: Vec<String> = Vec::new();
+
+    for (rel, program, _) in lowered_corpus() {
+        for f in &program.funcs {
+            let params: std::collections::HashMap<_, Vec<&Repr>> = f
+                .blocks
+                .iter()
+                .map(|b| (b.id, b.params.iter().map(|&p| f.value_repr(p)).collect()))
+                .collect();
+            let mut check_target = |t: &neon_compiler::ir::ssa::Target,
+                                    offenders: &mut Vec<String>| {
+                let Some(ps) = params.get(&t.to) else { return };
+                for (i, (&arg, &want)) in t.args.iter().zip(ps.iter()).enumerate() {
+                    checked_edges += 1;
+                    let got = f.value_repr(arg);
+                    if !got.assignable(want) {
+                        offenders.push(format!(
+                            "{rel}: {} -> block{} arg {i}: {got:?} not assignable to {want:?}",
+                            f.name, t.to.0
+                        ));
+                    }
+                }
+            };
+            for b in &f.blocks {
+                match &b.term {
+                    Term::Jump(t) => check_target(t, &mut offenders),
+                    Term::Branch { then, els, .. } => {
+                        check_target(then, &mut offenders);
+                        check_target(els, &mut offenders);
+                    }
+                    Term::Switch { arms, default, .. } => {
+                        for (_, t) in arms {
+                            check_target(t, &mut offenders);
+                        }
+                        check_target(default, &mut offenders);
+                    }
+                    Term::Ret(_) | Term::Throw(_) | Term::Unreachable => {}
+                }
+            }
+        }
+    }
+
+    assert!(checked_edges > 5000, "expected thousands of edges, got {checked_edges}");
+    assert!(
+        offenders.is_empty(),
+        "{} block argument(s) violate the assignable relation:\n  {}",
+        offenders.len(),
+        offenders.iter().take(20).cloned().collect::<Vec<_>>().join("\n  "),
+    );
+}

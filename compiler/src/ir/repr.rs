@@ -113,6 +113,57 @@ pub enum Repr {
 }
 
 impl Repr {
+    /// THE BLOCK-PARAMETER RELATION (formerly TODO §11): a predecessor may pass an
+    /// argument of repr `self` to a parameter of repr `target` iff this holds. It is
+    /// not equality — the emitter widens at flow sites, so `str` and `Null` both flow
+    /// into a `str?` join and a bare `i64` into an `i64 | null` parameter — and until
+    /// this function existed the invariant those 9,000+ sites satisfied was written
+    /// nowhere. This is the definition; `ir_lower.rs`'s
+    /// `block_arguments_are_assignable_to_their_parameters` is the verifier, so a
+    /// lowering change that starts passing an inconvertible value fails a test
+    /// instead of reading garbage at the join.
+    ///
+    /// The relation is exactly the set of conversions `backend::c::coerce_expr` emits
+    /// without falling through to its zeroed dead-branch literal, in the WIDENING
+    /// direction: identity, `never` into anything, anything into `any`, injection or
+    /// remap into a union, `null`/payload into a nullable, and covariant width on
+    /// records and tuples (an absent record field must be optional — the emitter
+    /// fills it with null). Narrowing conversions exist in the backend too (a
+    /// refined variable's projection), but a block argument is a flow, and flows
+    /// widen.
+    pub fn assignable(&self, target: &Repr) -> bool {
+        if self == target || matches!(self, Repr::Never) || matches!(target, Repr::Any) {
+            return true;
+        }
+        match (self, target) {
+            (src, Repr::Union(vs)) => {
+                vs.iter().any(|v| v == src)
+                    || matches!(src, Repr::Union(from) if from.iter().any(|f| vs.contains(f)))
+            }
+            // A union whose other variants are all `Never` is its one inhabited member
+            // wearing a tag: `try`'s machinery types an error edge at `E | never`, and
+            // the projection to `E` at the join is total. Found by the verifier on its
+            // first run — this arm is the definition learning what the emitter
+            // actually does, which is the whole point of writing it down.
+            (Repr::Union(from), t) => {
+                from.iter().all(|f| matches!(f, Repr::Never) || f == t)
+                    && from.iter().any(|f| f == t)
+            }
+            (Repr::Null, Repr::Nullable(_)) => true,
+            (src, Repr::Nullable(inner)) => src == inner.as_ref(),
+            (Repr::Record { fields: sf, .. }, Repr::Record { fields: tf, .. }) => {
+                tf.iter().all(|(n, tr)| match sf.iter().find(|(sn, _)| sn == n) {
+                    Some((_, sr)) => sr.assignable(tr),
+                    None => Repr::Null.assignable(tr),
+                })
+            }
+            (Repr::Tuple(se), Repr::Tuple(te)) => {
+                te.len() <= se.len() && se.iter().zip(te).all(|(s, t)| s.assignable(t))
+            }
+            _ => false,
+        }
+    }
+
     /// Whether a value of this repr lives behind a pointer, so `T | null` can use a
     /// null pointer rather than a discriminant.
     /// A back-edge is deliberately *not* a pointer. It names a type without describing
