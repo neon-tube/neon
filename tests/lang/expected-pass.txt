@@ -150,6 +150,7 @@ functions/record_arg_wrong_field_type.neon
 functions/unbound_generic_method_call.neon
 functions/where_clause_bound.neon
 functions/where_clause_unsatisfied.neon
+integers/bsr_is_arithmetic.neon
 integers/div_by_zero.neon
 integers/div_min_by_neg_one.neon
 integers/min_literal.neon
@@ -216,6 +217,7 @@ protocols/a_variable_union_receiver_is_not_rigid.neon
 protocols/ambiguity_resolved_by_qualification.neon
 protocols/ambiguous_call.neon
 protocols/declare_and_impl.neon
+protocols/default_body_is_checked.neon
 protocols/dispatch_on_receiver.neon
 protocols/generic_impl.neon
 protocols/impl_for_primitive.neon

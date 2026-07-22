@@ -2311,7 +2311,17 @@ fn prim(types: &TypeTable, f: &Func, op: PrimOp, args: &[Value]) -> String {
         PrimOp::Bxor => format!("({a} ^ {b})"),
         // The shift amount is masked to the operand width, so any i64 amount is defined.
         PrimOp::Bsl => format!("((int64_t)((uint64_t){a} << ({b} & 63)))"),
-        PrimOp::Bsr => format!("({a} >> ({b} & 63))"),
+        // `bsr` is ARITHMETIC — the sign extends — and the language guarantees it, so
+        // it is spelled in defined operations rather than left to a bare `>>` on
+        // int64_t, which C11 §6.5.7p5 makes implementation-defined for a negative
+        // left operand (gcc and clang both happen to choose arithmetic; "happen to"
+        // is what this line removes). For a negative value the identity
+        // `a >> n == ~(~a >> n)` runs the shift on the complement — non-negative, so
+        // the unsigned logical shift agrees — and complements back; both `~` are on
+        // uint64_t, so every step is defined.
+        PrimOp::Bsr => format!(
+            "((int64_t)({a} < 0 ? ~(~(uint64_t){a} >> ({b} & 63)) : (uint64_t){a} >> ({b} & 63)))"
+        ),
         PrimOp::Bnot => format!("(~{a})"),
     }
 }

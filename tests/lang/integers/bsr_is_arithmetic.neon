@@ -1,0 +1,21 @@
+// `bsr` is ARITHMETIC: the sign extends. This was true by accident -- codegen emitted
+// a bare `>>` on int64_t, which C11 makes implementation-defined for negative values,
+// and gcc and clang both happened to choose arithmetic -- and is now guaranteed: the
+// emission spells the shift in defined unsigned operations (`a >> n == ~(~a >> n)` for
+// negative `a`), so the answer no longer depends on which C compiler built the
+// program (formerly TODO #8c).
+//
+// `id` keeps the operands opaque so a constant folder cannot answer instead of the
+// emitted shift.
+
+use std::io;
+
+fn id(x: i64) -> i64 { x }
+
+fn main() {
+    io::println(to_string(id(-8) bsr id(1)));
+    io::println(to_string(id(-1) bsr id(63)));
+    io::println(to_string(id(8) bsr id(1)));
+    io::println(to_string(id(-9223372036854775807 - 1) bsr id(62)));
+    io::println(to_string(id(5) bsr id(64)));
+}

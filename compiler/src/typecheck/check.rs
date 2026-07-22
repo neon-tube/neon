@@ -665,9 +665,29 @@ impl Checker<'_> {
                     }
                 }
                 ast::DeclKind::Protocol(p) => {
+                    // A default body is checked with the protocol's subject BOUND: a
+                    // rigid variable, obliged by the protocol itself (a default body's
+                    // whole point is calling the other methods on the subject) and by
+                    // the protocol's `where`s. Unbound, every `T` in the body was
+                    // `unknown type T` and leaked `#error` into follow-on messages.
+                    // A constructor subject (`for C[_]`) is not a plain rigid and
+                    // stays unbound — no stdlib protocol with one has default bodies.
+                    let mut extra: Vec<(String, super::env::ProtocolId)> = vec![];
+                    if let Some(pid) = self.env.lookup_protocol(module, &[p.name.clone()]) {
+                        extra.push((p.subject.clone(), pid));
+                    }
+                    for w in &p.wheres {
+                        if let ast::TypeSpecKind::Named { path, .. } = &w.bound.kind {
+                            if let Some(pid) = self.env.lookup_protocol(module, path) {
+                                extra.push((w.param.clone(), pid));
+                            }
+                        }
+                    }
+                    let outer: Vec<String> =
+                        if p.subject_arity == 0 { vec![p.subject.clone()] } else { vec![] };
                     for m in &p.methods {
                         if m.body.is_some() {
-                            self.fn_body(module, m, &[]);
+                            self.fn_body_with_bounds(module, m, &outer, extra.clone());
                         }
                     }
                 }
@@ -862,6 +882,19 @@ impl Checker<'_> {
     /// A declaration with no body is a bare signature — a protocol method, say — and has
     /// nothing to check.
     fn fn_body(&mut self, module: &[String], f: &ast::FnDecl, outer: &[String]) {
+        self.fn_body_with_bounds(module, f, outer, vec![]);
+    }
+
+    /// `fn_body`, with bounds the declaration form imposes from outside the signature —
+    /// a protocol's subject is obliged by the protocol and its `where`s in every
+    /// default body, on top of whatever the method's own clause says.
+    fn fn_body_with_bounds(
+        &mut self,
+        module: &[String],
+        f: &ast::FnDecl,
+        outer: &[String],
+        extra_bounds: Vec<(String, super::env::ProtocolId)>,
+    ) {
         let Some(body) = &f.body else { return };
 
         let mut scope = Scope::new(module);
@@ -899,6 +932,7 @@ impl Checker<'_> {
                 _ => None,
             })
             .collect();
+        self.bounds.extend(extra_bounds);
 
         // A fn returning `()` is a statement sequence -- its tail is whatever the last
         // statement happened to be, and nothing may be required of it. Anything else must

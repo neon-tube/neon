@@ -27,11 +27,6 @@ expression's own `ExprId`**, overwriting that expression's call resolution. Lowe
 Two things keyed on one id. Not fixable in `lower.rs` — the resolution is destroyed before
 lowering runs. Needs `set_call` keyed on something other than the hole's id.
 
-### 6. Default protocol method bodies are never type-checked
-
-`check.rs:217` calls `fn_body(module, m, &[])`, so the protocol's subject is unbound and
-any `T` in the body is `unknown type T`. Also leaks `#error` into a follow-on message.
-
 ### 7. `Resolution::Bound` on a union receiver prints a compiler marker as program output
 
 ```neon
@@ -76,17 +71,6 @@ The block parses and type-checks. The failing assert does nothing, and there is 
 `neon test` verb in `cli/src/cmd/`. The language has testing syntax that runs nothing —
 `decisions.md` chose assert intrinsics over a library specifically for the reporting they
 would give, and that reporting does not exist.
-
-### 8c. `bsr` semantics are the C compiler's choice, not ours
-
-`-8 bsr 1` gives `-4` — an arithmetic shift — because `backend/c.rs` emits a bare
-`({a} >> ({b} & 63))` on `int64_t`, and gcc and clang happen to choose arithmetic. C11
-§6.5.7p5 makes a right shift of a negative signed value **implementation-defined**, which
-is precisely what `decisions.md` says codegen must guarantee against.
-
-Doubly vacuous as written: the rule is stated as type-driven (logical for unsigned,
-arithmetic for signed) and **there is no unsigned type in the language**. Either emit the
-shift explicitly, or write down that `bsr` is arithmetic and mean it.
 
 ### 8d. An `if`/`match` join into `(union, scalar)` mislays the scalar
 
