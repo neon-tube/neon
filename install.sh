@@ -112,6 +112,63 @@ install_tree() {
     cp -r "$SRC/stdlib" "$PREFIX/stdlib"
 }
 
+# ---- the language server ----
+#
+# neon-lsp lives in its own repo (github.com/neon-tube/neon-lsp) since the split. A source
+# install builds it from there; a prebuilt install pulls the matching binary from its latest
+# release. Either way it is best-effort: the toolchain is fully usable without it and only
+# the editor plugins need it, so a failure here warns rather than aborts the install.
+install_lsp_from_source() {
+    info "Installing the language server (${CYAN}cargo install neon-lsp${NC})..."
+    if cargo install --git https://github.com/neon-tube/neon-lsp --root "$PREFIX" --force; then
+        success "Language server installed: ${CYAN}$PREFIX/bin/neon-lsp${NC}"
+    else
+        warn "neon-lsp did not build; the editor plugins will have no language server."
+        warn "Install it later with: cargo install --git https://github.com/neon-tube/neon-lsp"
+    fi
+}
+
+install_lsp_prebuilt() {
+    local os="$1" arch="$2"
+    # A toolchain asset may already carry neon-lsp (install_tree copies it if present).
+    if [ -x "$PREFIX/bin/neon-lsp" ]; then
+        return 0
+    fi
+    local lsp_os lsp_arch
+    case "$os" in
+        Darwin) lsp_os=macos ;;
+        Linux)  lsp_os=linux ;;
+        *)      return 0 ;;
+    esac
+    case "$arch" in
+        arm64|aarch64) lsp_arch=aarch64 ;;
+        *)             lsp_arch=x86_64 ;;
+    esac
+    local key="neon-lsp-${lsp_arch}-${lsp_os}"
+    info "Fetching the language server (${CYAN}neon-tube/neon-lsp${NC}, ${CYAN}$key${NC})..."
+    local json url name tmp bin
+    json=$(curl -sSL "https://api.github.com/repos/neon-tube/neon-lsp/releases/latest")
+    url=$(echo "$json" | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4 | grep "$key" | head -n 1)
+    if [ -z "$url" ]; then
+        warn "No neon-lsp release asset for $key; skipping the language server."
+        warn "Install it later with: cargo install --git https://github.com/neon-tube/neon-lsp"
+        return 0
+    fi
+    tmp=$(mktemp -d)
+    name=$(basename "$url")
+    curl -sSL -o "$tmp/$name" "$url"
+    tar -xzf "$tmp/$name" -C "$tmp"
+    bin=$(find "$tmp" -type f -name neon-lsp | head -n 1)
+    if [ -n "$bin" ]; then
+        cp "$bin" "$PREFIX/bin/neon-lsp"
+        chmod +x "$PREFIX/bin/neon-lsp"
+        success "Language server installed: ${CYAN}$PREFIX/bin/neon-lsp${NC}"
+    else
+        warn "neon-lsp asset $name had no binary inside; skipping."
+    fi
+    rm -rf "$tmp"
+}
+
 if [ "$BUILD_FROM_SOURCE" = true ]; then
     info "Mode: ${CYAN}building from source${NC}"
 
@@ -157,11 +214,7 @@ if [ "$BUILD_FROM_SOURCE" = true ]; then
     # that staging, nothing scavenged out of cargo's build directories. (`install_tree`
     # finds the binary at the tree's root there, where a release asset has it in bin/.)
     install_tree "target/release"
-
-    if [ -d extra ]; then
-        info "Copying editor extensions..."
-        cp -r extra/. "$PREFIX/extra/" || true
-    fi
+    install_lsp_from_source
 else
     info "Mode: ${CYAN}installing latest prebuilt release from GitHub${NC}"
 
@@ -261,9 +314,7 @@ else
 
     info "Installing prebuilt components..."
     install_tree "$SRC_DIR"
-    if [ -d "$SRC_DIR/extra" ]; then
-        cp -r "$SRC_DIR/extra/." "$PREFIX/extra/"
-    fi
+    install_lsp_prebuilt "$OS" "$ARCH"
 fi
 
 info "Creating neon-update..."
