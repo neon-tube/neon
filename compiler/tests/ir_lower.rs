@@ -1,11 +1,21 @@
-//! Coverage probe: lower every passing corpus program and count the not-yet-lowered
-//! forms (the `<todo: ...>` markers). Not a ratchet — a live report of what the lowering
-//! still cannot express, so the remaining work is visible.
+//! Coverage probe and two lowering invariants, run over the REAL pipeline.
+//!
+//! These guards previously lowered with `libs = &[]`, parsed the stdlib without
+//! renumbering (so `ExprId`s collided and stdlib bodies went unchecked), and scanned
+//! `f.values()` only. Rebuilt correctly the answers were still 0 — that latent gap was
+//! TODO §10 — but a guard aimed at a program the compiler never builds proves nothing
+//! about the one it does. This harness now mirrors `cli/src/frontend.rs` exactly:
+//! stdlib parsed and numbered first (`stdlib::parse_from`), the program numbered after
+//! it, `check_all` over the whole compilation, and lowering handed the stdlib as
+//! `libs`. The invariant scans cover every repr position a `Func` and a `Program`
+//! carry: values, `ret`, `throws`, `env`, `Op::IsVariant::tested`, `program.recursive`
+//! and `program.boxed`.
 
 use neon_compiler::ir::lower::lower_module;
-use neon_compiler::ir::ssa::print;
+use neon_compiler::ir::repr::Repr;
+use neon_compiler::ir::ssa::{print, Func, Op, Program};
 use neon_compiler::typecheck::env::Unit;
-use neon_compiler::typecheck::{check::check_module, Env};
+use neon_compiler::typecheck::{check::check_all, Env};
 use neon_compiler::{lexer, parser};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -14,11 +24,11 @@ fn lang_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/lang")
 }
 
-fn stdlib_modules() -> Vec<(Vec<String>, neon_compiler::ast::Module)> {
+fn stdlib_sources() -> Vec<(String, String)> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../stdlib");
     let mut sources = Vec::new();
     collect_neon(&root, &root, &mut sources);
-    neon_compiler::stdlib::parse(&sources).expect("stdlib parses")
+    sources
 }
 
 fn collect_neon(root: &Path, dir: &Path, out: &mut Vec<(String, String)>) {
@@ -42,10 +52,11 @@ fn expected_pass() -> Vec<String> {
         .collect()
 }
 
-/// Lower every corpus program that checks cleanly, pairing each with the `any` TyId from
-/// its own `Env` (type ids are per-env, so the guards below cannot share one).
-fn lowered_corpus() -> Vec<(String, neon_compiler::ir::ssa::Program, neon_compiler::typecheck::types::TyId)>
-{
+/// Compile every passing corpus program the way the cli does, and lower it the way the
+/// cli does. Each entry pairs the program with the `any` TyId from its own `Env` (type
+/// ids are per-env, so the guards below cannot share one).
+fn lowered_corpus() -> Vec<(String, Program, neon_compiler::typecheck::types::TyId)> {
+    let std_sources = stdlib_sources();
     let mut out = Vec::new();
     for rel in expected_pass() {
         let Ok(src) = std::fs::read_to_string(lang_root().join(&rel)) else { continue };
@@ -54,24 +65,28 @@ fn lowered_corpus() -> Vec<(String, neon_compiler::ir::ssa::Program, neon_compil
         if !perrs.is_empty() {
             continue;
         }
-        let Some(module) = module else { continue };
+        let Some(mut module) = module else { continue };
 
-        let std_owned = stdlib_modules();
+        // The real pipeline: stdlib numbered from 0, the program numbered after it, so
+        // one `TypecheckResult` covers both and stdlib bodies are checked and lowered.
+        let (std_modules, next_id) =
+            neon_compiler::stdlib::parse_from(&std_sources, 0).expect("stdlib parses");
+        neon_compiler::ast::number_exprs_from(&mut module, next_id);
+
         let mut modules: Vec<(Vec<String>, &_)> =
-            std_owned.iter().map(|(p, m)| (p.clone(), m)).collect();
+            std_modules.iter().map(|(p, m)| (p.clone(), m)).collect();
         modules.push((Vec::new(), &module));
         let mut env = Env::build_with(&modules, Unit::RootApplication);
         if !env.errors().is_empty() {
             continue;
         }
-        let (result, errs) = check_module(&mut env, &module);
-        // One channel. `check_module` returns the errors raised while resolving
-        // annotations too, so a program carrying a poison type — which lowers to a repr
-        // these guards would then report as a compiler bug — is filtered out here.
+        let (result, errs) = check_all(&mut env, &modules);
         if !errs.is_empty() {
             continue;
         }
-        let program = lower_module(&env, &result, &module, &[]);
+        let libs: Vec<(Vec<String>, &_)> =
+            std_modules.iter().map(|(p, m)| (p.clone(), m)).collect();
+        let program = lower_module(&env, &result, &module, &libs);
         out.push((rel, program, env.solver.t.any()));
     }
     out
@@ -83,31 +98,9 @@ fn lower_the_corpus_and_report_gaps() {
     let mut files = 0;
     let mut clean = 0;
 
-    for rel in expected_pass() {
-        let Ok(src) = std::fs::read_to_string(lang_root().join(&rel)) else { continue };
-        let Ok(tokens) = lexer::lex(&src) else { continue };
-        let (module, perrs) = parser::parse(&tokens, src.len());
-        if !perrs.is_empty() {
-            continue;
-        }
-        let Some(module) = module else { continue };
-
-        let std_owned = stdlib_modules();
-        let mut modules: Vec<(Vec<String>, &_)> =
-            std_owned.iter().map(|(p, m)| (p.clone(), m)).collect();
-        modules.push((Vec::new(), &module));
-
-        let mut env = Env::build_with(&modules, Unit::RootApplication);
-        if !env.errors().is_empty() {
-            continue;
-        }
-        let (result, errs) = check_module(&mut env, &module);
-        if !errs.is_empty() {
-            continue;
-        }
-
+    for (_rel, program, _) in lowered_corpus() {
         files += 1;
-        let ir = print::program(&lower_module(&env, &result, &module, &[]));
+        let ir = print::program(&program);
         let mut file_todos = 0;
         for line in ir.lines() {
             if let Some(i) = line.find("<todo: ") {
@@ -135,6 +128,32 @@ fn lower_the_corpus_and_report_gaps() {
     assert_eq!(clean, files, "every checkable corpus program should lower fully");
 }
 
+/// Every repr a lowered function carries, with a label saying where it lives. Values,
+/// the return, the throws slot, a lambda's environment, and each `Op::IsVariant`'s
+/// resolved `tested` — the positions the original scan missed are exactly where the
+/// historical bugs lived (`lower_try`'s handler param, `wrap_throwing`'s error repr).
+fn func_reprs(f: &Func) -> Vec<(String, &Repr)> {
+    let mut out: Vec<(String, &Repr)> = Vec::new();
+    for v in f.values() {
+        out.push((format!("%{}", v.0), f.value_repr(v)));
+    }
+    out.push(("ret".into(), &f.ret));
+    if let Some(t) = &f.throws {
+        out.push(("throws".into(), t));
+    }
+    if let Some(e) = &f.env {
+        out.push(("env".into(), e));
+    }
+    for b in &f.blocks {
+        for inst in &b.insts {
+            if let Op::IsVariant { tested: Some(t), .. } = &inst.op {
+                out.push(("IsVariant::tested".into(), t));
+            }
+        }
+    }
+    out
+}
+
 /// `any` may only ever come from source. It is legitimate when written — `throws any`
 /// asks for erasure and gets a box — but the compiler must never *invent* it as a
 /// fallback, a default, or an unhandled case. That is how the previous compiler died,
@@ -154,9 +173,7 @@ fn any_never_appears_unless_the_source_type_is_any() {
         checked += 1;
         for f in &program.funcs {
             for v in f.values() {
-                if matches!(f.value_repr(v), neon_compiler::ir::repr::Repr::Any)
-                    && f.value_ty(v) != top
-                {
+                if matches!(f.value_repr(v), Repr::Any) && f.value_ty(v) != top {
                     offenders.push(format!("{rel}: {} %{}", f.name, v.0));
                 }
             }
@@ -183,9 +200,9 @@ fn any_never_appears_unless_the_source_type_is_any() {
 /// from while the instance had substituted — one call, two layouts for its result.
 ///
 /// `c_type` now panics on a `Var`, which covers every compiled program rather than only
-/// the corpus. This reports the offending function and value instead, which is what
-/// makes such a bug findable. It runs over the lowered IR rather than `repr_of`, because
-/// none of those bugs went through `repr_of`.
+/// the corpus. This reports the offending function and position instead, which is what
+/// makes such a bug findable — and it covers every repr position a function and a
+/// program carry, including `program.recursive` and `program.boxed`.
 #[test]
 fn no_type_variable_survives_lowering() {
     let mut checked = 0;
@@ -194,10 +211,20 @@ fn no_type_variable_survives_lowering() {
     for (rel, program, _) in lowered_corpus() {
         checked += 1;
         for f in &program.funcs {
-            for v in f.values() {
-                if let Some(var) = unsubstituted_var(f.value_repr(v)) {
-                    offenders.push(format!("{rel}: {} %{} holds '{var}", f.name, v.0));
+            for (wher, r) in func_reprs(f) {
+                if let Some(var) = unsubstituted_var(r) {
+                    offenders.push(format!("{rel}: {} {wher} holds '{var}", f.name));
                 }
+            }
+        }
+        for (ty, r) in &program.recursive {
+            if let Some(var) = unsubstituted_var(r) {
+                offenders.push(format!("{rel}: recursive[{ty:?}] holds '{var}"));
+            }
+        }
+        for (atom, r) in &program.boxed {
+            if let Some(var) = unsubstituted_var(r) {
+                offenders.push(format!("{rel}: boxed[{atom}] holds '{var}"));
             }
         }
     }
@@ -205,8 +232,8 @@ fn no_type_variable_survives_lowering() {
     assert!(checked > 100, "expected to lower most of the corpus, got {checked}");
     assert!(
         offenders.is_empty(),
-        "{} value(s) kept an unsubstituted type variable, which codegen boxes as \
-         `neon_value`:\n  {}",
+        "{} repr position(s) kept an unsubstituted type variable, which codegen boxes \
+         as `neon_value`:\n  {}",
         offenders.len(),
         offenders.iter().take(20).cloned().collect::<Vec<_>>().join("\n  "),
     );
@@ -215,8 +242,7 @@ fn no_type_variable_survives_lowering() {
 /// The name of the first type variable anywhere inside a repr — nested, since the ones
 /// that bite hide in a closure's `throws` or a union's error variant rather than at the
 /// top level.
-fn unsubstituted_var(r: &neon_compiler::ir::repr::Repr) -> Option<String> {
-    use neon_compiler::ir::repr::Repr;
+fn unsubstituted_var(r: &Repr) -> Option<String> {
     match r {
         Repr::Var(n) => Some(n.clone()),
         Repr::List(e) | Repr::Nullable(e) => unsubstituted_var(e),

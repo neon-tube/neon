@@ -74,22 +74,6 @@ else-branch of an `any` subject deliberately does not refine (`any \ T` is a com
 with no repr of its own), and only bare locals narrow — a field or call result has no
 binding to shadow.
 
-### 10. The `ir_lower.rs` guards are aimed at a program the compiler never builds
-
-`no_type_variable_survives_lowering` and `any_never_appears_unless_the_source_type_is_any`
-are non-vacuous but:
-
-- they lower with `libs = &[]` — the real pipeline adds **13,522 functions per corpus file**
-  they have never looked at;
-- they use `stdlib::parse` + `check_module` where the pipeline uses `parse_from(.., 0)` +
-  `number_exprs_from` + `check_all`, so `ExprId`s collide and stdlib bodies go unchecked;
-- they scan `f.values()` only — never `f.ret`, `f.throws`, `f.env`, `Op::IsVariant::tested`,
-  `program.recursive` or `program.boxed`;
-- `any_never_appears` tests the top level only while its name claims the nested property.
-
-Rebuilt correctly the answer is still 0, so this is latent, not live. Align the harness
-with `cli/src/frontend.rs`.
-
 ### 11. The block-parameter repr invariant is *undefined*, not merely unchecked
 
 `ssa.rs` says predecessors pass arguments in parameter order. It does not say what relation
