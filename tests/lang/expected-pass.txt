@@ -331,6 +331,7 @@ types/soft_cast_rejects_null_overlap.neon
 types/str_list_literal_erased_into_any.neon
 types/structural_record_width.neon
 types/throws_binds_below_the_arrow.neon
+types/tuple_destructure_from_nullable_union.neon
 types/type_alias_recursive_rejected.neon
 types/union_erased_member_is_concretely_tagged.neon
 types/union_of_primitives.neon

@@ -1,9 +1,10 @@
 # TODO
 
-Everything known-broken or undecided as of 2026-07-20, distilled from six middle-end
-audits, a compiler-wide collapsing-key sweep, three CBMC models and a fuzzing run.
+Everything known-broken or undecided as of 2026-07-22, distilled from six middle-end
+audits, a compiler-wide collapsing-key sweep, the CBMC models and a fuzzing run.
 Resolved items are removed, not struck through — their write-ups live in the design docs
-they produced (`docs/design/identity.md`, `docs/design/opacity.md`).
+they produced (`docs/design/identity.md`, `docs/design/opacity.md`,
+`docs/design/checked-casts.md`).
 
 Each item has a repro or a file:line. Nothing here is speculative — the unproven leads are
 in their own section at the bottom and marked as such.
@@ -97,35 +98,15 @@ let (v, k) = f(true);      // k is 0, not 4 — compiles, exits 0, wrong data
 
 The two arms build tuples whose first elements are *different* members of the union (`bool`
 vs `null`), so each arm boxes that element at its own repr; the join adopts one arm's tuple
-layout and the `i64` tail is then read at the wrong offset for the other arm's value. Same
-family as item 4 — a union box laid out by one arm and read by another.
+layout and the `i64` tail is then read at the wrong offset for the other arm's value. The
+same disease canonical tags fixed at the `any` boundary (docs/design/checked-casts.md,
+decision 5) — a union laid out by one arm and read by another — still live at tuple joins.
 
 Not triggered when the arms agree: `(true, 4)`/`(false, 5)` is correct, and a single-arm
 `(true, 4)` at `(J, i64)` is correct. Recursion is not required — the union above is a plain
 `type`. Widening each arm's element to the union *before* the tuple (one `J`-typed binding,
 one tuple built after the join) is correct, as is returning a record instead of a tuple.
 Found writing a DOM JSON parser, where every `parse_value` arm returns `(Json, next)`.
-
-### 8e. Destructuring a tuple out of a `(tuple) | null` union miscompiles
-
-```neon
-fn uncons(v) -> (i64, str) | null { if empty { null } else { (65, "bc") } }
-let r = uncons(v);
-if r is null { ... } else { let (b, rest) = r; ... }   // C: 'nu1' has no member '_0'
-```
-
-The `is null` narrows `r` to the tuple in the else arm, but codegen never reprojects the C
-repr: the destructure reads `._0`/`._1` off the *union* struct, which has no tuple members,
-and the emitted C fails to compile. A `record | null` in the same shape is fine — the record
-narrows and its fields read cleanly — so the workaround (and what `bytes::uncons` does) is to
-return a two-field record instead of a tuple. Distinct from 8d: that one silently mislays a
-scalar and still compiles; this one fails the C compile. Same root, though — a union arm whose
-tuple/record layout the narrowed use doesn't pick up.
-
-The related ergonomic gap this entry used to carry — bare uses of an `is null`-narrowed
-value needing an explicit `as T` — closed 2026-07-22 with narrowing (item 9,
-`docs/design/checked-casts.md`): the refined value now flows bare. The tuple-destructure
-miscompile above is unaffected and still open.
 
 ---
 
@@ -180,7 +161,7 @@ This is the shape that *precedes* a Class B bug rather than an instance of one.
 A lossy projection used as an identity. Not a fallback: these functions are total and every
 arm is correct *as a description*; the codomain is just smaller than the domain.
 
-Fixed today: `repr_key`, `type_tag_name` (three separate times), `field_name`, closure tags.
+Fixed in the 2026-07-20 sweep: `repr_key`, `type_tag_name` (three separate times), `field_name`, closure tags.
 Still open: `repr_from_typespec` drops type arguments so `ident[Box[i64]]` and
 `ident[Box[str]]` collide (currently caught by gcc — "correct by coincidence");
 `impl_head`'s `_ => String::new()` makes two tuple impls collide into one symbol.
@@ -203,7 +184,23 @@ line 4. With 40 lines of padding the same error moved to line 17, inside a comme
 file. `TypeError` needs a file id.
 
 This is why a stdlib mistake produces a baffling diagnostic pointing at a test's closing
-brace — it has cost several people time today.
+brace — it has cost real time, repeatedly.
+
+### 19. No diagnostics channel survives monomorphization
+
+The checker checks a generic body once, with its parameters rigid; instantiation happens
+at lowering, which cannot report. Two known consequences, both from the checked-casts
+work (`docs/design/checked-casts.md`):
+
+- the `sealed` assertion ban does not fire through a generic launderer
+  (`fn f[T](a: any) -> T { a as! T }` at `T = Secret`) — off-ratchet pin
+  `records/sealed_no_generic_assert_laundering.neon`; soundness-guarded meanwhile by the
+  canonical tag check;
+- a type parameter mentioned only in `throws` still reaches codegen as the "type
+  variable 'T" ICE — the former §5 fix promotes candidates against the final *recorded*
+  type, and throws types are not recorded per expression.
+
+Either per-instance re-checking or a lowering-side error path closes both.
 
 ---
 
@@ -214,30 +211,6 @@ brace — it has cost several people time today.
 They nest, deliberately and correctly — commenting out a region containing `*/` must not
 end early. But `//` plus an editor covers the use case, and dropping them removes the
 tree-sitter external scanner entirely (nesting is why it exists).
-
-### 17. Move `List`/`Map` out of the prelude
-
-`@runtime` makes this possible now. It also removes the prelude-vs-root collision that
-forces `opacity_permits` to treat the root as a non-container — see the exception in
-`check.rs::opacity_permits`.
-
----
-
-## Checked casts and `sealed` — IMPLEMENTED 2026-07-22
-
-`docs/design/checked-casts.md` — accepted and built the same day. Resolved former items
-1, 4, 14 and 15 (removed above) and the if/while half of §9. What shipped: canonical
-tags (a box always carries the concrete member's tag; union/nullable targets are
-membership checks), narrowing wired into `if`/`while` with assignment dissolution, the
-`as` / `as?` / `as!` triad with the trichotomy enforced ("bare `as` never lies"), and
-the `opaque`/`sealed` split — `sealed record` bars assertive recovery (`as!`) and
-ordering outside the owner's subtree; `File` and `Resource` are sealed, `List`/`Map`
-stay opaque. Ten corpus files respelled; new pins throughout the corpus.
-
-One open residue, off-ratchet: the sealed ban through a generic instantiation
-(`records/sealed_no_generic_assert_laundering.neon`) — needs a post-monomorphization
-diagnostics channel, same infrastructure family as item 5. Soundness-guarded meanwhile
-by the tag check.
 
 ---
 
@@ -469,17 +442,12 @@ built the Neon row.
 
 ## P3 — cleanup
 
-- `docs/design/ir.md` refers to `rt.h` in three places; it no longer exists (the umbrella is
-  `libneon_rt.h`).
+- `docs/design/ir.md` refers to `rt.h` in one remaining place; it no longer exists (the
+  umbrella is `libneon_rt.h`).
 - `docs/design/resources.md` is stale three ways: the throwing-closure prerequisite is met,
   cleanup is `(T) throws E -> null` (`()` is not a type in this language), and `File` is
   implemented.
-- `compiler/src/backend/c.rs::throwing_call_results` — dead, referenced nowhere.
 - `lexer/error.rs::UnmatchedCloseBrace` — never constructed.
-- `parser/mod.rs::fn_like`'s `body_required` parameter is unread; call sites pass it
-  meaningfully. Deliberate or oversight, unknown.
-- `tests/lang/records/spread_with_override.neon` is `known-bug`: `P { y: 9, ..a }` does not
-  parse, because `allow_trailing()` on the field list eats the comma the spread needs.
 
 ---
 
@@ -489,8 +457,6 @@ Found while rewriting the design docs; all flagged rather than fixed.
 
 - `ir/repr.rs` — `Repr::Map`'s doc says "an immutable HAMT". `runtime/src/map.c` is an
   open-addressed table with control bytes, copy-on-write above `rc > 1`.
-- `ir/repr.rs` module doc — describes the value-witness as `(size, retain, release, drop)`.
-  The struct is `(size, retain, release, eq, cmp)` and there is no `drop`.
 - `NEON_IMMORTAL` is read by `neon_retain`/`neon_release` and **set by nothing**. Either
   string literals are not actually immortal, or the flag is dead.
 - `backend/c.rs::emit_term` — `Term::Throw` in a non-throwing function emits
