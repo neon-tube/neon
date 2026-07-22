@@ -470,6 +470,12 @@ fn tup_neg_elem(
 ///
 /// The residual is the diagnostic: it names the uncovered values, so the checker can
 /// say `:pending` rather than "non-exhaustive".
+///
+/// This is the BATCH spelling of what `match_expr` computes incrementally: each arm's
+/// `narrow` threads its `else_ty` forward, and the final `remaining` is exactly
+/// `residual(subject, covered)`. The batch forms below have no production caller and
+/// are kept as the executable specification — their tests are what pin the set
+/// algebra the incremental form relies on.
 pub fn residual(s: &mut Solver, subject: TyId, covered: &[TyId]) -> TyId {
     let c = s.t.union_all(covered);
     s.t.diff(subject, c)

@@ -2602,30 +2602,54 @@ impl Checker<'_> {
             // typechecked. `f(5)` instantiates `T := i64`, the arm is live, and `g`
             // receives an i64 through a str slot. `T` was opaque, not uninhabited.
             //
-            // Tested against the subject rather than against `remaining`, deliberately:
+            // Asked of the *subject* rather than of `remaining`, deliberately:
             // `remaining` being empty is the ordinary trailing-`_`-after-an-exhaustive-
             // match case, which is fine and common. It is a test the subject could never
-            // satisfy *at all* that is the mistake.
+            // satisfy *at all* that is the mistake — `narrow`'s `NeverMatches`, by name.
             if let Some(t) = test {
-                let live = self.env.solver.t.intersect(subject, t.ty);
-                if self.env.solver.is_empty(live)
-                    && !self.env.is_error(subject)
-                    && !self.env.solver.is_empty(subject)
-                {
-                    let (expected, found) = (self.show(subject), self.show(t.ty));
-                    self.error(
-                        arm.pat.span.clone(),
-                        TypeErrorKind::Mismatch { expected, found },
-                    );
+                if !self.env.is_error(subject) {
+                    let vs_subject = narrow::narrow(&mut self.env.solver, subject, t);
+                    if matches!(vs_subject, narrow::Refined::NeverMatches(_)) {
+                        let (expected, found) = (self.show(subject), self.show(t.ty));
+                        self.error(
+                            arm.pat.span.clone(),
+                            TypeErrorKind::Mismatch { expected, found },
+                        );
+                    }
                 }
             }
-            let bound = match test {
-                Some(t) => self.env.solver.t.intersect(remaining, t.ty),
-                None => remaining,
+            // The arm's binding and the next residual are the two halves of ONE
+            // refinement — `narrow::narrow` against `remaining`, guard applied first
+            // (a guarded arm refines what it binds but covers nothing). This is the
+            // module encoding the soundness argument making the decision, rather than
+            // a parallel reimplementation with raw `intersect`/`diff`.
+            let refined = test.map(|t| {
+                let t = if arm.guard.is_some() { t.guarded() } else { t };
+                narrow::narrow(&mut self.env.solver, remaining, t)
+            });
+            let (bound, after) = match refined {
+                // A plain binding admits everything and subtracts nothing.
+                None => (remaining, remaining),
+                Some(narrow::Refined::Both { then_ty, else_ty }) => (then_ty, else_ty),
+                // The test covers everything still reachable: bind it all, nothing falls
+                // through.
+                Some(narrow::Refined::AlwaysMatches(_)) => {
+                    (remaining, self.env.solver.t.never())
+                }
+                // Nothing reachable matches (reported above when it is the subject's
+                // fault); the binding is empty and poisons below.
+                Some(narrow::Refined::NeverMatches(_)) => {
+                    (self.env.solver.t.never(), remaining)
+                }
+                Some(narrow::Refined::Unreachable) => {
+                    (self.env.solver.t.never(), remaining)
+                }
             };
+            remaining = after;
             // Never hand an arm an empty binding, reported or not. Poison is the checker's
             // "already dealt with" type; `never` is the one that makes the next check
-            // succeed for the wrong reason.
+            // succeed for the wrong reason. `Refined::Both` is inhabited on both sides by
+            // construction, so this fires only on the constructed `never`s above.
             let bound = if self.env.solver.is_empty(bound) { self.poison() } else { bound };
             if let Some(v) = &scrut_var {
                 self.bind(v, bound, scrutinee.span.clone(), DefKind::Refinement);
@@ -2638,17 +2662,6 @@ impl Checker<'_> {
             let t = self.expr(module, &arm.body, expected);
             self.locals.pop();
             result = self.union_branches(result, t);
-
-            // Only an exact, unguarded arm removes anything from the fallthrough: `1`
-            // is one i64 among many, and a guard can always reject.
-            if let Some(test) = test {
-                let mut test = test;
-                if arm.guard.is_some() {
-                    test = test.guarded();
-                }
-                let covered = test.covered(&mut self.env.solver);
-                remaining = self.env.solver.t.diff(remaining, covered);
-            }
             if let ast::PatternKind::Literal(lit) = &arm.pat.kind {
                 if let (ExprKind::Bool(b), None) = (&lit.kind, &arm.guard) {
                     if *b { saw_true = true } else { saw_false = true }

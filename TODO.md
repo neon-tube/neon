@@ -57,23 +57,6 @@ would give, and that reporting does not exist.
 
 ## P1 — structural. These are why P0 items keep appearing.
 
-### 9. `match_expr` still narrows inline; `redundant_arms`/`residual` still unused
-
-Half-resolved 2026-07-22: `if`/`while` now narrow through `narrow::narrow_is` /
-`narrow_null` / `Refined` (`check.rs::cond_refinements`), assignment dissolves
-refinements against the declared type, and the value-side projection lives at
-`lower.rs::lower_path` — pinned by `control/narrowing_in_if_and_while.neon` and
-`match/narrowed_scrutinee_flows_bare.neon`. What remains of the original item:
-`match_expr` still reimplements its narrowing with raw `intersect`/`diff` rather than
-calling `narrow::narrow`, and `residual`/`is_exhaustive`/`redundant_arms` still have no
-callers — the exhaustiveness logic exists twice. A refactor, not a bug: the inline copy
-is currently correct.
-
-Known limit of the wired half, recorded in `docs/design/checked-casts.md`: the
-else-branch of an `any` subject deliberately does not refine (`any \ T` is a complement
-with no repr of its own), and only bare locals narrow — a field or call result has no
-binding to shadow.
-
 ### 19. No diagnostics channel survives monomorphization
 
 The checker checks a generic body once, with its parameters rigid; instantiation happens
