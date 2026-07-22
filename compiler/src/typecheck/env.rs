@@ -41,6 +41,12 @@ pub enum Unit {
 pub struct TypeError {
     pub span: Span,
     pub kind: TypeErrorKind,
+    /// The module whose SOURCE the span indexes. Spans are byte offsets into some
+    /// file, and a compilation covers many — the program plus every stdlib module —
+    /// so an error without this rendered against whichever file the caller had in
+    /// hand: a stdlib mistake underlined an arbitrary token of the *user's* program
+    /// (formerly TODO §13). Empty means the root program.
+    pub module: Vec<String>,
 }
 
 /// Every way declaration and body checking can fail.
@@ -751,6 +757,10 @@ pub struct Env {
     depth: usize,
     error_ty: TyId,
     unit: Unit,
+    /// The module whose source is currently being processed — build loop, instantiate,
+    /// or (synced by the checker) the module being checked. Stamped onto every
+    /// `TypeError` so the renderer can pick the right file (TODO §13).
+    current_module: Vec<String>,
 }
 
 impl Default for Env {
@@ -787,6 +797,7 @@ impl Env {
             depth: 0,
             error_ty,
             unit: Unit::RootApplication,
+        current_module: vec![],
         }
     }
 
@@ -1109,7 +1120,19 @@ impl Env {
     /// Errors are collected, never returned: the point is to report every mistake in a
     /// file at once, so a failed resolution yields `error_ty` and carries on.
     pub fn error(&mut self, span: Span, kind: TypeErrorKind) {
-        self.errors.push(TypeError { span, kind });
+        let module = self.current_module.clone();
+        self.errors.push(TypeError { span, kind, module });
+    }
+
+    /// Point subsequent errors at `module`'s source. The checker syncs this as it
+    /// walks; `instantiate` switches it to a declaration's own module around the
+    /// declaration's body, because the spans there index that module's file.
+    pub fn set_current_module(&mut self, module: &[String]) {
+        self.current_module = module.to_vec();
+    }
+
+    pub fn current_module(&self) -> &[String] {
+        &self.current_module
     }
 
     /// Whether a declared type takes generic arguments. `key` is a fully qualified name,
@@ -1342,6 +1365,7 @@ impl Env {
                         self.errors.push(TypeError {
                             span: d.span.clone(),
                             kind: TypeErrorKind::ConstNeedsType(c.name.clone()),
+                            module: module.to_vec(),
                         });
                         continue;
                     };
@@ -2036,6 +2060,9 @@ impl Env {
 
         let scope = self.bind(&decl, &args);
         self.depth += 1;
+        // Errors raised while reading the declaration's body carry spans into ITS
+        // file, not the use site's — switch the error channel's module with the scope.
+        let outer_module = std::mem::replace(&mut self.current_module, decl.module.clone());
         let ty = match &decl.sort {
             Sort::Record(r) => {
                 // Reserved before the fields are read, so `record Node { next: Node }`
@@ -2081,6 +2108,7 @@ impl Env {
             }
         };
         self.depth -= 1;
+        self.current_module = outer_module;
         self.inst.insert(ik, ty);
         ty
     }
@@ -2404,7 +2432,7 @@ impl Contract<'_> {
             } else {
                 return;
             };
-            self.errors.push(TypeError { span: spec.span.clone(), kind });
+            self.errors.push(TypeError { span: spec.span.clone(), kind, module: ctx.module.clone() });
             return;
         }
 
@@ -2417,6 +2445,7 @@ impl Contract<'_> {
             self.errors.push(TypeError {
                 span: spec.span.clone(),
                 kind: TypeErrorKind::TooDeep(self.name.clone()),
+                module: ctx.module.clone(),
             });
             return;
         }

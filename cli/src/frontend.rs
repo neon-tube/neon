@@ -22,6 +22,37 @@ pub struct Checked {
     pub libs: Vec<(Vec<String>, ast::Module)>,
 }
 
+
+/// Render a type error against the file its span actually indexes: the user's program
+/// when the error's module is the root, the owning stdlib source otherwise. Before
+/// this, a stdlib mistake rendered with the user's path and underlined whatever token
+/// sat at that byte offset in the user's file (compiler TODO §13).
+pub fn eprint_type_error(
+    e: &neon_compiler::typecheck::env::TypeError,
+    user_path: &Path,
+    user_src: &str,
+    std_sources: &[(String, String)],
+) {
+    let stdlib = (!e.module.is_empty())
+        .then(|| {
+            std_sources
+                .iter()
+                .find(|(rel, _)| neon_compiler::stdlib::module_path(rel) == e.module)
+        })
+        .flatten();
+    match stdlib {
+        Some((rel, src)) => {
+            let shown = std::path::PathBuf::from(format!("<stdlib>/{rel}"));
+            let mut r = Renderer::for_stderr(&shown, src);
+            r.eprint_full(e.span.clone(), &e.to_string(), &e.labels(), e.help().as_deref());
+        }
+        None => {
+            let mut r = Renderer::for_stderr(user_path, user_src);
+            r.eprint_full(e.span.clone(), &e.to_string(), &e.labels(), e.help().as_deref());
+        }
+    }
+}
+
 /// Type-check a source file, exiting with rendered diagnostics on any error.
 pub fn check(path: &Path, lib: bool) -> Result<Checked> {
     let src = source::read(path)?;
@@ -74,7 +105,7 @@ pub fn check(path: &Path, lib: bool) -> Result<Checked> {
     let mut env = Env::build_with(&modules, unit);
     if !env.errors().is_empty() {
         for e in env.errors() {
-            r.eprint_full(e.span.clone(), &e.to_string(), &e.labels(), e.help().as_deref());
+            eprint_type_error(e, path, &src, &std_sources);
         }
         std::process::exit(1);
     }
@@ -83,7 +114,7 @@ pub fn check(path: &Path, lib: bool) -> Result<Checked> {
     let (result, errs) = neon_compiler::typecheck::check::check_all(&mut env, &modules);
     if !errs.is_empty() {
         for e in &errs {
-            r.eprint_full(e.span.clone(), &e.to_string(), &e.labels(), e.help().as_deref());
+            eprint_type_error(e, path, &src, &std_sources);
         }
         std::process::exit(1);
     }

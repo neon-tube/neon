@@ -117,12 +117,13 @@ pub fn check_all(
     // the type that survived every pass still mentions the variable — the exact value
     // that would otherwise reach codegen as the "type variable 'T" ICE.
     let pending = std::mem::take(&mut c.pending_infer);
-    for (id, var, param, function, span) in pending {
+    for (id, var, param, function, span, module) in pending {
         let Some(t) = c.result.ty(id) else { continue };
         if mentions_var(&mut c, t, var) {
             c.errors.push(TypeError {
                 span,
                 kind: TypeErrorKind::CannotInferTypeParam { param, function },
+                module,
             });
         }
     }
@@ -224,12 +225,13 @@ struct Checker<'a> {
     /// Candidates, not errors — the probing pass legitimately fails to solve what the
     /// second pass then solves. `check_all` promotes the ones whose final recorded
     /// type still carries the variable.
-    pending_infer: Vec<(ast::ExprId, super::types::NameId, String, String, Span)>,
+    pending_infer: Vec<(ast::ExprId, super::types::NameId, String, String, Span, Vec<String>)>,
 }
 
 impl Checker<'_> {
     fn error(&mut self, span: Span, kind: TypeErrorKind) {
-        self.errors.push(TypeError { span, kind });
+        let module = self.env.current_module().to_vec();
+        self.errors.push(TypeError { span, kind, module });
     }
 
     /// A type as the user would write it, for a diagnostic. `&mut` because deciding
@@ -651,6 +653,7 @@ impl Checker<'_> {
     /// one is a diagnostic rather than something with no enclosing signature to check
     /// against.
     fn decls(&mut self, module: &[String], decls: &[ast::Decl]) {
+        self.env.set_current_module(module);
         for d in decls {
             match &d.kind {
                 ast::DeclKind::Fn(f) => {
@@ -3074,6 +3077,7 @@ impl Checker<'_> {
                     g.clone(),
                     sig.name.clone(),
                     e.span.clone(),
+                    module.to_vec(),
                 ));
             }
         }

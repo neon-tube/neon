@@ -68,7 +68,7 @@ pub fn run(file: &OsString, lib: bool) -> Result<()> {
     };
     if !errors.is_empty() {
         for e in &errors {
-            r.eprint_full(e.span.clone(), &e.to_string(), &e.labels(), e.help().as_deref());
+            crate::frontend::eprint_type_error(e, &path, &src, &std_sources);
         }
         let n = errors.len();
         eprintln!("{n} error{}", if n == 1 { "" } else { "s" });

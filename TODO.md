@@ -85,16 +85,6 @@ function, not as a doc. No verifier can be written until someone defines it.
 
 This is the shape that *precedes* a Class B bug rather than an instance of one.
 
-### 13. Stdlib diagnostics render against the user's file at a fabricated location
-
-An error injected into `std/io.neon` printed with the **user's** path, underlining `}` on
-line 4. With 40 lines of padding the same error moved to line 17, inside a comment.
-`check_all` sorts every module's errors by raw span offset and one `Renderer` holds one
-file. `TypeError` needs a file id.
-
-This is why a stdlib mistake produces a baffling diagnostic pointing at a test's closing
-brace — it has cost real time, repeatedly.
-
 ### 19. No diagnostics channel survives monomorphization
 
 The checker checks a generic body once, with its parameters rigid; instantiation happens
