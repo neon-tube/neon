@@ -1,0 +1,42 @@
+// A dispatched call on a UNION receiver switches on the variant at run time
+// (formerly TODO #7c, and #7's user-impl half). Two shapes, both of which used to
+// compile clean, exit 0, and print a compiler marker as program output:
+//
+//   Resolution::Switch  — a two-impl union receiver at a call site
+//                          (printed `<todo: dispatch switch>`);
+//   Resolution::Bound   — the same receiver reaching a `where T: P` call inside a
+//                          generic body (printed `<todo: bound: abstract receiver>`).
+//
+// Both lower to the same machinery now: an if-else chain over the checker's arms,
+// each testing the receiver with the runtime tag test `is` compiles to, projecting
+// to the arm's type, and calling that arm's impl directly; each arm's call is
+// emitted at the arm's own return repr and the join widens. What is NOT covered:
+// the compiler's built-in structural `to_string`/`==` walks are not impls, so a
+// union hole in an interpolation still has nothing to switch to per variant — that
+// residue is the Serialization roadmap's litmus test, recorded there.
+
+use std::io;
+
+protocol Area for T {
+    fn area(s: T) -> i64
+}
+record Sq { side: i64 }
+record Rect { w: i64, h: i64 }
+impl Area for Sq { fn area(s: Sq) -> i64 { s.side * s.side } }
+impl Area for Rect { fn area(r: Rect) -> i64 { r.w * r.h } }
+
+fn measure[T](v: T) -> i64 where T: Area {
+    Area::area(v)
+}
+
+fn main() {
+    // Switch: the call site sees the union.
+    let a: Sq | Rect = Sq { side: 3 };
+    io::println(to_string(Area::area(a)));
+    let b: Sq | Rect = Rect { w: 2, h: 5 };
+    io::println(to_string(Area::area(b)));
+
+    // Bound: the union flows into a generic body and dispatches per variant there.
+    io::println(to_string(measure(a)));
+    io::println(to_string(measure(b)));
+}

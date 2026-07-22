@@ -767,6 +767,19 @@ fn repr_head(r: &Repr) -> Option<String> {
 /// Find the impl of `protocol` for a type whose head is `head`, and its method — its
 /// native symbol (if any) and what it throws. This discharges a `where` bound once the
 /// receiver is concrete.
+/// The impl of `protocol` whose head is `head`, by id — the switch lowering re-enters
+/// the ordinary `Direct` path with it.
+fn find_impl_id(
+    env: &Env,
+    protocol: crate::typecheck::env::ProtocolId,
+    head: &str,
+) -> Option<crate::typecheck::env::ImplId> {
+    env.impls()
+        .iter()
+        .position(|i| i.protocol == protocol && impl_head(env, i) == head)
+        .map(crate::typecheck::env::ImplId)
+}
+
 fn find_impl_method(
     env: &Env,
     protocol: crate::typecheck::env::ProtocolId,
@@ -2003,7 +2016,14 @@ impl Lower<'_> {
                     None => self.wrap_throwing(result, throws, repr, ty),
                 }
             }
-            Resolution::Switch(_) => self.unhandled_note("dispatch switch", repr, ty),
+            Resolution::Switch(arms) => {
+                // The checker computed the arms (coverage-checked, most-specific
+                // filtered); lowering used to throw them away here and print
+                // `<todo: dispatch switch>` as program output (TODO #7c).
+                let arms: Vec<(Repr, crate::typecheck::env::ImplId)> =
+                    arms.iter().map(|&(t, id)| (self.repr_of_ty(t), id)).collect();
+                self.lower_dispatch_switch(&arms, &method, args, repr, ty)
+            }
             Resolution::Bound { protocol, .. } => {
                 // In a monomorphic instance the receiver is concrete, so its head picks
                 // the impl the bound stood for.
@@ -2029,10 +2049,124 @@ impl Lower<'_> {
                             None => self.unhandled_note("bound: no impl", repr, ty),
                         }
                     }
-                    None => self.unhandled_note("bound: abstract receiver", repr, ty),
+                    None => {
+                        // A UNION receiver in a monomorphic instance (TODO #7): the
+                        // head is per variant, so the dispatch is the same switch a
+                        // `Resolution::Switch` lowers to — one impl per variant,
+                        // chosen by the variant's own head.
+                        if let Some(&recv) = args.first() {
+                            if let Repr::Union(variants) = self.b.value_repr(recv).clone() {
+                                let mut arms: Vec<(Repr, crate::typecheck::env::ImplId)> =
+                                    Vec::new();
+                                let mut ok = true;
+                                for v in &variants {
+                                    let found = repr_head(v)
+                                        .and_then(|h| find_impl_id(self.env, *protocol, &h));
+                                    match found {
+                                        Some(id) => arms.push((v.clone(), id)),
+                                        None => {
+                                            ok = false;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if ok && !arms.is_empty() {
+                                    return self.lower_dispatch_switch(
+                                        &arms, &method, args, repr, ty,
+                                    );
+                                }
+                            }
+                        }
+                        self.unhandled_note("bound: abstract receiver", repr, ty)
+                    }
                 }
             }
         }
+    }
+
+    /// A dispatched call whose receiver holds one of several types at run time: an
+    /// if-else chain over the arms, each testing the receiver with the same runtime
+    /// tag test `is` compiles to, projecting it to the arm's type, and calling that
+    /// arm's impl directly through the ordinary `Resolution::Direct` path. The last
+    /// arm goes untested — the checker proved coverage. Each arm's call is emitted at
+    /// the arm's OWN return repr and the join widens it into the call site's (the
+    /// block-parameter `assignable` relation), because a `to_string` returning `str`
+    /// per arm must not be assigned into a union-typed C slot.
+    fn lower_dispatch_switch(
+        &mut self,
+        arms: &[(Repr, crate::typecheck::env::ImplId)],
+        method: &str,
+        args: Vec<Value>,
+        repr: Repr,
+        ty: TyId,
+    ) -> Value {
+        let Some(&recv) = args.first() else {
+            return self.unhandled_note("dispatch switch: no receiver", repr, ty);
+        };
+        if arms.is_empty() {
+            return self.unhandled_note("dispatch switch: no arms", repr, ty);
+        }
+        let join = self.b.new_block();
+        let join_param = self.b.block_param(join, repr.clone(), ty);
+        let bty = self.b.value_ty(recv);
+        for (i, (arm_repr, impl_id)) in arms.iter().enumerate() {
+            let last = i + 1 == arms.len();
+            if !last {
+                let test = self.b.emit(
+                    Op::IsVariant {
+                        value: recv,
+                        variant: String::new(),
+                        tested: Some(arm_repr.clone()),
+                    },
+                    Repr::Bool,
+                    bty,
+                );
+                let body_b = self.b.new_block();
+                let next_b = self.b.new_block();
+                self.b.terminate(Term::Branch {
+                    cond: test,
+                    then: Target { to: body_b, args: vec![] },
+                    els: Target { to: next_b, args: vec![] },
+                });
+                self.b.switch_to(body_b);
+                self.emit_switch_arm(recv, arm_repr, *impl_id, method, &args, join, bty);
+                self.b.switch_to(next_b);
+            } else {
+                self.emit_switch_arm(recv, arm_repr, *impl_id, method, &args, join, bty);
+            }
+        }
+        self.b.switch_to(join);
+        self.terminated = false;
+        join_param
+    }
+
+    /// One arm of a dispatch switch: project, call direct, jump to the join.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_switch_arm(
+        &mut self,
+        recv: Value,
+        arm_repr: &Repr,
+        impl_id: crate::typecheck::env::ImplId,
+        method: &str,
+        args: &[Value],
+        join: crate::ir::ssa::BlockId,
+        bty: TyId,
+    ) {
+        let proj = self.b.emit(Op::Cast(recv), arm_repr.clone(), bty);
+        let mut arm_args = args.to_vec();
+        arm_args[0] = proj;
+        let m_ret = self.env.impls()[impl_id.0]
+            .methods
+            .iter()
+            .find(|m| m.name == method)
+            .map(|m| m.ret);
+        let (arm_ret_ty, arm_ret_repr) = match m_ret {
+            Some(r) => (r, self.repr_of_ty(r)),
+            None => (bty, arm_repr.clone()),
+        };
+        let res = crate::typecheck::dispatch::Resolution::Direct(impl_id);
+        let out = self.lower_dispatch(&res, method, arm_args, arm_ret_repr, arm_ret_ty);
+        self.b.terminate(Term::Jump(Target { to: join, args: vec![out] }));
     }
 
     /// `if cond { .. } else { .. }`. The join block's parameters are the merge: the `if`'s

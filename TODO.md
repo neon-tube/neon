@@ -13,16 +13,6 @@ in their own section at the bottom and marked as such.
 
 ## P0 — soundness. These miscompile or accept wrong programs.
 
-### 7. `Resolution::Bound` on a union receiver prints a compiler marker as program output
-
-```neon
-fn show[T](v: T) -> str { "#{v}" }    // at T = A | B
-```
-
-Compiles clean, exits 0, prints `<todo: bound: abstract receiver>`. `repr_head` returns
-`None` for a union. Needs the variant-switch machinery — a feature, not a fix, and the same
-gap as `Resolution::Switch`.
-
 ### 7b. Generic impls never apply
 
 ```neon
@@ -36,11 +26,6 @@ parses, type-checks its own body, and never matches.
 
 Bounded impls do not parse at all: `ast::ImplDecl` has no `wheres` and `parser::impl_decl`
 has no `where`. `dispatch.md` describes both as design rather than as built.
-
-### 7c. `Resolution::Switch` prints a compiler marker as program output
-
-A two-impl union receiver compiles, exits 0, and prints `<todo: dispatch switch>`. Same
-family as item 7 and wants the same variant-switch machinery.
 
 ### 8b. `test` blocks are silently inert
 
@@ -331,12 +316,16 @@ recursive cases and a derive for records — the serde shape, but resolved stati
 monomorphisation so there are no dictionaries. None of it is expressible until dispatch is
 finished. The concrete pieces, in order, each closing an item already listed above:
 
-1. **Lower `Resolution::Switch`** (item 7c) and **`Resolution::Bound` on a union receiver**
-   (item 7). The checker already computes the arms — `dispatch.rs:243`, coverage-checked and
-   most-specific-filtered — and lowering throws them away at `lower.rs:1975`. Emit a
-   `Term::Switch` on the receiver's discriminant, one arm per `(TyId, ImplId)`, reusing the
-   runtime tag test that `match`/`is` narrowing already emits. This is the single primitive
-   under both union *encode* and union *decode*, so it earns its keep independent of JSON.
+1. ~~**Lower `Resolution::Switch` and `Resolution::Bound` on a union receiver**~~ —
+   **built 2026-07-22** (former items 7 and 7c): a dispatched call on a union receiver
+   switches per variant — tag test, projection, direct call, widening join
+   (`lower.rs::lower_dispatch_switch`), pinned as
+   `protocols/union_receiver_dispatches_by_variant.neon`. The RESIDUE is exactly the
+   litmus test below: the built-in structural `to_string`/`==` walks are not impls, so
+   a union hole in a string interpolation still has nothing to switch to per variant
+   (`"#{u}"` on `Sq | Rect` is a checker error naming the uncovered remainder, and the
+   `Bound` path's per-variant impl lookup finds nothing for a record's Display). Items
+   2-5 below are what close it.
 
 2. **Parse `where` on impls.** `ast::ImplDecl` has no `wheres` and `parser::impl_decl` has no
    `where` clause. Cheap; unblocks bounded impls, which do not parse today.
