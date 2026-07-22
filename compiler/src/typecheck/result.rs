@@ -23,6 +23,11 @@ use std::collections::HashMap;
 pub enum DefKind {
     /// A `let`, or a binding introduced by `for`, `case`, or a `try` handler.
     Local,
+    /// A flow refinement shadowing an existing binding — a match arm's narrowed
+    /// scrutinee, or an `is`/null-test's refined subject in an `if`/`while` branch.
+    /// Reads see it; an assignment sees through it to the declared binding beneath
+    /// (and dissolves it — after `x = e` the refinement no longer holds).
+    Refinement,
     /// A function parameter, including a lambda's.
     Param,
     /// A top-level or module-level `fn`.

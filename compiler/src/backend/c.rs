@@ -1531,9 +1531,7 @@ fn op_rhs(types: &TypeTable, f: &Func, result: Option<Value>, op: &Op) -> String
             // Ices rather than falling back to the name. Without a resolved type there is
             // no honest answer here, and the dishonest one is a segfault in user code.
             Repr::Any => match tested {
-                Some(t) => {
-                    format!("(neon_box_tag({}) == {}ULL)", var(*value), types.type_tag(t))
-                }
+                Some(t) => erased_tag_test(types, &var(*value), t),
                 None => panic!(
                     "internal error: codegen reached `is {variant}` on an erased value with \
                      no resolved type; the checker must record one (see \
@@ -1590,9 +1588,21 @@ fn cast_expr(types: &TypeTable, expr: &str, src: &Repr, target: &Repr) -> String
             return format!("({}){{ .{} = {expr} }}", types.c_type(target), field_name("#inner"));
         }
     }
-    // Recovering a concrete value from `any`: read the payload back out of the box.
+    // Recovering a concrete value from `any`: check the box's tag against the target's,
+    // then read the payload back out. The tag is the same `type_tag` the boxing site
+    // stamped, so honest recovery (`(li: any) as List[i64]` after erasing one) passes and
+    // a mismatch traps. An unchecked read here was a soundness hole for every type — the
+    // payload came back reinterpreted at whatever the target claimed — and the working
+    // forge of an opaque record (`let a: any = { code: 99 }; a as vault::Secret`), which
+    // no static rule can reject without also rejecting the recovery idiom, because `any`
+    // can legitimately hold either. See docs/design/opacity.md, residue 1.
+    //
+    // Tags are canonical (see `coerce_expr`): a box always carries a concrete member's
+    // tag, never a union's. So a union or nullable TARGET is a membership question, not
+    // one compare: test each member's tag and inject that member's payload. The last
+    // member reads through `neon_box_expect`, so a box holding none of them traps there.
     if matches!(src, Repr::Any) && !matches!(target, Repr::Any) {
-        return format!("(*({}*)neon_box_payload({expr}))", types.c_type(target));
+        return unbox_expr(types, expr, target);
     }
     // Narrowing a union to one of its variants reads that payload; every other direction
     // (injecting a variant, null into a nullable pointer, an identity pointer cast) is the
@@ -1632,6 +1642,93 @@ fn is_null(f: &Func, v: Value) -> String {
         // An erased value is null when its box carries the null type tag.
         Repr::Any => format!("(neon_box_tag({}) == {}ULL)", var(v), fnv1a("null")),
         _ => "false".into(),
+    }
+}
+
+/// Whether the box at `expr` holds a value of type `t`. Tags are canonical — always a
+/// concrete member's, never a union's (see `coerce_expr`) — so a union or nullable `t`
+/// is a disjunction over its members' tags rather than one compare against a tag no box
+/// ever carries.
+fn erased_tag_test(types: &TypeTable, expr: &str, t: &Repr) -> String {
+    match types.resolve(t) {
+        Repr::Union(variants) => {
+            let arms: Vec<String> = variants
+                .iter()
+                .map(|v| format!("neon_box_tag({expr}) == {}ULL", types.type_tag(v)))
+                .collect();
+            format!("({})", arms.join(" || "))
+        }
+        Repr::Nullable(inner) => format!(
+            "(neon_box_tag({expr}) == {}ULL || neon_box_tag({expr}) == {}ULL)",
+            types.type_tag(&Repr::Null),
+            types.type_tag(inner),
+        ),
+        other => format!("(neon_box_tag({expr}) == {}ULL)", types.type_tag(other)),
+    }
+}
+
+/// Recover a value of `target` from the box at `expr`: the tag-checked read behind every
+/// cast and narrowed flow out of `any`. Tags are canonical (see `coerce_expr`), so a
+/// union or nullable target is a membership chain over its members' tags — the last
+/// member reads through `neon_box_expect`, so a box holding none of them traps there —
+/// and a concrete target is one checked read.
+fn unbox_expr(types: &TypeTable, expr: &str, target: &Repr) -> String {
+    if let Repr::Union(variants) = target {
+        let ty = types.c_type(target);
+        let last = variants.len() - 1;
+        let mut out = format!(
+            "({ty}){{ .tag = {last}, .u._{last} = (*({}*)neon_box_expect({expr}, {}ULL)) }}",
+            types.c_type(&variants[last]),
+            types.type_tag(&variants[last]),
+        );
+        for (i, vr) in variants.iter().enumerate().take(last).rev() {
+            out = format!(
+                "(neon_box_tag({expr}) == {}ULL ? ({ty}){{ .tag = {i}, .u._{i} = \
+                 (*({}*)neon_box_payload({expr})) }} : {out})",
+                types.type_tag(vr),
+                types.c_type(vr),
+            );
+        }
+        return out;
+    }
+    if let Repr::Nullable(inner) = target {
+        // A boxed null recovers as the nullable's null value (its zero); anything else
+        // must be the payload type or trap.
+        return format!(
+            "(neon_box_tag({expr}) == {}ULL ? ({}){{0}} : (*({}*)neon_box_expect({expr}, {}ULL)))",
+            types.type_tag(&Repr::Null),
+            types.c_type(target),
+            types.c_type(target),
+            types.type_tag(inner),
+        );
+    }
+    format!(
+        "(*({}*)neon_box_expect({expr}, {}ULL))",
+        types.c_type(target),
+        types.type_tag(target),
+    )
+}
+
+/// One boxing: the value at C expression `expr`, of repr `src`, into a fresh `any` box
+/// stamped with `src`'s witness and tag. The one-element array compound literal gives the
+/// payload an address without needing a named temp.
+fn box_expr(types: &TypeTable, expr: &str, src: &Repr) -> String {
+    format!(
+        "neon_box_new(({}[]){{{expr}}}, {}, {}ULL)",
+        types.c_type(src),
+        types.witness_ref(src),
+        types.type_tag(src),
+    )
+}
+
+/// The null test for a nullable's C value at expression `expr` — the string-valued twin
+/// of `is_null`'s `Nullable` arms, for sites that hold an expression rather than a
+/// `Value`.
+fn nullable_is_null_expr(expr: &str, inner: &Repr) -> String {
+    match inner {
+        Repr::Str => format!("({expr}.data == NULL)"),
+        Repr::Closure { .. } => format!("({expr}.fn == NULL)"),
+        _ => format!("({expr} == NULL)"),
     }
 }
 
@@ -1828,13 +1925,40 @@ fn coerce_expr(types: &TypeTable, expr: &str, src: &Repr, target: &Repr) -> Stri
     }
     // Erasing into `any`: box the value with its witness and type tag. The one-element
     // array compound literal gives the payload an address without needing a named temp.
+    //
+    // The tag must be CANONICAL — a function of the value's concrete type, not of the
+    // static type at this erasure site. A union-typed value is therefore switched on its
+    // discriminant and the *member* is boxed with the member's tag (a null member boxes
+    // as null); a nullable is the two-variant case of the same rule. Boxing the union
+    // whole stamped `type_tag(union)`, so the same logical value carried a different tag
+    // depending on which site erased it, and every `is`/cast on the erased value then
+    // answered from the wrong tag — `e(a) is A` false on a genuine `A` (TODO §4). The
+    // checked-cast contract rests on this invariant: a tag proves what was genuinely
+    // constructed (docs/design/checked-casts.md, decision 5).
     if matches!(target, Repr::Any) {
-        return format!(
-            "neon_box_new(({}[]){{{expr}}}, {}, {}ULL)",
-            types.c_type(src),
-            types.witness_ref(src),
-            types.type_tag(src),
-        );
+        if let Repr::Union(from) = src {
+            let last = from.len() - 1;
+            let mut out = box_expr(types, &format!("{expr}.u._{last}"), &from[last]);
+            for (i, sv) in from.iter().enumerate().take(last).rev() {
+                out = format!(
+                    "({expr}.tag == {i} ? {} : {out})",
+                    box_expr(types, &format!("{expr}.u._{i}"), sv)
+                );
+            }
+            return out;
+        }
+        if let Repr::Nullable(inner) = src {
+            // The non-null branch boxes the nullable's own C value: it shares its
+            // representation with the payload, and `type_tag` already names a nullable
+            // after its payload, so the tag is the member's.
+            return format!(
+                "({} ? {} : {})",
+                nullable_is_null_expr(expr, inner),
+                box_expr(types, "neon_null()", &Repr::Null),
+                box_expr(types, expr, src),
+            );
+        }
+        return box_expr(types, expr, src);
     }
     if let Repr::Union(variants) = target {
         if let Some(i) = variants.iter().position(|vr| vr == src) {
@@ -1863,6 +1987,23 @@ fn coerce_expr(types: &TypeTable, expr: &str, src: &Repr, target: &Repr) -> Stri
             }
             return out;
         }
+    }
+    // The NARROWING direction at a flow site: the checker proved the value holds this
+    // member — a match arm's rebound scrutinee, an `is`-guard's refined subject — and a
+    // narrowed value flows at its narrowed type without a written cast. Projection is
+    // what that means; before this arm existed, a bare use of a narrowed union fell
+    // through to the zeroed literal below and `match v { is A => takes_a(v) }` passed a
+    // zeroed `A`, silently.
+    if let Repr::Union(from) = src {
+        if let Some(i) = from.iter().position(|vr| vr == target) {
+            return format!("{expr}.u._{i}");
+        }
+    }
+    // Narrowed `any`: the checker refined an erased value to a concrete type; unbox it
+    // through the tag check. Sound because tags are canonical — and if the refinement is
+    // ever wrong, this traps rather than reinterpreting the payload.
+    if matches!(src, Repr::Any) {
+        return unbox_expr(types, expr, target);
     }
     // Covariant/width subtyping: rebuild the target aggregate, coercing each field from the
     // source (a `Box[i64]` becomes a `Box[i64|str]`, a `User` a `{name}`).

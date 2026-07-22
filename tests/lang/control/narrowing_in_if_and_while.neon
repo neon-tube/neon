@@ -1,0 +1,67 @@
+// `if`/`while` narrow (docs/design/checked-casts.md, decision 4; formerly TODO §9).
+// A condition of the form `x is T`, `x == null` / `x != null`, or an `and`/`or`/`not`
+// composition of those, refines a bare-local subject: the then-branch sees the matched
+// type, the else-branch its complement, and a `while` body the matched type. The
+// refined value flows at its narrowed type with NO written cast -- bare use as a call
+// argument, in arithmetic, and through field reads.
+//
+// Assignment checks against the DECLARED type and dissolves the refinement: the
+// canonical list walk `while cur is Node { cur = cur.next }` writes a `Node | null`
+// into a variable currently refined to `Node`, legally.
+//
+// The else-branch of an `any` subject deliberately does NOT refine: `any \ T` is a
+// complement with no runtime representation of its own, so the branch keeps `any`.
+//
+use std::io;
+
+record Node { val: i64, next: Node | null }
+
+record A { x: i64 }
+record B { y: i64 }
+
+fn takes_a(a: A) -> i64 { a.x }
+
+fn main() {
+    // if-narrowing: bare use at the narrowed type, both branches.
+    let v: A | B = A { x: 7 };
+    if v is A {
+        io::println(to_string(takes_a(v)));
+    } else {
+        io::println(to_string(v.y));
+    }
+
+    // null-test narrowing, both spellings.
+    let s: str | null = "hi";
+    if s != null {
+        io::println(s);
+    }
+    if s == null {
+        io::println("null?!");
+    } else {
+        io::println(s);
+    }
+
+    // while-narrowing with assignment un-narrowing: the canonical list walk.
+    let n3 = Node { val: 3, next: null };
+    let n2 = Node { val: 2, next: n3 };
+    let mut_walk = Node { val: 1, next: n2 };
+    let cur: Node | null = mut_walk;
+    while cur is Node {
+        io::println(to_string(cur.val));
+        cur = cur.next;
+    }
+
+    // any-narrowing: refined out of the box, bare use.
+    let a: any = 42;
+    if a is i64 {
+        io::println(to_string(a + 1));
+    }
+
+    // and-composition narrows with both conjuncts.
+    let w: A | B = B { y: 9 };
+    let u: str | null = "ok";
+    if w is B and u != null {
+        io::println(to_string(w.y));
+        io::println(u);
+    }
+}

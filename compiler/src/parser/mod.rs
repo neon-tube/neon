@@ -168,12 +168,13 @@ where
 
 /// Where recovery stops skipping: a new declaration, or the `}` that ends the
 /// enclosing module.
-const DECL_STOP: [Token; 14] = [
+const DECL_STOP: [Token; 15] = [
     Token::Fn,
     Token::Test,
     Token::Bench,
     Token::Record,
     Token::Opaque,
+    Token::Sealed,
     Token::Type,
     Token::Mu,
     Token::Newtype,
@@ -400,6 +401,7 @@ where
     I: ValueInput<'t, Token = Token, Span = Span>,
 {
     annotations()
+        .then(just(Token::Sealed).or_not().map(|s| s.is_some()))
         .then(just(Token::Opaque).or_not().map(|o| o.is_some()))
         .then_ignore(just(Token::Record))
         .then(ident())
@@ -411,10 +413,14 @@ where
                 .collect::<Vec<_>>()
                 .delimited_by(just(Token::LBrace), just(Token::RBrace)),
         )
-        .map(|((((annotations, opaque), name), generics), fields)| RecordDecl {
+        .map(|(((((annotations, sealed), opaque), name), generics), fields)| RecordDecl {
             name,
             generics,
+            // `sealed` implies `opaque` semantically; the flag records only what was
+            // written, so the formatter reproduces the source. Semantic sites ask
+            // `opaque || sealed`.
             opaque,
+            sealed,
             fields,
             annotations,
         })
@@ -1500,7 +1506,7 @@ where
         Index(Expr),
         Field(String),
         Is(TypeSpec),
-        As(TypeSpec),
+        As(CastForm, TypeSpec),
     }
 
     // Turbofish: `f[i64](x)`.
@@ -1532,7 +1538,17 @@ where
 
     let field = just(Token::Dot).ignore_then(ident()).map(Post::Field).boxed();
     let is_op = just(Token::Is).ignore_then(ty.clone()).map(Post::Is).boxed();
-    let as_op = just(Token::As).ignore_then(ty).map(Post::As).boxed();
+    // The cast triad, distinguished exactly as `try`/`try?`/`try!` is: a `?` or `!`
+    // token straight after `as`.
+    let as_op = just(Token::As)
+        .ignore_then(choice((
+            just(Token::Question).to(CastForm::Soften),
+            just(Token::Bang).to(CastForm::Assert),
+            empty().to(CastForm::Plain),
+        )))
+        .then(ty)
+        .map(|(form, ty)| Post::As(form, ty))
+        .boxed();
 
     atom.foldl_with(
         choice((call, index, field, is_op, as_op)).repeated(),
@@ -1546,7 +1562,7 @@ where
                 }
                 Post::Field(name) => ExprKind::Field { base: Box::new(lhs), name },
                 Post::Is(ty) => ExprKind::Is { lhs: Box::new(lhs), ty },
-                Post::As(ty) => ExprKind::As { lhs: Box::new(lhs), ty },
+                Post::As(form, ty) => ExprKind::As { form, lhs: Box::new(lhs), ty },
             };
             Expr { kind, span: e.span(), id: ExprId::UNSET }
         },

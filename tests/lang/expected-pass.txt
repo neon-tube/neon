@@ -107,6 +107,7 @@ control/if_missing_else_is_an_error.neon
 control/if_statement_no_else.neon
 control/loop_break_value.neon
 control/loop_break_value_union.neon
+control/narrowing_in_if_and_while.neon
 control/nested_loops.neon
 control/while_break_continue.neon
 control/while_condition_false_never_runs.neon
@@ -164,6 +165,7 @@ match/guards.neon
 match/impossible_arm_on_a_type_parameter.neon
 match/is_sum_type.neon
 match/literal_patterns.neon
+match/narrowed_scrutinee_flows_bare.neon
 match/non_exhaustive_fails.neon
 match/non_exhaustive_null_fails.neon
 match/null_union.neon
@@ -232,6 +234,7 @@ records/nullable_field.neon
 records/opaque_cannot_graft_into_owner_module.neon
 records/opaque_hides_its_contents.neon
 records/opaque_no_anonymous_forgery.neon
+records/opaque_no_any_laundering.neon
 records/opaque_no_generic_laundering.neon
 records/opaque_no_structural_cast.neon
 records/opaque_no_structural_impl.neon
@@ -243,6 +246,9 @@ records/opaque_values_still_travel.neon
 records/recursive_equality.neon
 records/recursive_mutual.neon
 records/recursive_self.neon
+records/sealed_bars_ord.neon
+records/sealed_no_assertive_recovery.neon
+records/sealed_recovery_by_test.neon
 records/structural_param_accepts_nominal.neon
 records/structural_param_missing_field.neon
 records/structural_param_wrong_field_type.neon
@@ -268,6 +274,7 @@ types/a_module_path_may_not_be_forged.neon
 types/a_nominal_name_is_not_a_module_identity.neon
 types/alias_is_transparent.neon
 types/an_alias_does_not_rename_a_primitive.neon
+types/any_cast_checks_the_tag.neon
 types/any_is_the_only_erasure.neon
 types/any_needs_a_cast_to_read.neon
 types/arrow_type_throws.neon
@@ -277,6 +284,8 @@ types/atom_not_in_union_rejected.neon
 types/atom_singleton_type.neon
 types/atom_union.neon
 types/atom_union_mixed_with_other_types.neon
+types/bare_cast_must_be_infallible.neon
+types/cast_triad.neon
 types/erased_closure_is_checks_its_signature.neon
 types/erased_generic_is_checks_arguments.neon
 types/erased_generic_map_is_checks_arguments.neon
@@ -317,10 +326,12 @@ types/no_one_element_tuple.neon
 types/nominal_record_satisfies_opts_type.neon
 types/null_not_assignable_to_non_nullable.neon
 types/nullable.neon
+types/soft_cast_rejects_null_overlap.neon
 types/str_list_literal_erased_into_any.neon
 types/structural_record_width.neon
 types/throws_binds_below_the_arrow.neon
 types/type_alias_recursive_rejected.neon
+types/union_erased_member_is_concretely_tagged.neon
 types/union_of_primitives.neon
 types/union_of_records_is_a_sum_type.neon
 types/union_rejects_non_member.neon

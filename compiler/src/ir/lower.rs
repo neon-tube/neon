@@ -1305,9 +1305,14 @@ impl Lower<'_> {
                 let v = self.lower_expr(lhs);
                 self.type_test(v, spec, e.id)
             }
-            ExprKind::As { lhs, .. } => {
+            ExprKind::As { form, lhs, ty: spec } => {
                 let v = self.lower_expr(lhs);
-                self.b.emit(Op::Cast(v), repr, ty)
+                match form {
+                    // Infallible by the checker's trichotomy: a plain coercion.
+                    ast::CastForm::Plain => self.b.emit(Op::Cast(v), repr, ty),
+                    ast::CastForm::Assert => self.lower_cast_assert(e.id, v, spec, repr, ty),
+                    ast::CastForm::Soften => self.lower_cast_soften(e.id, v, spec, repr, ty),
+                }
             }
             ExprKind::Try { form, body, catch } => {
                 self.lower_try(e.id, *form, body, catch.as_ref(), repr, ty)
@@ -1569,6 +1574,18 @@ impl Lower<'_> {
     fn lower_path(&mut self, p: &[String], repr: Repr, ty: TyId) -> Value {
         if let [name] = p {
             if let Some(v) = self.lookup(name) {
+                // A refined use: the checker narrowed this binding (an `is` guard, a
+                // null test, a match arm), so this use's type — and repr — is narrower
+                // than the binding's. The value itself must be converted here, at the
+                // one funnel every variable use passes through, because downstream
+                // consumers do not all coerce: a primitive reads its operand raw, a
+                // field access projects at the base's repr. `Op::Cast` is the
+                // conversion — a union projects its member, an erased value unboxes
+                // through the tag check — and a non-erasing cast is a view, so the
+                // binding stays the owner and refcounting is undisturbed.
+                if self.b.value_repr(v) != &repr {
+                    return self.b.emit(Op::Cast(v), repr, ty);
+                }
                 return v;
             }
         }
@@ -2369,6 +2386,95 @@ impl Lower<'_> {
     /// `x is T` as a runtime test: null becomes a null check, anything else a
     /// discriminant compare — by head name against a union's arms, and by the checker's
     /// resolved type against an erased value's box tag.
+    /// The short spelling of a type spec for a trap message: the written head for a
+    /// named type, a token for the structural shapes. The message names what the
+    /// programmer asserted, not the checker's full resolution.
+    fn spec_text(spec: &ast::TypeSpec) -> String {
+        match &spec.kind {
+            ast::TypeSpecKind::Named { path, .. } => path.join("::"),
+            ast::TypeSpecKind::Atom(a) => format!(":{a}"),
+            ast::TypeSpecKind::Null => "null".into(),
+            _ => "the target type".into(),
+        }
+    }
+
+    /// `x as! T`: assert the value holds `T`; a mismatch traps.
+    ///
+    /// An erased source needs no explicit test — `Op::Cast` out of `any` is the
+    /// tag-checked unbox (`neon_box_expect`), which traps with its own message. Every
+    /// other fallible source (a union to one of its members, a nullable to its payload)
+    /// branches on the same runtime test `is` compiles to, and the mismatch arm panics:
+    /// same exit status as a trap, and the message names the asserted type.
+    fn lower_cast_assert(
+        &mut self,
+        id: ExprId,
+        v: Value,
+        spec: &ast::TypeSpec,
+        repr: Repr,
+        ty: TyId,
+    ) -> Value {
+        if matches!(self.b.value_repr(v), Repr::Any) {
+            return self.b.emit(Op::Cast(v), repr, ty);
+        }
+        let test = self.type_test(v, spec, id);
+        let ok_b = self.b.new_block();
+        let bad_b = self.b.new_block();
+        self.b.terminate(Term::Branch {
+            cond: test,
+            then: Target { to: ok_b, args: vec![] },
+            els: Target { to: bad_b, args: vec![] },
+        });
+        self.b.switch_to(bad_b);
+        let msg = self.b.emit(
+            Op::ConstStr(format!(
+                "`as! {}` failed: the value holds a different type",
+                Self::spec_text(spec)
+            )),
+            Repr::Str,
+            ty,
+        );
+        self.b.emit_void(Op::Native { symbol: "neon_panic".into(), args: vec![msg] });
+        self.b.terminate(Term::Unreachable);
+        self.b.switch_to(ok_b);
+        self.terminated = false;
+        self.b.emit(Op::Cast(v), repr, ty)
+    }
+
+    /// `x as? T`: the same test, softened — the match arm casts and widens into
+    /// `T | null` at the join, the mismatch arm contributes `null`.
+    fn lower_cast_soften(
+        &mut self,
+        id: ExprId,
+        v: Value,
+        spec: &ast::TypeSpec,
+        repr: Repr,
+        ty: TyId,
+    ) -> Value {
+        let test = self.type_test(v, spec, id);
+        let ok_b = self.b.new_block();
+        let null_b = self.b.new_block();
+        let join = self.b.new_block();
+        let join_param = self.b.block_param(join, repr.clone(), ty);
+        self.b.terminate(Term::Branch {
+            cond: test,
+            then: Target { to: ok_b, args: vec![] },
+            els: Target { to: null_b, args: vec![] },
+        });
+        // The narrow value first, at the tested type's own repr; the jump into the
+        // join widens it into `T | null`, exactly as a `try?` widens its ok value.
+        self.b.switch_to(ok_b);
+        let target = self.result.tested(id).map(|t| self.repr_of_ty(t)).unwrap_or(repr.clone());
+        let tested_ty = self.result.tested(id).unwrap_or(ty);
+        let cast = self.b.emit(Op::Cast(v), target, tested_ty);
+        self.b.terminate(Term::Jump(Target { to: join, args: vec![cast] }));
+        self.b.switch_to(null_b);
+        let n = self.b.emit(Op::ConstNull, Repr::Null, ty);
+        self.b.terminate(Term::Jump(Target { to: join, args: vec![n] }));
+        self.b.switch_to(join);
+        self.terminated = false;
+        join_param
+    }
+
     fn type_test(&mut self, subj: Value, spec: &ast::TypeSpec, id: ExprId) -> Value {
         let bty = subj_ty(&self.b, subj);
         match &spec.kind {

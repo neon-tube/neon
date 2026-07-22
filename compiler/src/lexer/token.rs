@@ -44,6 +44,7 @@ pub enum Token {
     Let,
     Record,
     Opaque,
+    Sealed,
     Newtype,
     Type,
     /// `mu type A = ...` — an explicit recursive-type binder.
@@ -171,6 +172,7 @@ impl Token {
             "let" => Token::Let,
             "record" => Token::Record,
             "opaque" => Token::Opaque,
+            "sealed" => Token::Sealed,
             "newtype" => Token::Newtype,
             "type" => Token::Type,
             "mu" => Token::Mu,
@@ -235,6 +237,7 @@ impl fmt::Display for Token {
             Token::Let => "let",
             Token::Record => "record",
             Token::Opaque => "opaque",
+            Token::Sealed => "sealed",
             Token::Newtype => "newtype",
             Token::Type => "type",
             Token::Mu => "mu",

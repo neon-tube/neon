@@ -97,8 +97,15 @@ pub struct Param {
 pub struct RecordDecl {
     pub name: String,
     pub generics: Vec<String>,
-    /// Fields are visible in the declaring module and one parent module only.
+    /// The representation is not part of the interface: no structural views,
+    /// construction, or probes outside the declaring module's subtree.
     pub opaque: bool,
+    /// `opaque`, plus a trust boundary: outsiders may not assert the type out of an
+    /// erased value (`as!`), and may not order values of it. `sealed` implies
+    /// `opaque`; the explicit pair `sealed opaque` is permitted. Capability types —
+    /// `File`, `Resource` — are sealed; data types with hidden layout are merely
+    /// opaque. See docs/design/checked-casts.md.
+    pub sealed: bool,
     pub fields: Vec<Field>,
     pub annotations: Vec<Annotation>,
 }
@@ -326,8 +333,8 @@ pub enum ExprKind {
     Try { form: TryForm, body: Box<Expr>, catch: Option<CatchArm> },
     /// `x is T`
     Is { lhs: Box<Expr>, ty: TypeSpec },
-    /// `x as T`
-    As { lhs: Box<Expr>, ty: TypeSpec },
+    /// `x as T`, `x as? T`, `x as! T`
+    As { form: CastForm, lhs: Box<Expr>, ty: TypeSpec },
     /// `assert(..)`, `assert_eq(..)` — intrinsics, so failures can report the
     /// actual values and a span.
     Assert { kind: AssertKind, args: Vec<Expr> },
@@ -341,6 +348,18 @@ pub enum TryForm {
     /// Soften to `T | null`.
     Soften,
     /// Assert: a failure panics.
+    Assert,
+}
+
+/// The cast triad, the `try` triad's twin (docs/design/checked-casts.md): a cast that
+/// cannot fail is spelled bare, one that can must say what a mismatch does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CastForm {
+    /// `as` — infallible coercions only: subsumption, widening, newtype wrap/unwrap.
+    Plain,
+    /// `as?` — test; yields `T | null`.
+    Soften,
+    /// `as!` — assert; a mismatch traps.
     Assert,
 }
 

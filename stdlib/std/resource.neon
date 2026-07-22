@@ -25,7 +25,7 @@ use std::string;
 // The runtime object: header, payload witness, cleanup closure, armed flag. `@runtime`
 // is what tells the backend to represent this as a pointer to that C type instead of
 // laying out a struct from fields it does not have.
-@runtime("neon_resource") opaque record Resource[T, E] {}
+@runtime("neon_resource") sealed opaque record Resource[T, E] {}
 
 // Reading a resource that has already been released. This is the error `get` turns a
 // use-after-release into -- neither Rust (which prevents it with borrowck) nor Swift

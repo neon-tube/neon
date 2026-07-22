@@ -1,0 +1,33 @@
+//@ compile-fail
+//@ error-contains: is sealed
+
+// The sealed assertion ban must fire POST-MONOMORPHIZATION (docs/design/checked-casts.md,
+// decision 6): a generic launderer whose `as! T` only becomes `as! vault::Secret` at the
+// instantiation must hit the same wall the direct spelling does.
+//
+// Deliberately absent from expected-pass.txt until it closes. The checker checks a
+// generic body once, with `T` rigid — `T` has no sealed leaf, so the ban cannot see the
+// instantiation there, and instantiation happens at lowering, which today has no
+// diagnostics channel (the same infrastructure gap as TODO §5's unsolved-generics ICE).
+// The hole is SOUNDNESS-guarded meanwhile: the `as!` still compiles to the canonical
+// tag check, so a forged value traps and only a genuinely-constructed Secret can be
+// laundered — which the holder could equally have recovered with `as?`. What is
+// missing is the compile-time rejection, not the runtime defence.
+
+use std::io;
+
+internal mod vault {
+    sealed record Secret { code: i64 }
+    fn seal(n: i64) -> Secret { Secret { code: n } }
+    fn value(s: Secret) -> i64 { s.code }
+}
+
+fn launder[T](a: any) -> T {
+    a as! T
+}
+
+fn main() {
+    let a: any = vault::seal(9);
+    let s = launder[vault::Secret](a);
+    io::println(to_string(vault::value(s)));
+}

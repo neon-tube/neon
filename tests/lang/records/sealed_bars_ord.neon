@@ -1,0 +1,22 @@
+//@ compile-fail
+//@ error-contains: is sealed
+
+// Ordering a foreign `sealed` value is an oracle (opacity.md residue 2, closed by
+// docs/design/checked-casts.md decision 2): with the ability to request seals of
+// chosen values, relative order supports binary search of the hidden contents. `<` is
+// barred outside the owner; `==` stays legal (one bit, pinned in
+// sealed_recovery_by_test.neon), and plain `opaque` types order freely -- barring
+// `Ord` on List was always absurd, which is why this lives on `sealed`.
+
+use std::io;
+
+internal mod vault {
+    sealed record Secret { code: i64 }
+    fn seal(n: i64) -> Secret { Secret { code: n } }
+}
+
+fn main() {
+    let a = vault::seal(1);
+    let b = vault::seal(2);
+    io::println(to_string(a < b));
+}

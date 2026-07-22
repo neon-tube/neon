@@ -284,7 +284,7 @@ fn expr(e: &mut Expr) {
                 block(&mut c.body);
             }
         }
-        ExprKind::Is { lhs, ty: t } | ExprKind::As { lhs, ty: t } => {
+        ExprKind::Is { lhs, ty: t } | ExprKind::As { lhs, ty: t, .. } => {
             expr(lhs);
             ty(t);
         }

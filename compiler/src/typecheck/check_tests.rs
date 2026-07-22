@@ -331,8 +331,21 @@ fn a_cast_to_an_unrelated_type_is_rejected() {
 }
 
 #[test]
-fn a_cast_that_narrows_is_fine() {
-    clean("fn f(v: i64 | str) -> i64 { v as i64 }");
+fn a_bare_cast_that_can_fail_is_rejected() {
+    // The trichotomy (docs/design/checked-casts.md): a narrowing cast might fail, so
+    // it must say what a mismatch does — `as!` asserts (and is checked at runtime),
+    // bare `as` is the always-class only.
+    let e = check("fn f(v: i64 | str) -> i64 { v as i64 }");
+    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::FallibleCast { .. })), "{e:?}");
+    clean("fn f(v: i64 | str) -> i64 { v as! i64 }");
+}
+
+#[test]
+fn a_soft_cast_yields_the_target_or_null() {
+    clean("fn f(v: i64 | str) -> i64 | null { v as? i64 }");
+    // A null-overlapping target makes the softened null ambiguous (decision 7).
+    let e = check("fn f(v: any) -> (str | null) | null { v as? (str | null) }");
+    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::SoftCastNullOverlap { .. })), "{e:?}");
 }
 
 #[test]

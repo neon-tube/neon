@@ -1,0 +1,28 @@
+//@ compile-fail
+//@ error-contains: is sealed
+
+// `sealed` is `opaque` plus a trust boundary (docs/design/checked-casts.md): outsiders
+// may not ASSERT the type out of an erased value. An assertion is either redundant --
+// the holder could test with `is`/`as?` -- or it is the mistake `sealed` exists to make
+// unrepresentable: claiming unconditional knowledge of a capability type. The testing
+// forms stay legal and are pinned in sealed_recovery_by_test.neon.
+//
+// Construction protection is NOT what this adds -- every forge route is already dead
+// under plain `opaque` (the structural gates statically, the canonical tag check at
+// runtime). What `as!` would assert here can only ever be a value `vault` really
+// built; the ban is about where the failure lands: a compile error naming the owner,
+// not a disclosed trap in production.
+
+use std::io;
+
+internal mod vault {
+    sealed record Secret { code: i64 }
+    fn seal(n: i64) -> Secret { Secret { code: n } }
+    fn value(s: Secret) -> i64 { s.code }
+}
+
+fn main() {
+    let a: any = vault::seal(7);
+    let s = a as! vault::Secret;
+    io::println(to_string(vault::value(s)));
+}

@@ -11,7 +11,7 @@ use std::collections::list;
 
 fn main() {
     let ls: any = ["alpha", "beta", "gamma"];
-    let back = ls as List[str];
+    let back = ls as! List[str];
     io::println("#{list::len(back)}");
     io::println("#{back[0]}");
     io::println("#{back[1]}");

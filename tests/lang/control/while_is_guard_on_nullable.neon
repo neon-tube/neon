@@ -39,7 +39,7 @@ fn main() {
         seen = seen + 1;
         maybe = if seen == 2 { "done" } else { null };
     };
-    io::println(maybe as str);
+    io::println(maybe as! str);
     io::println(to_string(seen));
 
     // A nullable is not some unrelated type, whether or not it holds a value.

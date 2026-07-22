@@ -19,6 +19,13 @@ typedef struct neon_box {
 
 neon_value neon_box_new(const void* payload, const neon_witness* w, uint64_t tag);
 
+// The payload, but only if the box's tag matches `tag`; traps otherwise. This is the
+// runtime half of `as`-from-`any`: an unguarded cast out of `any` asserts the box holds
+// the target type, and the assertion is discharged here rather than trusted — reading
+// the payload at the wrong type reinterprets bytes, which is how a structural
+// `{ code: 99 }` boxed into `any` once forged an opaque record.
+void* neon_box_expect(neon_value v, uint64_t tag);
+
 static inline uint64_t neon_box_tag(neon_value v) {
     return ((neon_box*)v)->type_tag;
 }

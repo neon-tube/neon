@@ -84,6 +84,12 @@ pub enum TypeErrorKind {
     IfWithoutElse,
     /// `x as T` where the value could never be a `T`.
     ImpossibleCast { from: String, to: String },
+    /// A bare `as` on a cast that can fail at runtime: the might-class of the
+    /// trichotomy (docs/design/checked-casts.md) demands a visible failure policy.
+    FallibleCast { from: String, to: String },
+    /// `as?` where the target overlaps `null`: the softened result cannot say which
+    /// null it is.
+    SoftCastNullOverlap { to: String },
     /// Two protocols answer. `A::go(r)` picks one.
     AmbiguousCall { method: String, protocols: Vec<String> },
     NoImpl { protocol: String, method: String, uncovered: String },
@@ -118,6 +124,10 @@ pub enum TypeErrorKind {
     /// descriptor that must not be forged from an integer, a guard that must not be
     /// disarmed behind the module's back.
     OpaqueRecord { record: String, module: String, what: String },
+    /// `sealed` is opacity plus a trust boundary: outsiders may not assert the type
+    /// out of an erased value, and may not order values of it. Testing (`is`, `as?`)
+    /// stays legal — a test can only recognise a value the owner really built.
+    SealedRecord { record: String, module: String, what: String },
     /// `break` or `continue` with no enclosing loop -- including one that only *looks*
     /// enclosing, because a lambda sits in between.
     OutsideLoop(String),
@@ -247,6 +257,18 @@ impl fmt::Display for TypeError {
                 f,
                 "a `{from}` can never be a `{to}`, so this cast can never succeed"
             ),
+            TypeErrorKind::FallibleCast { from, to } => write!(
+                f,
+                "this cast can fail: a `{from}` is not always a `{to}`. Write `as? {to}` \
+                 to test (yielding `{to} | null`), or `as! {to}` to assert and trap on \
+                 mismatch"
+            ),
+            TypeErrorKind::SoftCastNullOverlap { to } => write!(
+                f,
+                "`as? {to}` is ambiguous because `{to}` overlaps `null`: can't infer \
+                 null-as-value vs null-as-failure. Test with `is`, or `as!` the \
+                 non-null part"
+            ),
             TypeErrorKind::AmbiguousCall { method, protocols } => write!(
                 f,
                 "Ambiguous call: `{method}` is declared by more than one protocol in \
@@ -298,6 +320,12 @@ impl fmt::Display for TypeError {
                 f,
                 "`{record}` is opaque, so {what} only inside `{module}`. A value of it can \
                  be held and passed anywhere -- go through a function `{module}` provides"
+            ),
+            TypeErrorKind::SealedRecord { record, module, what } => write!(
+                f,
+                "`{record}` is sealed, so {what} only inside `{module}`. A value of it can \
+                 be held, passed, and tested (`is`, `as?`) anywhere -- go through a \
+                 function `{module}` provides"
             ),
             TypeErrorKind::OutsideLoop(kw) => write!(
                 f,
@@ -1762,7 +1790,7 @@ impl Env {
     pub fn opaque_record_at(&self, module: &[String], path: &[String]) -> Option<&[String]> {
         let key = self.lookup(module, path)?;
         let d = self.decls.get(&key)?;
-        matches!(&d.sort, Sort::Record(r) if r.opaque).then(|| d.module.as_slice())
+        matches!(&d.sort, Sort::Record(r) if r.opaque || r.sealed).then(|| d.module.as_slice())
     }
 
     /// The same question asked of a *value's* type, where the name comes from the
@@ -1777,7 +1805,7 @@ impl Env {
     /// same-named record quietly unsealed a foreign one.
     pub fn opaque_record_named(&self, _module: &[String], key: &str) -> Option<&[String]> {
         let d = self.decls.get(key)?;
-        matches!(&d.sort, Sort::Record(r) if r.opaque).then(|| d.module.as_slice())
+        matches!(&d.sort, Sort::Record(r) if r.opaque || r.sealed).then(|| d.module.as_slice())
     }
 
     /// The `#nominal` tags of every opaque record `module` may *not* see into, each with
@@ -1800,11 +1828,36 @@ impl Env {
         let opaque: Vec<(String, Vec<String>)> = self
             .decls
             .iter()
-            .filter(|(_, d)| matches!(&d.sort, Sort::Record(r) if r.opaque))
+            .filter(|(_, d)| matches!(&d.sort, Sort::Record(r) if r.opaque || r.sealed))
             .map(|(k, d)| (k.clone(), d.module.clone()))
             .collect();
         let mut out = HashMap::new();
         for (key, owner) in opaque {
+            if !opacity_permits(module, &owner) {
+                let tag = self.solver.t.name(&key);
+                out.insert(tag, owner);
+            }
+        }
+        out
+    }
+
+    /// The `#nominal` tags of every `sealed` record `module` may not see into, each
+    /// with its owner: the subset of `foreign_opaque_tags` carrying the trust boundary
+    /// (docs/design/checked-casts.md). The structural gates key on the opaque set; the
+    /// assertion ban (`as!` naming a foreign sealed type) and the `Ord` bar key on
+    /// this one.
+    pub fn foreign_sealed_tags(
+        &mut self,
+        module: &[String],
+    ) -> HashMap<super::types::NameId, Vec<String>> {
+        let sealed: Vec<(String, Vec<String>)> = self
+            .decls
+            .iter()
+            .filter(|(_, d)| matches!(&d.sort, Sort::Record(r) if r.sealed))
+            .map(|(k, d)| (k.clone(), d.module.clone()))
+            .collect();
+        let mut out = HashMap::new();
+        for (key, owner) in sealed {
             if !opacity_permits(module, &owner) {
                 let tag = self.solver.t.name(&key);
                 out.insert(tag, owner);

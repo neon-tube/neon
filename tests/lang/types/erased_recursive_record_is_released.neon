@@ -27,6 +27,6 @@ fn main() {
     }
 
     // Recovered through the box, then read: the box is still alive here.
-    let n = x as Node;
+    let n = x as! Node;
     io::println(to_string(n.v));
 }

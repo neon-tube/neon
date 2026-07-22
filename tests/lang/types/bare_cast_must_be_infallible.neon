@@ -1,0 +1,14 @@
+//@ compile-fail
+//@ error-contains: this cast can fail
+
+// Bare `as` is the always-class of the trichotomy (docs/design/checked-casts.md,
+// decision 8): subsumption, widening, newtype wrap/unwrap. A cast that might fail must
+// wear its failure policy -- `as?` to test, `as!` to assert -- and spelling it bare is
+// a compile error naming both repairs. The runtime halves are pinned in
+// cast_triad.neon; the never-class (no overlap at all) stays ImpossibleCast, pinned
+// elsewhere.
+
+fn main() {
+    let u: i64 | str = 1;
+    let n = u as i64;
+}

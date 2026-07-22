@@ -90,6 +90,7 @@ pub fn check_all(
         lambda_throws: vec![],
         capture_floors: vec![],
         hidden_cache: std::collections::HashMap::new(),
+        sealed_cache: std::collections::HashMap::new(),
     };
     for (path, m) in modules {
         c.decls(path, &m.decls);
@@ -182,6 +183,11 @@ struct Checker<'a> {
         Vec<String>,
         std::rc::Rc<std::collections::HashMap<super::types::NameId, Vec<String>>>,
     >,
+    /// The `sealed` subset of the same, for the assertion ban and the `Ord` bar.
+    sealed_cache: std::collections::HashMap<
+        Vec<String>,
+        std::rc::Rc<std::collections::HashMap<super::types::NameId, Vec<String>>>,
+    >,
 }
 
 impl Checker<'_> {
@@ -257,6 +263,39 @@ impl Checker<'_> {
         let h = std::rc::Rc::new(self.env.foreign_opaque_tags(module));
         self.hidden_cache.insert(module.to_vec(), h.clone());
         h
+    }
+
+    /// The foreign `sealed` tags, memoised like `hidden`.
+    fn hidden_sealed(
+        &mut self,
+        module: &[String],
+    ) -> std::rc::Rc<std::collections::HashMap<super::types::NameId, Vec<String>>> {
+        if let Some(h) = self.sealed_cache.get(module) {
+            return h.clone();
+        }
+        let h = std::rc::Rc::new(self.env.foreign_sealed_tags(module));
+        self.sealed_cache.insert(module.to_vec(), h.clone());
+        h
+    }
+
+    /// The first foreign `sealed` record among `ty`'s nominal leaves, with its owner —
+    /// the head-and-union-leaves scan the assertion ban and the `Ord` bar key on. The
+    /// scan is deliberately leaf-level, not `mentions`-deep: a caller's own newtype
+    /// *wrapping* a sealed type is the caller's type, and asserting it is legal — only
+    /// the sealed type itself, named at the top or as a union member, is banned
+    /// (docs/design/checked-casts.md, decisions and the newtype note).
+    fn sealed_leaf(&mut self, module: &[String], ty: TyId) -> Option<(String, Vec<String>)> {
+        let sealed = self.hidden_sealed(module);
+        if sealed.is_empty() {
+            return None;
+        }
+        for leaf in self.nominal_leaves(ty) {
+            let id = self.env.solver.t.name(&leaf);
+            if let Some(owner) = sealed.get(&id) {
+                return Some((leaf, owner.clone()));
+            }
+        }
+        None
     }
 
     /// Whether flowing a value of type `actual` into a position expecting `expected`
@@ -864,7 +903,14 @@ impl Checker<'_> {
     /// The index of the innermost `locals` frame that binds `name`, for deciding
     /// whether it lies below a lambda's capture floor.
     fn frame_of(&self, name: &str) -> Option<usize> {
-        self.locals.iter().enumerate().rev().find(|(_, s)| s.iter().any(|(n, ..)| n == name)).map(|(i, _)| i)
+        // Refinements are shadows of a binding, not bindings: a refinement of an outer
+        // variable created inside a lambda must not make the variable look local to it.
+        self.locals
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, s)| s.iter().any(|(n, _, _, k)| n == name && *k != DefKind::Refinement))
+            .map(|(i, _)| i)
     }
 
     /// The span where `name` was bound, for a "captured here"-style secondary label.
@@ -877,12 +923,39 @@ impl Checker<'_> {
     /// means — a jump-to-definition that disagreed with the type shown on hover would be
     /// worse than no jump at all.
     fn binding_of(&self, name: &str) -> Option<(Span, DefKind)> {
+        // Through refinements: a jump-to-def on a narrowed variable goes to the `let`,
+        // not to the `is` that refined it.
         self.locals
             .iter()
             .rev()
             .flat_map(|s| s.iter().rev())
-            .find(|(n, ..)| n == name)
+            .find(|(n, _, _, k)| n == name && *k != DefKind::Refinement)
             .map(|(_, _, s, k)| (s.clone(), *k))
+    }
+
+    /// The nearest non-refinement binding: the type `name` was declared at, which is
+    /// what an assignment writes against. Reads use `lookup` and see refinements;
+    /// writes see through them — and dissolve them, via `unrefine`.
+    fn lookup_declared(&self, name: &str) -> Option<TyId> {
+        self.locals
+            .iter()
+            .rev()
+            .flat_map(|s| s.iter().rev())
+            .find(|(n, _, _, k)| n == name && *k != DefKind::Refinement)
+            .map(|(_, t, ..)| *t)
+    }
+
+    /// Dissolve every refinement of `name`: after an assignment the narrowed fact no
+    /// longer holds, so the shadows are rewritten to the declared type rather than
+    /// popped (they live in frames that are not ours to pop).
+    fn unrefine(&mut self, name: &str, declared: TyId) {
+        for frame in &mut self.locals {
+            for entry in frame.iter_mut() {
+                if entry.0 == name && entry.3 == DefKind::Refinement {
+                    entry.1 = declared;
+                }
+            }
+        }
     }
 
     // ---- blocks and statements ----
@@ -912,6 +985,13 @@ impl Checker<'_> {
     /// a hidden `#inner` field, a label no source can write, so its presence marks a
     /// newtype and its type is the representation.
     fn newtype_bridges(&mut self, nt: TyId, other: TyId) -> bool {
+        // Top is not a newtype: an open record projects *every* field as present, so
+        // without this guard `any` bridged to everything — which made `any as str`
+        // count as an infallible unwrap under the trichotomy.
+        let top = self.env.solver.t.any();
+        if self.env.solver.is_subtype(top, nt) {
+            return false;
+        }
         let label = self.env.solver.t.name("#inner");
         let Some(inner) = narrow::project_field(&mut self.env.solver, nt, label).ty() else {
             return false;
@@ -963,7 +1043,12 @@ impl Checker<'_> {
                 self.bind_pattern(module, pat, want.unwrap_or(t));
             }
             ast::StmtKind::Assign { name, value } => {
-                let Some(want) = self.lookup(name) else {
+                // Against the DECLARED type, not the narrowed one: `while cur is Node
+                // { cur = cur.next }` writes a `Node | null` into a variable currently
+                // refined to `Node`, and that is the loop working as intended. The
+                // write also dissolves the refinement — after it, reads see the
+                // declared type again.
+                let Some(want) = self.lookup_declared(name) else {
                     self.error(s.span.clone(), TypeErrorKind::UnknownName(name.clone()));
                     self.expr(module, value, None);
                     return;
@@ -980,7 +1065,11 @@ impl Checker<'_> {
                         );
                     }
                 }
+                // The RHS still sees the refined binding — `cur = cur.next` reads a
+                // `Node`'s field — and only after it is checked does the refinement
+                // dissolve: the write invalidates the narrowed fact.
                 self.expr(module, value, Some(want));
+                self.unrefine(name, want);
             }
             ast::StmtKind::Expr(e) => {
                 self.expr(module, e, None);
@@ -1272,19 +1361,25 @@ impl Checker<'_> {
                 self.env.solver.t.bool()
             }
 
-            ExprKind::As { lhs, ty } => {
+            ExprKind::As { form, lhs, ty } => {
                 let from = self.expr(module, lhs, None);
                 let scope = self.type_scope(module);
                 let to = self.env.resolve(&scope, ty);
-                // A cast narrows -- it cannot reach a type the value could never be --
-                // except across a newtype boundary, where it wraps or unwraps: a
-                // `newtype Meter = f64` is disjoint from `f64`, yet `m as f64` and
-                // `x as Meter` are exactly what a newtype is for. So the cast is also
-                // valid when one side is a newtype whose representation meets the other.
+                // The trichotomy (docs/design/checked-casts.md, decision 8). Every cast
+                // is one of three classes, and each class has one legal spelling:
+                //
+                //   always succeeds  — subsumption, widening, newtype wrap/unwrap: bare `as`
+                //   might succeed    — the types overlap, neither contains the other: `as?`/`as!`
+                //   never succeeds   — no overlap: an error in every spelling
+                //
+                // The never-class check first: it rejects `as!` too, because an
+                // assertion that provably always traps is not a program, it is a typo.
+                // Newtype bridges are the one non-overlap exception — a `newtype
+                // Meter = f64` is disjoint from `f64`, yet wrapping and unwrapping is
+                // exactly what a newtype is for, and neither can fail.
                 let meet = self.env.solver.t.intersect(from, to);
-                let ok = !self.env.solver.is_empty(meet)
-                    || self.newtype_bridges(from, to)
-                    || self.newtype_bridges(to, from);
+                let bridges = self.newtype_bridges(from, to) || self.newtype_bridges(to, from);
+                let ok = !self.env.solver.is_empty(meet) || bridges;
                 if !self.env.is_error(from) && !ok {
                     let (f, t) = (self.show(from), self.show(to));
                     self.error(e.span.clone(), TypeErrorKind::ImpossibleCast { from: f, to: t });
@@ -1305,7 +1400,66 @@ impl Checker<'_> {
                         return self.poison();
                     }
                 }
-                to
+                // Infallibility: the always-class is subsumption or a newtype bridge.
+                // (Boxing into `any` is subsumption too — `any` is top.)
+                let infallible =
+                    self.env.solver.is_subtype(from, to) || bridges || self.env.is_error(from);
+                match form {
+                    ast::CastForm::Plain => {
+                        if !infallible {
+                            let (f, t) = (self.show(from), self.show(to));
+                            self.error(
+                                e.span.clone(),
+                                TypeErrorKind::FallibleCast { from: f, to: t },
+                            );
+                            return self.poison();
+                        }
+                        to
+                    }
+                    ast::CastForm::Assert => {
+                        // The sealed ban: an outsider may not ASSERT another module's
+                        // sealed type — an assertion is either redundant (they could
+                        // test) or the mistake `sealed` exists to make unrepresentable.
+                        // `as?`/`is` stay legal: a test only recognises a value the
+                        // owner really built, since tags are stamped at genuine
+                        // construction. Fires on the target's head and union leaves;
+                        // a caller's own newtype wrapping a sealed type stays legal.
+                        if !self.env.is_error(from) {
+                            if let Some((record, owner)) = self.sealed_leaf(module, to) {
+                                let shown = owner.join("::");
+                                self.error(
+                                    e.span.clone(),
+                                    TypeErrorKind::SealedRecord {
+                                        record,
+                                        module: shown,
+                                        what: "it can be asserted with `as!`".into(),
+                                    },
+                                );
+                                return self.poison();
+                            }
+                        }
+                        // Lowering needs the target to build the runtime test from —
+                        // same channel an `is` uses.
+                        self.result.set_tested(e.id, to);
+                        to
+                    }
+                    ast::CastForm::Soften => {
+                        // `T | null` is only an answer when `null` unambiguously means
+                        // "wasn't one" (decision 7).
+                        let n = self.env.solver.t.null();
+                        let null_meet = self.env.solver.t.intersect(to, n);
+                        if !self.env.solver.is_empty(null_meet) {
+                            let t = self.show(to);
+                            self.error(
+                                e.span.clone(),
+                                TypeErrorKind::SoftCastNullOverlap { to: t },
+                            );
+                            return self.poison();
+                        }
+                        self.result.set_tested(e.id, to);
+                        self.env.solver.t.union(to, n)
+                    }
+                }
             }
 
             ExprKind::Return(v) => {
@@ -1357,8 +1511,13 @@ impl Checker<'_> {
             ExprKind::While { cond, body } => {
                 let b = self.env.solver.t.bool();
                 self.expr(module, cond, Some(b));
+                // The body runs only while the condition holds, so it sees the
+                // then-refinements: `while cur is Node { cur.next }` reads fields off
+                // a `Node`, not a `Node | null`. An assignment inside the body checks
+                // against the declared type and dissolves the refinement (see Assign).
+                let (thens, _) = self.cond_refinements(cond);
                 self.loop_breaks.push(vec![]);
-                self.block(module, body, None);
+                self.with_refinements(&thens, &cond.span, |c| c.block(module, body, None));
                 self.loop_breaks.pop();
                 self.env.solver.t.tuple(vec![])
             }
@@ -2206,6 +2365,21 @@ impl Checker<'_> {
                     } else if !self.is_ordered(meet) {
                         let shown = self.show(meet);
                         self.error(e.span.clone(), TypeErrorKind::Unordered { ty: shown });
+                    } else if let Some((record, owner)) = self.sealed_leaf(module, meet) {
+                        // The Ord bar (docs/design/checked-casts.md, decision 2;
+                        // opacity.md residue 2): ordering foreign sealed values is an
+                        // oracle — with chosen seals in hand, relative order supports
+                        // binary search of the hidden contents. `==` stays: identity
+                        // of contents is one bit per comparison.
+                        let shown = owner.join("::");
+                        self.error(
+                            e.span.clone(),
+                            TypeErrorKind::SealedRecord {
+                                record,
+                                module: shown,
+                                what: "it can be ordered".into(),
+                            },
+                        );
                     }
                 }
                 self.env.solver.t.bool()
@@ -2263,9 +2437,12 @@ impl Checker<'_> {
     ) -> TyId {
         let b = self.env.solver.t.bool();
         self.expr(module, cond, Some(b));
+        // `if x is T { .. }` sees `x` at `T` in the then-branch and at the complement
+        // in the else-branch; same for null tests and their and/or/not compositions.
+        let (thens, elses) = self.cond_refinements(cond);
 
         let Some(other) = else_ else {
-            self.block(module, then, None);
+            self.with_refinements(&thens, &cond.span, |c| c.block(module, then, None));
             // With no `else`, the `if` yields `()` when the condition is false. That is
             // fine wherever `()` is accepted -- a statement, or a `-> null`/`-> ()` tail
             // -- and an error only where a real value is required.
@@ -2278,8 +2455,8 @@ impl Checker<'_> {
             return unit;
         };
 
-        let a = self.block(module, then, expected);
-        let c = self.expr(module, other, expected);
+        let a = self.with_refinements(&thens, &cond.span, |c| c.block(module, then, expected));
+        let c = self.with_refinements(&elses, &cond.span, |ch| ch.expr(module, other, expected));
         self.union_branches(a, c)
     }
 
@@ -2360,7 +2537,7 @@ impl Checker<'_> {
             // succeed for the wrong reason.
             let bound = if self.env.solver.is_empty(bound) { self.poison() } else { bound };
             if let Some(v) = &scrut_var {
-                self.bind(v, bound, scrutinee.span.clone(), DefKind::Local);
+                self.bind(v, bound, scrutinee.span.clone(), DefKind::Refinement);
             }
             self.bind_pattern(module, &arm.pat, bound);
             if let Some(g) = &arm.guard {
@@ -2399,6 +2576,112 @@ impl Checker<'_> {
             self.error(e.span.clone(), TypeErrorKind::NotExhaustive { missing });
         }
         result
+    }
+
+    /// The refinements a boolean condition establishes on bare locals: `(then, else)`
+    /// lists of `(name, refined type)` to shadow-bind while checking each branch.
+    ///
+    /// The conditions that refine are `x is T`, `x == null` / `x != null`, and their
+    /// compositions: `not` swaps the branches, `and` refines the then-branch with both
+    /// conjuncts (its else concludes nothing), `or` the else-branch with both flipped
+    /// disjuncts. Only a bare local narrows — a field or call result has no binding to
+    /// shadow. Both refined types come from `narrow::Refined::both`, so neither branch
+    /// can receive a `never` binding: a test that always or never matches refines
+    /// nothing rather than poisoning a branch (see narrow.rs's module docs for why a
+    /// `never` binding is the trap).
+    fn cond_refinements(&mut self, cond: &Expr) -> (Vec<(String, TyId)>, Vec<(String, TyId)>) {
+        let nothing = (vec![], vec![]);
+        match &cond.kind {
+            ExprKind::Is { lhs, .. } => {
+                let Some(name) = self.scrutinee_var(lhs) else { return nothing };
+                let Some(subject) = self.lookup(&name) else { return nothing };
+                let Some(tested) = self.result.tested(cond.id) else { return nothing };
+                if self.env.is_error(subject) {
+                    return nothing;
+                }
+                let refined = narrow::narrow_is(&mut self.env.solver, subject, tested);
+                self.refinement_pair(name, subject, refined, false)
+            }
+            ExprKind::Binary { op: op @ (BinOp::Eq | BinOp::Ne), lhs, rhs } => {
+                let subject_expr = match (&lhs.kind, &rhs.kind) {
+                    (ExprKind::Null, _) => rhs,
+                    (_, ExprKind::Null) => lhs,
+                    _ => return nothing,
+                };
+                let Some(name) = self.scrutinee_var(subject_expr) else { return nothing };
+                let Some(subject) = self.lookup(&name) else { return nothing };
+                if self.env.is_error(subject) {
+                    return nothing;
+                }
+                let refined = narrow::narrow_null(&mut self.env.solver, subject);
+                self.refinement_pair(name, subject, refined, matches!(op, BinOp::Ne))
+            }
+            ExprKind::Unary { op: UnOp::Not, rhs } => {
+                let (t, e) = self.cond_refinements(rhs);
+                (e, t)
+            }
+            ExprKind::Binary { op: BinOp::And, lhs, rhs } => {
+                let (mut tl, _) = self.cond_refinements(lhs);
+                let (tr, _) = self.cond_refinements(rhs);
+                tl.extend(tr);
+                (tl, vec![])
+            }
+            ExprKind::Binary { op: BinOp::Or, lhs, rhs } => {
+                let (_, mut el) = self.cond_refinements(lhs);
+                let (_, er) = self.cond_refinements(rhs);
+                el.extend(er);
+                (vec![], el)
+            }
+            _ => nothing,
+        }
+    }
+
+    /// A leaf test's `(then, else)` refinements, with the diff side guarded.
+    ///
+    /// The match side of a test is an intersection — always positive, always
+    /// representable (`any ∧ i64` is `i64`). The complement side is a difference, and
+    /// a difference only stays positive when the subject is a union of positives to
+    /// subtract from (`A | B ∖ A` is `B`, `T | null ∖ null` is `T`). Subtracting from
+    /// `any` leaves a complement (`any ∖ Point`), a type with no runtime
+    /// representation of its own — binding it gave the else-branch a repr that was
+    /// not `Any`, and lowering then unboxed a value that was never claimed to be
+    /// anything. So the diff side binds nothing when the subject is `any`; the branch
+    /// simply keeps the unrefined binding. `flip` swaps the branches (`!=` against
+    /// `==`) after the guard, so the guard follows the diff wherever it lands.
+    fn refinement_pair(
+        &mut self,
+        name: String,
+        subject: TyId,
+        refined: narrow::Refined,
+        flip: bool,
+    ) -> (Vec<(String, TyId)>, Vec<(String, TyId)>) {
+        let Some((then_ty, else_ty)) = refined.both() else { return (vec![], vec![]) };
+        let top = self.env.solver.t.any();
+        let subject_is_top = self.env.solver.is_subtype(top, subject);
+        let thens = vec![(name.clone(), then_ty)];
+        let elses = if subject_is_top { vec![] } else { vec![(name, else_ty)] };
+        if flip {
+            (elses, thens)
+        } else {
+            (thens, elses)
+        }
+    }
+
+    /// Check `f` with `refs` shadow-bound as refinements in a fresh frame.
+    fn with_refinements<R>(
+        &mut self,
+        refs: &[(String, TyId)],
+        span: &Span,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let frame = refs
+            .iter()
+            .map(|(n, t)| (n.clone(), *t, span.clone(), DefKind::Refinement))
+            .collect();
+        self.locals.push(frame);
+        let out = f(self);
+        self.locals.pop();
+        out
     }
 
     /// The scrutinee's variable name when it is a bare local, so match arms can

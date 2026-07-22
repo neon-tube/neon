@@ -1,0 +1,32 @@
+//@ exit: 101
+
+// `as` out of `any` is a CHECKED cast: the box carries the concrete type's tag, the
+// cast compares it against the target's, and a mismatch TRAPS (exit 101) instead of
+// reinterpreting the payload bytes at the wrong type.
+//
+// Before the check, `a as i64` on a box holding a `str` read the string's pointer word
+// as an integer -- silently, for every type, which is the general form of the opaque
+// forge pinned in records/opaque_no_any_laundering.neon. The checker is right to accept
+// the cast -- `any` can hold anything, so the assertion could be true -- but an
+// assertion that is never discharged is a reinterpret cast wearing a checked cast's
+// name. It is discharged at run time, the one place the box's real type is known.
+//
+// The matching direction stays free: the round trip through `any` here recovers the
+// value it erased, same as list_literal_erased_into_any_recovered.neon does for the
+// container shape. "before" pins that the program really ran up to the bad cast.
+
+use std::io;
+
+fn main() {
+    // Honest recovery: the tag matches, the value comes back.
+    let a: any = 42;
+    io::println(to_string(a as! i64));
+
+    io::println("before");
+
+    // Mismatch: the box holds a str, the cast claims i64. Traps here.
+    let b: any = "hi";
+    io::println(to_string(b as! i64));
+
+    io::println("unreachable");
+}

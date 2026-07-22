@@ -27,7 +27,7 @@ fn main() {
     };
     io::println(to_string(state is Done));
     io::println(to_string(state is Running));
-    io::println(to_string((state as Done).total));
+    io::println(to_string((state as! Done).total));
 
     // A variant the union never reached is still a real negative answer.
     io::println(to_string(state is Paused));

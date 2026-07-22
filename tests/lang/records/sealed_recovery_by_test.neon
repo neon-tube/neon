@@ -1,0 +1,37 @@
+// The testing forms stay legal on a foreign `sealed` type (docs/design/checked-casts.md,
+// decision 3): `is` and `as?` can only RECOGNISE a value the owner really built, because
+// a nominal tag is stamped exclusively at genuine construction -- so a test forges
+// nothing and reveals one bit. A genuine Secret erased into `any` recovers through
+// `as?` and flows back into the owner's API; a structural counterfeit answers `is`
+// false and `as?` null. `==` also stays legal -- identity of contents is one bit per
+// comparison; ordering is the oracle, and `<` is barred (sealed_bars_ord.neon).
+
+use std::io;
+
+internal mod vault {
+    sealed record Secret { code: i64 }
+    fn seal(n: i64) -> Secret { Secret { code: n } }
+    fn value(s: Secret) -> i64 { s.code }
+}
+
+fn main() {
+    // Genuine: recovered by test, handed back to the owner.
+    let a: any = vault::seal(41);
+    io::println(to_string(a is vault::Secret));
+    let s = a as? vault::Secret;
+    if s != null {
+        io::println(to_string(vault::value(s)));
+    }
+
+    // Counterfeit: same shape, never constructed by the owner -- invisible to tests.
+    let fake: any = { code: 41 };
+    io::println(to_string(fake is vault::Secret));
+    io::println(to_string((fake as? vault::Secret) == null));
+
+    // Equality stays: one bit, no oracle.
+    let b: any = vault::seal(41);
+    let sb = b as? vault::Secret;
+    if s != null and sb != null {
+        io::println(to_string(s == sb));
+    }
+}

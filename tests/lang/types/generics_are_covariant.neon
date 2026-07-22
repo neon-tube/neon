@@ -11,7 +11,7 @@ use std::string;
 record Box[T] { item: T }
 
 fn show(b: Box[i64 | str]) -> str {
-    if b.item is i64 { to_string(b.item as i64) } else { b.item as str }
+    if b.item is i64 { to_string(b.item as! i64) } else { b.item as! str }
 }
 
 fn main() {

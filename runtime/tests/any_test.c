@@ -26,6 +26,22 @@ TEST(distinct_tags_are_preserved) {
     neon_release((neon_header*)b);
 }
 
+TEST(box_expect_hands_back_the_payload_on_a_matching_tag) {
+    int64_t payload = 1234;
+    neon_value v = neon_box_new(&payload, &nt_i64_w, 77);
+    EXPECT_EQ(*(int64_t*)neon_box_expect(v, 77), 1234);
+    neon_release((neon_header*)v);
+}
+
+TEST(box_expect_traps_on_a_mismatched_tag) {
+    // The checked unbox behind `as`-from-`any`: a cast to a type the box does not hold
+    // must trap, not reinterpret the payload bytes at the claimed type.
+    int64_t payload = 1234;
+    neon_value v = neon_box_new(&payload, &nt_i64_w, 77);
+    EXPECT_TRAP((void)neon_box_expect(v, 78));
+    neon_release((neon_header*)v);
+}
+
 TEST(boxing_a_string_releases_it_with_the_box) {
     // A counted payload: dropping the box must release the boxed string. ASan catches a
     // leak (missed release) or a fault (double release).

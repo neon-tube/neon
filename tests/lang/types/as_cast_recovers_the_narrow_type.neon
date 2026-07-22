@@ -12,11 +12,11 @@ record Wrapped { v: i64 }
 fn main() {
     // Out of a union.
     let u: i64 | str = 7;
-    io::println(to_string(u as i64));
+    io::println(to_string(u as! i64));
 
     // Out of `any`.
     let a: any = Wrapped { v: 3 };
-    let w = a as Wrapped;
+    let w = a as! Wrapped;
     io::println(to_string(w.v));
 
     // Across a newtype, both directions, chained.

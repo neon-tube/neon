@@ -15,7 +15,7 @@ use std::collections::list;
 
 fn main() {
     let li: any = [10, 20, 30];
-    let back = li as List[i64];
+    let back = li as! List[i64];
     io::println("#{list::len(back)}");
     io::println("#{back[0]}");
     io::println("#{back[1]}");

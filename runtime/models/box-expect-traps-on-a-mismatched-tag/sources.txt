@@ -1,0 +1,5 @@
+# The checked unbox behind `as`-from-`any`, the allocation `neon_box_new` makes, and the
+# trap a mismatched tag lands on.
+src/any.c
+src/lifecycle.c
+src/trap.c

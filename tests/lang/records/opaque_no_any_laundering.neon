@@ -1,37 +1,32 @@
-//@ compile-fail
-//@ error-contains: is opaque
+//@ exit: 101
 
-// The two things `any` still lets through. Both are open, both are recorded here, and
-// this file is deliberately absent from expected-pass.txt until they close.
+// The two things `any` used to let through, now both answered at run time. History and
+// the decision are in docs/design/opacity.md (residue 1); the short form:
 //
-// 1. THE READ (`thief::read`). An opaque widens to `any` and a structural `is`/`as`
-//    probes it. The checker accepts this because the type in play is `any` --
-//    module-blind by construction. It does NOT leak the contents: a boxed value carries
-//    a *nominal* runtime tag, so `is { code: i64 }` compares Secret's tag against the
-//    structural shape's, they differ, and the branch is dead (verified 2026-07-20, dead
-//    even inside `vault`). So this is an incoherence -- a statically-legal,
-//    could-be-true test that is runtime-always-false -- not a disclosure.
+// 1. THE READ (`thief::read`). An opaque widens to `any` and a structural `is` probes
+//    it. The checker accepts this because the type in play is `any` -- module-blind by
+//    construction -- but it does NOT leak: a boxed value carries a *nominal* runtime
+//    tag, so `is { code: i64 }` compares Secret's tag against the structural shape's,
+//    they differ, and the branch is dead. Statically-legal, runtime-always-false --
+//    an incoherence, not a disclosure. This file pins the `0` it returns.
 //
 // 2. THE FORGE (`thief::forge`). A structural value widens to `any` and casts to the
-//    nominal, and the runtime cast reads bytes without checking the tag, so it produces
-//    a working `Secret` from `{ code: 99 }`. This one is a real hole.
+//    nominal. This used to WORK -- the runtime cast read the payload bytes without
+//    checking the tag, producing a working `Secret` from `{ code: 99 }`.
 //
-//    It cannot be closed statically without breaking legitimate code, and that is the
-//    point worth recording: `any` can genuinely hold an opaque -- widening into `any` is
-//    a legal flow -- so a cast out of `any` is indistinguishable from the pinned
-//    erased-recovery idiom `(li: any) as List[i64]`
-//    (types/list_literal_erased_into_any_recovered.neon). A static rule strict enough to
-//    stop the forge also rejects that. Verified by trying it: the strict rule broke five
-//    corpus files.
+//    It cannot be closed statically without breaking legitimate code: `any` can
+//    genuinely hold an opaque -- widening into `any` is a legal flow -- so a cast out
+//    of `any` is indistinguishable at the type level from the pinned erased-recovery
+//    idiom `(li: any) as List[i64]` (types/list_literal_erased_into_any_recovered.neon).
+//    A static rule strict enough to stop the forge also rejects that; verified by
+//    trying it, which broke five corpus files.
 //
-//    The fix is at run time, where the two ARE distinguishable: `as` from `any` to a
-//    concrete target should compare the box tag against the target's and trap on
-//    mismatch. Honest recovery passes, forgery traps. That is a general soundness fix --
-//    unguarded `as`-from-`any` is unchecked for every type, not just opaque ones -- and
-//    is worth doing with the bare-name identity fix (TODO #1), since same-name records
-//    share a tag. See docs/design/opacity.md.
+//    So the cast is checked where the two ARE distinguishable: `as` from `any`
+//    compares the box tag against the target's and TRAPS on mismatch. Honest recovery
+//    passes; forgery exits 101 here. The general-semantics pin (every type, not just
+//    opaque ones) is types/any_cast_checks_the_tag.neon.
 //
-// The direct, non-`any` spellings of both are closed and pinned:
+// The direct, non-`any` spellings of both are closed statically and pinned:
 // opaque_no_structural_cast.neon and opaque_no_anonymous_forgery.neon.
 
 use std::io;
@@ -43,7 +38,7 @@ internal mod vault {
 }
 
 internal mod thief {
-    // 1. The read: accepted by the checker, dead at run time.
+    // 1. The read: accepted by the checker, dead at run time -- returns 0.
     fn read(s: vault::Secret) -> i64 {
         let a: any = s;
         if a is { code: i64 } {
@@ -53,14 +48,15 @@ internal mod thief {
         }
     }
 
-    // 2. The forge: accepted by the checker, and it WORKS at run time.
+    // 2. The forge: accepted by the checker, TRAPS at the cast.
     fn forge() -> vault::Secret {
         let a: any = { code: 99 };
-        a as vault::Secret
+        a as! vault::Secret
     }
 }
 
 fn main() {
     io::println(to_string(thief::read(vault::seal(1234))));
     io::println(to_string(vault::value(thief::forge())));
+    io::println("unreachable");
 }

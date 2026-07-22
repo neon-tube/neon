@@ -12,19 +12,6 @@ in their own section at the bottom and marked as such.
 
 ## P0 — soundness. These miscompile or accept wrong programs.
 
-### 1. `as` out of `any` never checks the tag
-
-The one residue of the two resolved opacity holes (nominal identity and structural
-sealing — decisions and mechanisms in `docs/design/identity.md` and
-`docs/design/opacity.md`), and it runs in both `any` directions
-(`opaque_no_any_laundering.neon`, unlisted). The read is accepted but dead at run time
-(nominal tags make the structural `is` false); the forge —
-`let a: any = {code:99}; a as Secret` — actually works. Neither closes statically:
-`any` can legitimately hold an opaque, so a cast out of it is indistinguishable from
-the pinned erased-recovery idiom, and a rule strict enough to stop the forge broke five
-corpus files when tried. Both want the same runtime fix — tag comparison on
-`as`-from-`any`, which is a general soundness fix anyway.
-
 ### 2. Interpolating a dispatched call miscompiles
 
 ```neon
@@ -48,16 +35,6 @@ match x { A => ..., B => ... }    // on x: A | B
 Lowers to `block0: jump block2` — arm 1 unconditionally, arm 2 dead, no diagnostic. `A` is
 parsed as an identifier pattern shadowing the type name. `is A =>` is correct. The binder
 semantics may be intended; the second arm silently becoming unreachable is not.
-
-### 4. Erasing a narrowed union member tags the box with the union
-
-```neon
-fn e(x: A | Node) -> any { match x { is A => x as A, is Node => x as Node } }
-```
-
-The match join block is typed at the union, so the implicit erasure at `ret` boxes with
-`type_tag(union)`. Both `p is A` and `q is Node` come back **false** on values that are
-exactly those types. Refcounting on that path is correct; only the tag is wrong.
 
 ### 5. Unsolved generics reach codegen as an ICE
 
@@ -133,21 +110,66 @@ Doubly vacuous as written: the rule is stated as type-driven (logical for unsign
 arithmetic for signed) and **there is no unsigned type in the language**. Either emit the
 shift explicitly, or write down that `bsr` is arithmetic and mean it.
 
+### 8d. An `if`/`match` join into `(union, scalar)` mislays the scalar
+
+```neon
+type J = null | bool | i64 | f64 | str
+fn f(cond: bool) -> (J, i64) { if cond { (true, 4) } else { (null, 5) } }
+let (v, k) = f(true);      // k is 0, not 4 — compiles, exits 0, wrong data
+```
+
+The two arms build tuples whose first elements are *different* members of the union (`bool`
+vs `null`), so each arm boxes that element at its own repr; the join adopts one arm's tuple
+layout and the `i64` tail is then read at the wrong offset for the other arm's value. Same
+family as item 4 — a union box laid out by one arm and read by another.
+
+Not triggered when the arms agree: `(true, 4)`/`(false, 5)` is correct, and a single-arm
+`(true, 4)` at `(J, i64)` is correct. Recursion is not required — the union above is a plain
+`type`. Widening each arm's element to the union *before* the tuple (one `J`-typed binding,
+one tuple built after the join) is correct, as is returning a record instead of a tuple.
+Found writing a DOM JSON parser, where every `parse_value` arm returns `(Json, next)`.
+
+### 8e. Destructuring a tuple out of a `(tuple) | null` union miscompiles
+
+```neon
+fn uncons(v) -> (i64, str) | null { if empty { null } else { (65, "bc") } }
+let r = uncons(v);
+if r is null { ... } else { let (b, rest) = r; ... }   // C: 'nu1' has no member '_0'
+```
+
+The `is null` narrows `r` to the tuple in the else arm, but codegen never reprojects the C
+repr: the destructure reads `._0`/`._1` off the *union* struct, which has no tuple members,
+and the emitted C fails to compile. A `record | null` in the same shape is fine — the record
+narrows and its fields read cleanly — so the workaround (and what `bytes::uncons` does) is to
+return a two-field record instead of a tuple. Distinct from 8d: that one silently mislays a
+scalar and still compiles; this one fails the C compile. Same root, though — a union arm whose
+tuple/record layout the narrowed use doesn't pick up.
+
+The related ergonomic gap this entry used to carry — bare uses of an `is null`-narrowed
+value needing an explicit `as T` — closed 2026-07-22 with narrowing (item 9,
+`docs/design/checked-casts.md`): the refined value now flows bare. The tuple-destructure
+miscompile above is unaffected and still open.
+
 ---
 
 ## P1 — structural. These are why P0 items keep appearing.
 
-### 9. `narrow.rs` has zero callers
+### 9. `match_expr` still narrows inline; `redundant_arms`/`residual` still unused
 
-The safety module — `Refined` deliberately has no `then_ty` on the impossible case,
-`Projected` deliberately has no `never`, ~40 passing unit tests, and a module doc
-explaining at length the exact unsoundness that was live today. `match_expr` reimplements
-narrowing inline with a raw `intersect`; `if`/`while` don't narrow at all.
+Half-resolved 2026-07-22: `if`/`while` now narrow through `narrow::narrow_is` /
+`narrow_null` / `Refined` (`check.rs::cond_refinements`), assignment dissolves
+refinements against the declared type, and the value-side projection lives at
+`lower.rs::lower_path` — pinned by `control/narrowing_in_if_and_while.neon` and
+`match/narrowed_scrutinee_flows_bare.neon`. What remains of the original item:
+`match_expr` still reimplements its narrowing with raw `intersect`/`diff` rather than
+calling `narrow::narrow`, and `residual`/`is_exhaustive`/`redundant_arms` still have no
+callers — the exhaustiveness logic exists twice. A refactor, not a bug: the inline copy
+is currently correct.
 
-A green suite over a disconnected module reads exactly like a green suite over a connected
-one. Decide whether `match_expr` calls `narrow::narrow`/`redundant_arms`, and whether
-`if`/`while` should narrow. Right now the module encoding the soundness argument and the
-code making the decisions are two different programs.
+Known limit of the wired half, recorded in `docs/design/checked-casts.md`: the
+else-branch of an `any` subject deliberately does not refine (`any \ T` is a complement
+with no repr of its own), and only bare locals narrow — a field or call result has no
+binding to shadow.
 
 ### 10. The `ir_lower.rs` guards are aimed at a program the compiler never builds
 
@@ -210,19 +232,6 @@ brace — it has cost several people time today.
 
 ## P2 — decisions. These need an owner's call, not an implementation.
 
-### 14. Should `any` hold a container?
-
-`let a: any = [1, 2, 3]` works now. If it should be a compile error, that is a small change
-today and a large one later. The answer also decides `List[any]` and `Map[str, any]`.
-
-### 15. Should `as` be checked?
-
-`as` is an unchecked reinterpretation everywhere: `null as str` yields `""`, and
-`(x: i64|str) as str` on an i64 reads garbage. The checker is right not to reject these —
-`as` exists to assert what the checker cannot prove — but the assertion is never
-*discharged*. It is a reinterpret cast wearing a checked cast's name. Making it trap is a
-language decision with a cost on every narrowing.
-
 ### 16. Should block comments exist?
 
 They nest, deliberately and correctly — commenting out a region containing `*/` must not
@@ -234,6 +243,24 @@ tree-sitter external scanner entirely (nesting is why it exists).
 `@runtime` makes this possible now. It also removes the prelude-vs-root collision that
 forces `opacity_permits` to treat the root as a non-container — see the exception in
 `check.rs::opacity_permits`.
+
+---
+
+## Checked casts and `sealed` — IMPLEMENTED 2026-07-22
+
+`docs/design/checked-casts.md` — accepted and built the same day. Resolved former items
+1, 4, 14 and 15 (removed above) and the if/while half of §9. What shipped: canonical
+tags (a box always carries the concrete member's tag; union/nullable targets are
+membership checks), narrowing wired into `if`/`while` with assignment dissolution, the
+`as` / `as?` / `as!` triad with the trichotomy enforced ("bare `as` never lies"), and
+the `opaque`/`sealed` split — `sealed record` bars assertive recovery (`as!`) and
+ordering outside the owner's subtree; `File` and `Resource` are sealed, `List`/`Map`
+stay opaque. Ten corpus files respelled; new pins throughout the corpus.
+
+One open residue, off-ratchet: the sealed ban through a generic instantiation
+(`records/sealed_no_generic_assert_laundering.neon`) — needs a post-monomorphization
+diagnostics channel, same infrastructure family as item 5. Soundness-guarded meanwhile
+by the tag check.
 
 ---
 
@@ -509,6 +536,54 @@ did not finish in 400s; the same harness against a static map finished in 0.25s.
 **Unverified as a result:** "resize preserves live entries and drops tombstones", and
 copy-on-write at `rc > 1`. Needs `goto-instrument --restrict-function-pointer` in the model
 pipeline, or types that distinguish a drop from a witness release.
+
+---
+
+## Serialization — completing protocol dispatch
+
+A stdlib JSON module wants `protocol Serialize`/`Deserialize` with library impls for the
+recursive cases and a derive for records — the serde shape, but resolved statically at
+monomorphisation so there are no dictionaries. None of it is expressible until dispatch is
+finished. The concrete pieces, in order, each closing an item already listed above:
+
+1. **Lower `Resolution::Switch`** (item 7c) and **`Resolution::Bound` on a union receiver**
+   (item 7). The checker already computes the arms — `dispatch.rs:243`, coverage-checked and
+   most-specific-filtered — and lowering throws them away at `lower.rs:1975`. Emit a
+   `Term::Switch` on the receiver's discriminant, one arm per `(TyId, ImplId)`, reusing the
+   runtime tag test that `match`/`is` narrowing already emits. This is the single primitive
+   under both union *encode* and union *decode*, so it earns its keep independent of JSON.
+
+2. **Parse `where` on impls.** `ast::ImplDecl` has no `wheres` and `parser::impl_decl` has no
+   `where` clause. Cheap; unblocks bounded impls, which do not parse today.
+
+3. **Impl-head unification, not intersection** (item 7b). Applicability at `dispatch.rs:220`
+   does `intersect(receiver, target)`, so `impl[T] Serialize for List[T]` never matches — its
+   `T` is rigid, the meet is empty. Treat the impl's own generics as flexible holes and
+   *match* the receiver against the head, yielding a substitution (`T ↦ i64`).
+   `ImplDef.generics` is stored and consumed by nothing today; this is what consumes it.
+
+4. **Discharge the context under the subst.** With `T ↦ i64`, `where T: Serialize` becomes a
+   subgoal resolved by another applicability query → `Direct(impl Serialize for i64)`. It
+   terminates because the type shrinks structurally. This is the existing `Bound` path, fired
+   at instance-lowering time when the impl itself is generic.
+
+5. **Records need a derive.** Bounded impls handle `List`/`Map`/tuples/unions; they cannot
+   iterate arbitrary named record fields, and there are no macros. `@derive(Serialize)`
+   generates an ordinary `impl` per record via the same structural walk the compiler already
+   does for `to_string`/`==`. The walk is shared by every derivable protocol, not
+   JSON-specific — the one irreducible bit of compiler magic, and it produces a normal,
+   overridable impl rather than a baked-in special case.
+
+**Litmus test for "done":** delete the baked-in structural `to_string`/`==`/`cmp` walks for
+containers and replace them with `impl[T] Display for List[T] where T: Display` (and the
+Map/tuple analogues). If library impls can express what the compiler currently hardcodes,
+the machinery is complete and JSON falls out as one more protocol with zero JSON-specific
+compiler code. If they can't, a piece above is still missing.
+
+Union *decode* has one extra obligation the encode side doesn't: choosing an arm. Use the
+emptiness checker (`solver.is_empty`, already the basis of `dispatch.rs:220`) to require the
+arms' JSON projections be pairwise disjoint, and reject as a compile error when they overlap
+("union not unambiguously decodable, add a tag") rather than silently picking arm order.
 
 ---
 

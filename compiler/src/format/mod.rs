@@ -633,6 +633,9 @@ impl<'a> Fmt<'a> {
 
     fn record_decl(&mut self, r: &RecordDecl, span: &Span) {
         self.annotations(&r.annotations);
+        if r.sealed {
+            self.push("sealed ");
+        }
         if r.opaque {
             self.push("opaque ");
         }
@@ -1272,9 +1275,13 @@ impl<'a> Fmt<'a> {
                 self.push(" is ");
                 self.ty(ty, TP_ANY);
             }
-            ExprKind::As { lhs, ty } => {
+            ExprKind::As { form, lhs, ty } => {
                 self.expr(lhs, P_POSTFIX);
-                self.push(" as ");
+                self.push(match form {
+                    CastForm::Plain => " as ",
+                    CastForm::Soften => " as? ",
+                    CastForm::Assert => " as! ",
+                });
                 self.ty(ty, TP_ANY);
             }
             ExprKind::Assert { kind, args } => {

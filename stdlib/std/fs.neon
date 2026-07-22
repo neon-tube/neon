@@ -49,7 +49,7 @@ mu type IoList = str | Bytes | List[IoList]
 // `opaque` is what keeps the guard private -- without it a caller could reach `f.r` and
 // release the descriptor behind this module's back, which is the whole reason the guard
 // is not just a plain field holding an `i64`.
-opaque record File { r: resource::Resource[i64, IoError] }
+sealed record File { r: resource::Resource[i64, IoError] }
 
 internal mod raw {
     @native("neon_io_open") fn open(path: str, mode: i64) -> i64

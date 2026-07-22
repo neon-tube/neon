@@ -192,38 +192,39 @@ wrapped and unwrapped.
 
 ## Residue — what the gate does not close
 
-1. **`any`, both directions** (opaque_no_any_laundering.neon, off the ratchet).
+1. ~~**`any`, both directions.**~~ **The forge closed 2026-07-22; the read stays a
+   pinned incoherence.** `as`-from-`any` now compares the box tag against the target's
+   and traps on mismatch (`neon_box_expect` in `runtime/src/any.c`, emitted by
+   `cast_expr` in `backend/c.rs`; model
+   `box-expect-traps-on-a-mismatched-tag`). The forge —
+   `let a: any = {code: 99}; a as vault::Secret` — traps: a structural box never
+   carries `Secret`'s nominal tag, because tags are stamped only at genuine
+   construction/erasure. A general soundness fix, not an opacity patch: unguarded
+   `as`-from-`any` was unchecked for every type
+   (`types/any_cast_checks_the_tag.neon`). `opaque_no_any_laundering.neon` is back on
+   the ratchet: read answers 0, forge traps.
 
-   *The read* — `let a: any = s; a is {code: i64}` — is accepted by the checker but
-   does **not** leak: a boxed value carries a *nominal* runtime tag, so the structural
-   `is` compares `Secret`'s tag against the shape's, they differ, and the branch is
-   dead (verified 2026-07-20, dead even inside `vault`). An incoherence — a
-   statically-legal, could-be-true test that is runtime-always-false — not a
-   disclosure.
+   *The read* — `a is {code: i64}` on an erased opaque — remains statically accepted
+   and runtime-always-false: an incoherence, not a disclosure, and deliberately left
+   (a naming test is legal, a structural test on `any` is module-blind by
+   construction and answers honestly through the tag).
 
-   *The forge* — `let a: any = {code: 99}; a as vault::Secret` — **works**, and is a
-   real hole: the runtime cast reads bytes without checking the tag.
-
-   Neither closes statically, and the reason is the same for both: `any` can genuinely
-   hold an opaque, because widening one into `any` is a legal flow. So a cast out of
-   `any` is indistinguishable *at the type level* from the pinned erased-recovery idiom
-   `(li: any) as List[i64]`. This was established empirically — a forgery rule strict
-   enough to reject the `any` forge also rejected five corpus files pinning that idiom
-   (2026-07-20), which is what set the rule's current boundary.
-
-   The fix is at run time, where the two *are* distinguishable, and it is one change
-   serving both directions: `as` from `any` to a concrete target should compare the box
-   tag against the target's and trap on mismatch, and a structural `is` in module M
-   should refuse values tagged as an opaque foreign to M. No new runtime state — the tag
-   already exists. Note the first half is a **general** soundness fix: unguarded
-   `as`-from-`any` is unchecked for every type, not only opaque ones. Worth doing with
-   the bare-name identity fix (residue 4 / TODO §1), since same-name records share a
-   tag.
+   Why it could not close statically, kept for the record: `any` genuinely holds
+   opaques, so a cast out is indistinguishable *at the type level* from the pinned
+   erased-recovery idiom `(li: any) as! List[i64]`; a rule strict enough to reject the
+   forge also rejected five corpus files (2026-07-20). The surface design —
+   `docs/design/checked-casts.md`, **implemented 2026-07-22** — finishes the story: the
+   `as`/`as?`/`as!` triad makes fallibility visible, and the `opaque`/`sealed` split
+   restores *compile-time* rejection for assertive casts to foreign `sealed` types
+   (`records/sealed_no_assertive_recovery.neon`), with `as?`/`is` as the legal
+   recovery spelling (`records/sealed_recovery_by_test.neon`).
 2. **Equality and ordering.** `s == s2` and `s < s2` on foreign opaque values are
    allowed. `==` reveals only identity of contents; `<` is an ordering oracle — with
    the ability to request seals of chosen values, relative order supports binary
-   search of the contents. If that matters, bar the `Ord` marker (not `Eq`) for
-   foreign-opaque-containing types; one more `ordered.rs` case.
+   search of the contents. **Closed 2026-07-22** (`docs/design/checked-casts.md`,
+   decision 2): `<` on a foreign `sealed` type is a compile error
+   (`records/sealed_bars_ord.neon`), `Eq` stays, plain `opaque` (List, Map)
+   unaffected.
 3. **Schema echoes in diagnostics.** Error messages print types; a probe file can
    learn a foreign record's field names and types from what the compiler says while
    rejecting it. Unwinnable against a compile-error oracle, and not worth chasing.
