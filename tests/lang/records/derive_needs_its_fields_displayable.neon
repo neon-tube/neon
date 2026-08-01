@@ -1,0 +1,21 @@
+//@ compile-fail
+//@ error-contains: no impl of `Display` for `Q`
+
+// A derived impl is checked like the impl it is. `R` derives `Display`, but its field's
+// type has none, so the generated body cannot render it -- and the error names `Q`,
+// anchored on the annotation that asked for the walk, rather than pointing at a call site
+// or going quiet until someone calls it.
+//
+// Checked even though nothing calls it: a derive that cannot work is wrong where it is
+// written, not where it is first used.
+
+use std::io;
+
+record Q { z: i64 }
+
+@derive("Display")
+record R { q: Q }
+
+fn main() {
+    io::println("nothing here calls to_string");
+}

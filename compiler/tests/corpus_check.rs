@@ -166,6 +166,19 @@ fn check(path: &Path, src: &str) -> Result<(), Failure> {
         return Err(Failure::of(path, src, it));
     };
 
+    // Expansion, as every real driver runs it, and for the same reason `backend_run`
+    // does it: without it this oracle checks a different program than the compiler
+    // compiles -- one with no derived impls and no `@cfg` omissions.
+    let config = neon_compiler::expand::Config::with([
+        std::env::consts::OS.to_string(),
+        std::env::consts::ARCH.to_string(),
+    ]);
+    let (module, _meta, eerrs) = neon_compiler::expand::expand(module, &config);
+    if !eerrs.is_empty() {
+        let it = eerrs.iter().map(|e| (e.span.clone(), e.message.clone()));
+        return Err(Failure::of(path, src, it));
+    }
+
     // The stdlib is declared alongside every corpus program, so `use std::io` and
     // the prelude resolve. Every corpus file is a whole program with an `fn main`.
     let std_modules = stdlib_modules();

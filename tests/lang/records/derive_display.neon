@@ -1,0 +1,40 @@
+// `@derive("Display")` writes the impl an author could have written by hand, and nothing
+// more: an ordinary `impl Display for P` appended to the module, type-checked and lowered
+// like any other code. A record has no built-in `to_string` -- asking for one without an
+// impl is an error naming the type -- so this is the difference between writing the walk
+// per record and asking for it.
+//
+// The body is an interpolated string, so every field goes through the same per-hole
+// `Display` dispatch a hand-written impl would use. That is why the nested and generic
+// cases below need no special support: a field is rendered by whatever impl covers it.
+
+use std::io;
+
+@derive("Display")
+record P { x: i64, y: str }
+
+// A field whose type is itself derived. The hole dispatches to P's generated impl.
+@derive("Display")
+record Nested { p: P, flag: bool }
+
+// No fields renders like the literal that builds one.
+@derive("Display")
+record Empty {}
+
+// A generic record derives a BOUNDED impl -- `where T: Display` per parameter -- which is
+// not decoration: inside the impl `T` is rigid, so only a bound can answer `to_string` for
+// a field of type `T`. One impl, a body per instantiation.
+@derive("Display")
+record Boxed[T] { item: T, count: i64 }
+
+fn main() {
+    io::println(to_string(P { x: 1, y: "hi" }));
+    io::println(to_string(Nested { p: P { x: 2, y: "in" }, flag: true }));
+    io::println(to_string(Empty {}));
+    io::println(to_string(Boxed { item: 7, count: 1 }));
+    // Two instantiations of the one derived impl, the second nesting a derived record.
+    io::println(to_string(Boxed { item: P { x: 3, y: "deep" }, count: 2 }));
+    // A derived impl is reached by an interpolation hole like any other Display.
+    let q = P { x: 9, y: "interp" };
+    io::println("in a hole: #{q}");
+}

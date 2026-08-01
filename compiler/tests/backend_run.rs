@@ -96,7 +96,20 @@ fn emit_c(src: &str) -> Result<String, String> {
     if !perrs.is_empty() {
         return Err("parse error".into());
     }
-    let mut module = module.ok_or("no module")?;
+    let module = module.ok_or("no module")?;
+    // Expansion, as every real driver runs it: `@cfg` omits, `@derive` generates, an
+    // unknown `@name` is an error. Skipping it made this harness compile a DIFFERENT
+    // program than `neon run` does for the same file -- a derived impl simply was not
+    // there -- which is the one thing a corpus oracle must never do.
+    let config = neon_compiler::expand::Config::with([
+        std::env::consts::OS.to_string(),
+        std::env::consts::ARCH.to_string(),
+    ]);
+    let (module, _meta, eerrs) = neon_compiler::expand::expand(module, &config);
+    if !eerrs.is_empty() {
+        return Err(format!("expand errors: {eerrs:?}"));
+    }
+    let mut module = module;
     let (std_owned, next_id) = stdlib_modules();
     neon_compiler::ast::number_exprs_from(&mut module, next_id);
 
