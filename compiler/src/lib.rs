@@ -15,6 +15,7 @@
 
 pub mod ast;
 pub mod backend;
+pub mod derive;
 pub mod diagnostic;
 pub mod expand;
 pub mod format;

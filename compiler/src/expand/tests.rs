@@ -133,3 +133,86 @@ fn cfg_reaches_methods_and_nested_mods() {
     }).collect();
     assert_eq!(inner_names, vec!["keep"]);
 }
+
+// ---- @derive ----
+
+/// The generated impls, as `(protocol, target head, generics, where params)`.
+fn derived(m: &Module) -> Vec<(String, String, Vec<String>, Vec<String>)> {
+    m.decls
+        .iter()
+        .filter_map(|d| match &d.kind {
+            DeclKind::Impl(i) => {
+                let head = match &i.target.kind {
+                    crate::ast::TypeSpecKind::Named { path, .. } => path.join("::"),
+                    _ => String::new(),
+                };
+                Some((
+                    i.protocol.join("::"),
+                    head,
+                    i.generics.clone(),
+                    i.wheres.iter().map(|w| w.param.clone()).collect(),
+                ))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn derive_generates_an_impl_for_the_record() {
+    let (m, _, errs) = run(r#"@derive("Display") record P { x: i64 }"#, Config::default());
+    assert!(errs.is_empty(), "{errs:?}");
+    assert_eq!(derived(&m), vec![("Display".into(), "P".into(), vec![], vec![])]);
+    // The record itself survives: a derive adds, it does not replace.
+    assert_eq!(survivors(&m), vec!["P".to_string()]);
+}
+
+/// A generic record derives a BOUNDED impl. Without the bound the generated body could not
+/// call `to_string` on a field of type `T` at all, because `T` is rigid inside the impl.
+#[test]
+fn deriving_a_generic_record_bounds_each_parameter() {
+    let (m, _, errs) =
+        run(r#"@derive("Display") record Box[T, U] { a: T, b: U }"#, Config::default());
+    assert!(errs.is_empty(), "{errs:?}");
+    let g = vec!["T".to_string(), "U".to_string()];
+    assert_eq!(derived(&m), vec![("Display".into(), "Box".into(), g.clone(), g)]);
+}
+
+#[test]
+fn one_derive_may_name_several_protocols() {
+    // The arg is an opaque string, so a list is the processor's own parsing rather than
+    // new syntax -- the same division `@cfg` makes.
+    assert_eq!(crate::derive::protocols(" Display , Display "), vec!["Display", "Display"]);
+}
+
+/// A `@cfg`-omitted record derives nothing, because it is gone before the derive pass runs.
+#[test]
+fn a_dropped_record_derives_nothing() {
+    let (m, _, errs) = run(
+        r#"@cfg("windows") @derive("Display") record P { x: i64 }"#,
+        Config::default(),
+    );
+    assert!(errs.is_empty(), "{errs:?}");
+    assert!(derived(&m).is_empty(), "{:?}", derived(&m));
+}
+
+#[test]
+fn derive_is_only_for_a_record() {
+    let (_, _, errs) = run(r#"@derive("Display") fn f() {}"#, Config::default());
+    assert!(errs.iter().any(|e| e.message.contains("not a fn")), "{errs:?}");
+}
+
+#[test]
+fn derive_needs_an_argument() {
+    let (_, _, errs) = run("@derive record P { x: i64 }", Config::default());
+    assert!(errs.iter().any(|e| e.message.contains("needs the protocol")), "{errs:?}");
+}
+
+/// An underivable protocol is an error, not a silently missing impl -- which would surface
+/// as "no impl" against a call site that looks perfectly correct.
+#[test]
+fn an_underivable_protocol_is_an_error() {
+    let (m, _, errs) = run(r#"@derive("Serialize") record P { x: i64 }"#, Config::default());
+    assert!(errs.iter().any(|e| e.message.contains("cannot derive `Serialize`")), "{errs:?}");
+    assert!(derived(&m).is_empty());
+}

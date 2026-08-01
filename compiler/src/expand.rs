@@ -111,9 +111,11 @@ fn lookup(name: &str) -> Option<&'static dyn Processor> {
     static RUNTIME: Runtime = Runtime;
     static PURE: Pure = Pure;
     static INLINE: Inline = Inline;
+    static DERIVE: Derive = Derive;
     match name {
         "native" => Some(&NATIVE),
         "cfg" => Some(&CFG),
+        "derive" => Some(&DERIVE),
         "doc" => Some(&DOC),
         "runtime" => Some(&RUNTIME),
         "pure" => Some(&PURE),
@@ -131,7 +133,27 @@ pub fn expand(module: Module, config: &Config) -> (Module, Meta, Vec<Error>) {
     let mut errors = Vec::new();
     let mut cx = Context { config, meta: &mut meta, errors: &mut errors };
     let decls = expand_decls(module.decls, &mut cx);
-    (Module { decls }, meta, errors)
+    let mut module = Module { decls };
+
+    // Derives are generated HERE, at the end of this function, and not by each driver in
+    // turn. There are four pipelines that parse a module -- `frontend::check`,
+    // `cmd/check.rs`, and the corpus harnesses -- and the only thing they all agree on is
+    // calling `expand`. Wiring the pass into two of them produced a compiler where `neon
+    // check` and `neon run` disagreed about the same file, and a corpus where every derived
+    // impl was missing. A pass that has to be remembered in four places is a pass that will
+    // be forgotten in one.
+    //
+    // After the processor walk, so a `@cfg`-omitted record derives nothing: it is gone from
+    // `decls` by now and there is nothing left to walk.
+    //
+    // This does NOT hand the AST to a `Processor`. The restriction that keeps expansion
+    // from becoming a macro system is on what a *processor* may do -- decide `Keep` or
+    // `Omit`, never rewrite -- and that is intact. `@derive`'s processor above only
+    // validates; the generation is an ordinary function over the module, which this happens
+    // to be the right place to call.
+    crate::derive::derive(&mut module);
+
+    (module, meta, errors)
 }
 
 /// Expand a declaration list, dropping the ones no processor kept. Declarations are taken
@@ -360,6 +382,59 @@ impl Processor for Doc {
         match &ann.arg {
             Some(text) => cx.meta.docs.push((target_name(target), text.clone())),
             None => cx.error(ann.span.clone(), "`@doc` needs its text, e.g. `@doc(\"what this is\")`"),
+        }
+        Decision::Keep
+    }
+}
+
+/// `@derive("Display")` — the record gets an impl the author could have written.
+///
+/// This processor only VALIDATES. The impl is written by `crate::derive`, a pass that runs
+/// after this one, because generating a declaration means holding the AST and `Context`
+/// deliberately does not — that restriction is what keeps expansion from becoming a macro
+/// system, and `@derive` is not the reason to give it up. The cost is that a legal
+/// `@derive` is checked here and honoured there; the two must agree on `can_derive`, which
+/// is why the list lives in one place and this asks it rather than repeating it.
+///
+/// Everything wrong with a `@derive` is an error here rather than a silent no-op, for the
+/// same reason a typo'd `@cfg` is: the failure would otherwise be a missing impl reported
+/// somewhere else entirely, against a call site that looks correct.
+struct Derive;
+impl Processor for Derive {
+    fn run(&self, ann: &Annotation, target: &Target, cx: &mut Context) -> Decision {
+        if !matches!(target, Target::Record(_)) {
+            let what = target.what();
+            cx.error(
+                ann.span.clone(),
+                format!("`@derive` is for a record, not a {what}: there are no fields to walk"),
+            );
+            return Decision::Keep;
+        }
+        match &ann.arg {
+            None => cx.error(
+                ann.span.clone(),
+                "`@derive` needs the protocol to derive, e.g. `@derive(\"Display\")`",
+            ),
+            Some(arg) => {
+                let names = crate::derive::protocols(arg);
+                if names.is_empty() {
+                    cx.error(
+                        ann.span.clone(),
+                        "`@derive` names no protocol; write `@derive(\"Display\")`",
+                    );
+                }
+                for name in names {
+                    if !crate::derive::can_derive(&name) {
+                        cx.error(
+                            ann.span.clone(),
+                            format!(
+                                "cannot derive `{name}`: the compiler can write `Display`. \
+                                 Anything else is an ordinary `impl {name} for ..`"
+                            ),
+                        );
+                    }
+                }
+            }
         }
         Decision::Keep
     }
