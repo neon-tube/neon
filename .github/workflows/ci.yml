@@ -189,19 +189,16 @@ jobs:
       # Compile-only, and deliberately so: see the job comment. The MSVC branch of
       # `runtime/CMakeLists.txt` is what is under test here, `/W4 /WX` included.
       #
-      # NON-GATING UNTIL IT HAS BEEN GREEN ONCE, and that is the point of it rather than a
-      # hedge. Every line it exercises — `__declspec(noreturn)`, `__forceinline`, the
-      # `/wd4204 /wd4221` suppressions — was written by someone with no `cl.exe` to run it
-      # against, so its first run is an EXPERIMENT and its result is the first real evidence
-      # anyone has. Blocking the repo on a prediction would be asserting the answer; letting
-      # it report gets the answer. Drop `continue-on-error` the day it passes, and if it
-      # cannot be made to pass, delete the MSVC branch rather than leaving it to rot behind
-      # a permanently amber step.
+      # GATING, as of the run that first proved it. This step landed non-gating because
+      # every line it exercises — `__declspec(noreturn)`, `__forceinline`, the `/wd4204
+      # /wd4221` suppressions — had been written by someone with no `cl.exe` to run it
+      # against, so its first run was an experiment rather than a check. It found exactly
+      # one thing: `neon_i64_neg`'s `-(uint64_t)a` tripping C4146, which `/WX` made fatal.
+      # With that fixed it compiles every source and links the archive clean, so it now
+      # blocks like any other step. Nothing here is a prediction any more.
       - uses: ilammy/msvc-dev-cmd@v1
-        continue-on-error: true
 
-      - name: Compile the runtime archives (MSVC, unproven)
-        continue-on-error: true
+      - name: Compile the runtime archives (MSVC)
         shell: cmd
         run: |
           cmake -S runtime -B runtime/build-msvc -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=None -DCMAKE_C_COMPILER=cl
