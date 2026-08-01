@@ -5,6 +5,13 @@ name: CI
 # which compiles each Neon program, links it against the (sanitized) runtime archive, runs
 # it, and checks its output. So one `cargo nextest run` covers both.
 #
+#
+# `runtime-windows` is the third job, and it is the only one that builds the runtime for a
+# platform this repo's primary CI does not run on. It is not a duplicate of the Linux jobs:
+# what it checks is that the runtime's platform seam (`runtime/src/platform.h`) still
+# compiles and still behaves, under mingw-w64 and under MSVC. See the job's own comment for
+# what each toolchain can and cannot prove there.
+#
 # fuzz/ and verify/ (the CBMC models live under runtime/models, driven from verify/) are
 # deliberately not here: both are detached workspaces needing their own toolchains
 # (cargo-fuzz wants nightly + sanitizers, Kani ships its own backend), and the root
@@ -81,3 +88,114 @@ jobs:
       # not just failures, so a green CI log still shows what ran.
       - name: Test
         run: ctest --test-dir runtime/build-tests -V
+
+      # The portability smoke test, here as well as in the Windows job. Its assertions hold
+      # on every platform, and running it where the archive is built anyway means it cannot
+      # rot between Windows runs — a file whose only driver is the job you are least likely
+      # to read is a file nobody notices has stopped compiling.
+      - name: Portability smoke test
+        run: |
+          cmake -S runtime -B runtime/build-archive -DCMAKE_BUILD_TYPE=None -DCMAKE_C_COMPILER=gcc
+          cmake --build runtime/build-archive --target neon_rt
+          gcc -std=c11 -Wall -Wextra -Werror -O2 runtime/tests/portability_smoke.c \
+            runtime/build-archive/libneon_rt.a -Iruntime/include -o smoke -lm
+          ./smoke > out.txt
+          test "$(wc -c < out.txt)" = "3" || { echo "stdout was newline-translated"; od -c out.txt; exit 1; }
+
+  # The C runtime on Windows. Two toolchains, because they answer different questions and
+  # only one of them can answer both.
+  #
+  #   * mingw-w64 gcc builds the archives *and* links a program that runs, so this job
+  #     proves behaviour, not just that the source parses. The smoke test below is the
+  #     shape of every Windows-specific bug the port had to fix: a byte count that changes
+  #     because the CRT translated a newline, and a path that names a different file
+  #     because it was decoded in the ANSI code page.
+  #   * MSVC compiles the same sources under `/W4 /WX`. It cannot go further than an
+  #     archive: `cli/src/emit.rs` builds one gcc-shaped argv (`-o`, `-I`, a `.a` passed
+  #     positionally) and `cc_flavor` has no third answer, so `neon build --cc cl.exe`
+  #     is not a thing that can work yet. Compiling the runtime is the part that *is*
+  #     checkable, and it is the part that rots silently.
+  #
+  # The tinyunit suite DOES run here, which it could not while `EXPECT_EXIT` was a `fork`
+  # and Windows had none. tinyunit now re-executes its own image per test and replays the
+  # body to the death site under test; the neon side needed no change for it, because the
+  # temp files, the stream capture and the constructors were already ported. Note what the
+  # replay costs: the child rebuilds the state a forked child would have inherited, so a
+  # death test whose body is not deterministic up to the site would diverge here and not on
+  # POSIX. Every one of ours is a one-liner.
+  #
+  # MSVC does not build this suite and is not asked to: tinyunit registers tests through
+  # `__attribute__((constructor))` and `#error`s without it, so cl.exe cannot compile a test
+  # file at all. Its answer is clang-cl, which has the attribute. That is why the MSVC step
+  # below stops at the archive — not the fork question, which is settled.
+  runtime-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake
+
+      # `-DCMAKE_BUILD_TYPE=None` and nothing else, matching what `runtime/build.rs` does:
+      # the variants carry hand-picked flags and cmake must not inject its own. The
+      # sanitized archive is skipped by the CMakeLists itself here — mingw-w64 ships no
+      # libasan, and the probe is what notices.
+      - name: Build the runtime archives (mingw-w64 gcc)
+        shell: msys2 {0}
+        run: |
+          cmake -S runtime -B runtime/build-mingw -G "Unix Makefiles" \
+            -DCMAKE_BUILD_TYPE=None -DCMAKE_C_COMPILER=gcc
+          cmake --build runtime/build-mingw
+
+      # Behaviour, not just compilation. `runtime/tests/portability_smoke.c` links the
+      # archive like a real program and checks the properties a Windows CRT quietly breaks;
+      # see its header for what each one is and how sharp it is. It is not part of the
+      # tinyunit suite and is built here directly.
+      - name: Smoke-test the archive
+        shell: msys2 {0}
+        run: |
+          gcc -std=c11 -Wall -Wextra -Werror -O2 runtime/tests/portability_smoke.c \
+            runtime/build-mingw/libneon_rt.a -Iruntime/include -o smoke.exe -lm
+          # Redirected, so stdout is a pipe rather than a console: exactly where a `\r`
+          # the runtime did not write would show up.
+          ./smoke.exe > out.txt
+          # Three bytes -- "ok\n" -- and not four.
+          test "$(wc -c < out.txt)" = "3" || { echo "stdout was newline-translated"; od -c out.txt; exit 1; }
+          cat out.txt
+
+      # The unit tests, on Windows, for real — 89 of them including the death tests, which
+      # are the ones that could not run here before. Uninstrumented: mingw-w64 ships no
+      # sanitizer runtime, so the CMakeLists' probe drops ASan/UBSan and with them the
+      # per-test leak check. The Linux job is where those still hold; this job proves the
+      # suite *runs on Windows*, which is a different claim and the one that was missing.
+      - name: Unit tests (mingw-w64 gcc)
+        shell: msys2 {0}
+        run: |
+          cmake -S runtime -B runtime/build-wintests -G "Unix Makefiles" \
+            -DCMAKE_BUILD_TYPE=None -DNEON_RT_TESTS=ON
+          cmake --build runtime/build-wintests
+          ctest --test-dir runtime/build-wintests --output-on-failure -V
+
+      # Compile-only, and deliberately so: see the job comment. The MSVC branch of
+      # `runtime/CMakeLists.txt` is what is under test here, `/W4 /WX` included.
+      #
+      # NON-GATING UNTIL IT HAS BEEN GREEN ONCE, and that is the point of it rather than a
+      # hedge. Every line it exercises — `__declspec(noreturn)`, `__forceinline`, the
+      # `/wd4204 /wd4221` suppressions — was written by someone with no `cl.exe` to run it
+      # against, so its first run is an EXPERIMENT and its result is the first real evidence
+      # anyone has. Blocking the repo on a prediction would be asserting the answer; letting
+      # it report gets the answer. Drop `continue-on-error` the day it passes, and if it
+      # cannot be made to pass, delete the MSVC branch rather than leaving it to rot behind
+      # a permanently amber step.
+      - uses: ilammy/msvc-dev-cmd@v1
+        continue-on-error: true
+
+      - name: Compile the runtime archives (MSVC, unproven)
+        continue-on-error: true
+        shell: cmd
+        run: |
+          cmake -S runtime -B runtime/build-msvc -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=None -DCMAKE_C_COMPILER=cl
+          cmake --build runtime/build-msvc
