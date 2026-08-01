@@ -1,8 +1,13 @@
 // `runtime/src/trap.c`: the three ways the runtime kills a program from inside a bug --
 // `neon_trap` (a runtime fault with a message), `neon_unreachable` (a branch codegen proved
 // dead), and `neon_panic` (an uncaught Neon error). All exit with the trap status and never
-// return. `EXPECT_TRAP` runs the statement in a forked child and asserts that child exits
+// return. `EXPECT_TRAP` runs the statement in a child process and asserts that child exits
 // with exactly that status, so these are observable without taking the harness down.
+//
+// The trap status is the whole contract these rest on: `neon_trap` calls `_exit(101)`, and
+// nothing about that number is a signal or a POSIX wait status, which is what lets the same
+// assertion mean the same thing on a platform whose child processes are started rather than
+// forked. See `runtime/src/trap.c`.
 
 #include "tinyunit.h"
 

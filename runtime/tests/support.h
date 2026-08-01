@@ -11,9 +11,68 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 
 #include "libneon_rt.h"
 #include "internal.h"
+
+// ---- the platform seam the tests need ----
+//
+// Smaller than the runtime's (`src/platform.h`) and separate from it on purpose: nothing
+// here is anything the runtime does, and a test-only need has no business widening the
+// seam a shipped archive is built through.
+//
+// Only two things are behind it. `getpid` is spelled `_getpid` by a Windows CRT, and the
+// descriptor calls the stream capture in `io_test.c` needs are spelled with a leading
+// underscore there too. Both are the same call under a different name -- if something ever
+// needs a genuinely *different* call, it belongs in a function here, not a `#define`.
+#ifdef _WIN32
+#include <io.h>
+#include <process.h>
+#define nt_getpid _getpid
+#define nt_dup _dup
+#define nt_dup2 _dup2
+#define nt_fileno _fileno
+#define nt_close _close
+#else
+#include <unistd.h>
+#define nt_getpid getpid
+#define nt_dup dup
+#define nt_dup2 dup2
+#define nt_fileno fileno
+#define nt_close close
+#endif
+
+// Enough for any path these tests build. They are made, not discovered -- see
+// `nt_temp_path` -- so this is a bound on a name this file chose, not on what the platform
+// might hand back.
+#define NT_PATH_MAX 64
+
+// A fresh, existing, empty file for a test to work against, named into `path` (capacity
+// `NT_PATH_MAX`). The caller owns removing it.
+//
+// In the working directory rather than a system temp directory, and built rather than
+// requested. `mkstemp` is POSIX-only, and its Windows counterpart (`GetTempFileNameA`)
+// returns a path in the *ANSI* code page while `neon_io_open` decodes UTF-8 -- so on a
+// machine whose temp directory is not ASCII the two would disagree about which file the
+// test meant. A name this file composes out of ASCII cannot have that problem. ctest runs
+// in the build directory, which is writable and is where a leftover belongs anyway.
+//
+// The pid keeps two concurrent runs of the suite apart; the counter keeps two files within
+// one test apart. `tag` is there to make a leftover say which test dropped it.
+static inline void nt_temp_path(char* path, const char* tag) {
+    static unsigned nt_temp_seq = 0;
+    snprintf(path, NT_PATH_MAX, "neon_rt_%s_%ld_%u.tmp", tag, (long)nt_getpid(),
+             nt_temp_seq++);
+    // Created, not just named: `mkstemp` left an existing empty file behind and the tests
+    // that open for reading depend on that. "wb" and not "w" -- a Windows text-mode stream
+    // would rewrite every newline that later reaches this file.
+    FILE* f = fopen(path, "wb");
+    if (f != NULL) {
+        fclose(f);
+    }
+}
 
 // ---- witnesses ----
 //
@@ -58,13 +117,13 @@ static const neon_key_witness nt_i64_key = {&nt_i64_w, nt_i64_hash, nt_i64_eq};
 // A heap string with a non-NULL owner, so refcount behaviour is exercised (a literal, with
 // owner == NULL, makes retain/release no-ops and hides it).
 static inline neon_str nt_owned(const char* s) {
-    return neon_str_new(s, __builtin_strlen(s));
+    return neon_str_new(s, strlen(s));
 }
 
 // Compare a `neon_str`'s bytes against a C string.
 static inline bool nt_str_is(neon_str s, const char* expected) {
     size_t n = neon_str_len(&s);
-    return n == __builtin_strlen(expected) && __builtin_memcmp(neon_str_data(&s), expected, n) == 0;
+    return n == strlen(expected) && memcmp(neon_str_data(&s), expected, n) == 0;
 }
 
 #endif

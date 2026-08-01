@@ -2,26 +2,24 @@
 // every fallible call returns `-errno`, and `read_all` hands its status back through an
 // out-parameter -- so these tests assert on returned codes, never on a hidden flag.
 //
-// Each test works against its own `mkstemp` file under `/tmp` and removes it at the end, so
-// the suite leaves nothing behind and two runs never contend. tinyunit forks per test, so
+// Each test works against its own temp file and removes it at the end, so the suite leaves
+// nothing behind and two runs never contend. tinyunit runs each test in its own process, so
 // even a trap inside one leaves the others' files untouched.
 
 #include "tinyunit.h"
 
 #include <errno.h>
 #include <stdlib.h>
-#include <unistd.h>
 
 #include "support.h"
 
 TEST_SUITE("file");
 
-// A unique, existing, empty temp file. `path` must hold at least 32 bytes. The caller owns
-// cleanup -- every test here ends by removing it (or has already, when it tests removal).
+// A unique, existing, empty temp file. `path` must hold `NT_PATH_MAX` bytes. The caller
+// owns cleanup -- every test here ends by removing it (or has already, when it tests
+// removal). See `nt_temp_path` for why the name is composed rather than requested.
 static void tmp_path(char* path) {
-    __builtin_strcpy(path, "/tmp/neon_rt_file_XXXXXX");
-    int fd = mkstemp(path);
-    if (fd >= 0) close(fd);
+    nt_temp_path(path, "file");
 }
 
 // `neon_io_open` consumes its path, so a test that opens the same file twice needs a fresh
@@ -29,7 +27,7 @@ static void tmp_path(char* path) {
 static neon_str path_str(const char* p) { return nt_owned(p); }
 
 TEST(write_then_read_round_trips) {
-    char path[32];
+    char path[NT_PATH_MAX];
     tmp_path(path);
 
     // Write two pieces as one `writev`; the runtime concatenates them into the file.
@@ -57,7 +55,7 @@ TEST(write_then_read_round_trips) {
 }
 
 TEST(append_mode_adds_to_the_end) {
-    char path[32];
+    char path[NT_PATH_MAX];
     tmp_path(path);
 
     int64_t fd = neon_io_open(path_str(path), 1); // write, truncate
@@ -86,7 +84,7 @@ TEST(append_mode_adds_to_the_end) {
 }
 
 TEST(writev_skips_empty_pieces) {
-    char path[32];
+    char path[NT_PATH_MAX];
     tmp_path(path);
 
     int64_t fd = neon_io_open(path_str(path), 1);
@@ -111,8 +109,8 @@ TEST(writev_skips_empty_pieces) {
 }
 
 TEST(read_all_of_an_empty_file_is_the_empty_string) {
-    char path[32];
-    tmp_path(path); // mkstemp leaves it empty
+    char path[NT_PATH_MAX];
+    tmp_path(path); // creates it empty
 
     int64_t fd = neon_io_open(path_str(path), 0);
     int64_t err = -1;
@@ -126,7 +124,7 @@ TEST(read_all_of_an_empty_file_is_the_empty_string) {
 }
 
 TEST(opening_a_missing_file_for_read_fails_with_enoent) {
-    char path[32];
+    char path[NT_PATH_MAX];
     tmp_path(path);
     EXPECT_EQ(neon_io_remove(path_str(path)), 0); // now the path names nothing
 
@@ -140,7 +138,7 @@ TEST(closing_a_bad_descriptor_returns_errno) {
 }
 
 TEST(exists_then_remove) {
-    char path[32];
+    char path[NT_PATH_MAX];
     tmp_path(path);
 
     EXPECT(neon_io_exists(path_str(path)));
