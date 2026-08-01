@@ -8,7 +8,8 @@
 //! there is nowhere for erasure to enter.
 
 use super::env::{Env, ImplId, ProtocolId};
-use super::types::TyId;
+use super::types::{NameId, TyId};
+use std::collections::{HashMap, HashSet};
 
 /// The decision, recorded so nothing downstream re-resolves it.
 #[derive(Debug, Clone, PartialEq)]
@@ -204,6 +205,20 @@ pub(super) fn nominal_head(env: &Env, ty: TyId) -> Option<String> {
     (!atoms.neg && atoms.names.len() == 1).then(|| t.name_str(atoms.names[0]).to_string())
 }
 
+/// A candidate impl, with the substitution its head needed in order to name the
+/// receiver at all. The substitution is empty for a non-generic impl, which is what
+/// every impl was until this file learned to match a generic head.
+struct Hit {
+    id: ImplId,
+    /// The impl's target *under* `subst`: `impl[T] P for Pair[T]` matched against
+    /// `Pair[i64]` has head `Pair[i64]`, not `Pair[T]`. Everything downstream —
+    /// coverage, specificity, the switch arms — reasons about this and never about
+    /// the written target, because the written target is not a type the receiver can
+    /// be compared with.
+    head: TyId,
+    subst: HashMap<NameId, TyId>,
+}
+
 fn applicable(
     env: &mut Env,
     protocol: ProtocolId,
@@ -212,14 +227,15 @@ fn applicable(
     receiver_pos: Option<usize>,
 ) -> Result<Selection, DispatchError> {
     // An emptiness query per candidate, not a name match.
-    let mut hits: Vec<(ImplId, TyId)> = Vec::new();
-    let ids: Vec<(ImplId, Option<TyId>)> =
-        env.impls_of(protocol).map(|(id, i)| (id, i.target)).collect();
-    for (id, target) in ids {
+    let mut hits: Vec<Hit> = Vec::new();
+    let ids: Vec<(ImplId, Option<TyId>, Vec<String>)> =
+        env.impls_of(protocol).map(|(id, i)| (id, i.target, i.generics.clone())).collect();
+    for (id, target, generics) in ids {
         let Some(target) = target else { continue };
-        let meet = env.solver.t.intersect(receiver, target);
+        let Some((head, subst)) = match_head(env, target, &generics, receiver) else { continue };
+        let meet = env.solver.t.intersect(receiver, head);
         if !env.solver.is_empty(meet) {
-            hits.push((id, target));
+            hits.push(Hit { id, head, subst });
         }
     }
 
@@ -230,7 +246,7 @@ fn applicable(
 
     // Coverage. The residual is a type, so the diagnostic names exactly the values
     // with no impl rather than just the receiver.
-    let targets: Vec<TyId> = hits.iter().map(|(_, t)| *t).collect();
+    let targets: Vec<TyId> = hits.iter().map(|h| h.head).collect();
     let covered = env.solver.t.union_all(&targets);
     let uncovered = env.solver.t.diff(receiver, covered);
     if !env.solver.is_empty(uncovered) {
@@ -241,13 +257,13 @@ fn applicable(
 
     let (ret, throws) = result_of(env, &hits, method, protocol);
     let resolution = match hits.as_slice() {
-        [(id, target)] if env.solver.is_subtype(receiver, *target) => Resolution::Direct(*id),
+        [h] if env.solver.is_subtype(receiver, h.head) => Resolution::Direct(h.id),
         _ => {
             let mut arms: Vec<(TyId, ImplId)> = hits
                 .iter()
-                .map(|&(id, t)| {
-                    let arm = env.solver.t.intersect(receiver, t);
-                    (arm, id)
+                .map(|h| {
+                    let arm = env.solver.t.intersect(receiver, h.head);
+                    (arm, h.id)
                 })
                 .collect();
             arms.sort_by_key(|(t, _)| t.0);
@@ -257,19 +273,60 @@ fn applicable(
     Ok(Selection { protocol, resolution, ret, throws, receiver_pos })
 }
 
+/// Match an impl's head against the receiver, treating the impl's *own* generics as
+/// holes to solve rather than as the rigid variables they are inside its body.
+///
+/// This is what makes a generic impl fire. `impl[T] Tag for Pair[T]` declares `T`
+/// rigid, so `Pair[T] ∧ Pair[i64]` is empty and the meet test alone rejected the impl
+/// for every receiver in the language: the feature parsed, checked its own body, and
+/// never applied to anything. Matching instead binds `T := i64` and yields the head
+/// `Pair[i64]`, which the caller's emptiness test then judges exactly as it judges a
+/// monomorphic impl's target.
+///
+/// The match only *proposes* a substitution; applicability is still decided by that
+/// emptiness test. Structure can line up by accident — two unrelated nominals both
+/// carrying a `#0` field will bind a variable from each other — and the proposal is
+/// then a head the receiver does not meet, so it is rejected there.
+///
+/// `None` declines the impl. A generic left unbound is the honest case to decline:
+/// the head would still mention a variable, which is neither a type the receiver can
+/// be compared against nor a layout an instance can be lowered at. The receiver is
+/// the only thing consulted, so every binding this produces is one lowering can
+/// re-derive from the receiver's own repr at the call site.
+fn match_head(
+    env: &mut Env,
+    target: TyId,
+    generics: &[String],
+    receiver: TyId,
+) -> Option<(TyId, HashMap<NameId, TyId>)> {
+    if generics.is_empty() {
+        return Some((target, HashMap::new()));
+    }
+    let vars: HashSet<NameId> = generics.iter().map(|g| env.solver.t.name(g)).collect();
+    let mut subst = HashMap::new();
+    super::generic::infer(&mut env.solver.t, target, receiver, &vars, &mut subst);
+    if vars.iter().any(|v| !subst.contains_key(v)) {
+        return None;
+    }
+    let head = env.solver.t.substitute(target, &subst);
+    Some((head, subst))
+}
+
 /// Drop any impl strictly less specific than another that also applies.
 ///
 /// decisions.md allows overlap only when nested, so for any value the applicable
 /// impls form a chain and a unique minimum exists. That is what makes "most
 /// specific" well defined.
-fn most_specific(env: &mut Env, hits: Vec<(ImplId, TyId)>) -> Vec<(ImplId, TyId)> {
+fn most_specific(env: &mut Env, hits: Vec<Hit>) -> Vec<Hit> {
     let mut out = Vec::new();
-    for &(id, t) in &hits {
-        let beaten = hits.iter().any(|&(other, u)| {
-            other != id && env.solver.is_subtype(u, t) && !env.solver.is_subtype(t, u)
+    for h in &hits {
+        let beaten = hits.iter().any(|o| {
+            o.id != h.id
+                && env.solver.is_subtype(o.head, h.head)
+                && !env.solver.is_subtype(h.head, o.head)
         });
         if !beaten {
-            out.push((id, t));
+            out.push(Hit { id: h.id, head: h.head, subst: h.subst.clone() });
         }
     }
     out
@@ -286,11 +343,11 @@ fn most_specific(env: &mut Env, hits: Vec<(ImplId, TyId)>) -> Vec<(ImplId, TyId)
 /// case is currently unreachable, because a protocol method with a body does not
 /// typecheck at all (`check.rs` checks it with the subject unbound, so its `T` parameter
 /// is an unknown type), but the silent `never` was one fix away from being live.
-fn result_of(env: &mut Env, hits: &[(ImplId, TyId)], method: &str, protocol: ProtocolId) -> (TyId, TyId) {
+fn result_of(env: &mut Env, hits: &[Hit], method: &str, protocol: ProtocolId) -> (TyId, TyId) {
     let mut rets = Vec::new();
     let mut throws = Vec::new();
-    for &(id, _) in hits {
-        let found = env.impls()[id.0].methods.iter().find(|m| m.name == method);
+    for h in hits {
+        let found = env.impls()[h.id.0].methods.iter().find(|m| m.name == method);
         let sig = match found {
             Some(m) => Some((m.ret, m.throws)),
             None => env.protocols()[protocol.0]
@@ -299,9 +356,13 @@ fn result_of(env: &mut Env, hits: &[(ImplId, TyId)], method: &str, protocol: Pro
                 .find(|m| m.name == method)
                 .map(|m| (m.ret, m.throws)),
         };
+        // Under the impl's own substitution: `impl[T] Get for Box[T]` declares
+        // `fn get(b: Box[T]) -> T`, whose answer for a `Box[i64]` receiver is `i64`.
+        // Reading the written `T` here would hand lowering a rigid variable as the
+        // call's result type.
         if let Some((ret, thr)) = sig {
-            rets.push(ret);
-            throws.push(thr);
+            rets.push(env.solver.t.substitute(ret, &h.subst));
+            throws.push(env.solver.t.substitute(thr, &h.subst));
         }
     }
     let ret = env.solver.t.union_all(&rets);

@@ -1,0 +1,30 @@
+// A generic impl applies at every instantiation of its head. `impl[T] Size for
+// Pair[T]` is ONE impl serving `Pair[i64]`, `Pair[str]` and `Pair[Pair[i64]]`: the
+// head is MATCHED against the receiver, binding `T`, rather than met with it. The
+// meet of a rigid `T` with any concrete type is empty, so before matching, a generic
+// impl parsed, checked its own body, and then applied to nothing at all.
+
+use std::collections::list;
+use std::io;
+use std::string;
+
+record Pair[T] { a: T, b: T }
+
+protocol Size for S {
+    fn size(s: S) -> i64
+}
+
+// The body touches `T`'s layout — it builds a `List[T]` out of the fields — so a
+// wrongly instantiated body is a wrong element width and not merely a wrong answer.
+impl[T] Size for Pair[T] {
+    fn size(p: Pair[T]) -> i64 { list::len([p.a, p.b]) }
+}
+
+fn main() {
+    io::println(to_string(size(Pair { a: 1, b: 2 })));
+    io::println(to_string(size(Pair { a: "x", b: "y" })));
+    // Nested: `T` binds to `Pair[i64]`, and the inner call binds it again to `i64`.
+    let nested = Pair { a: Pair { a: 1, b: 2 }, b: Pair { a: 3, b: 4 } };
+    io::println(to_string(size(nested)));
+    io::println(to_string(size(nested.a)));
+}

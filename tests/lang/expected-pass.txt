@@ -220,6 +220,7 @@ protocols/declare_and_impl.neon
 protocols/default_body_is_checked.neon
 protocols/dispatch_on_receiver.neon
 protocols/generic_impl.neon
+protocols/generic_impl_head.neon
 protocols/impl_for_primitive.neon
 protocols/impl_missing_method.neon
 protocols/imported_method_reaches_an_outer_scope.neon

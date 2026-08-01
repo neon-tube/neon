@@ -1537,11 +1537,17 @@ impl Env {
             ty: target.unwrap_or(self.error_ty),
             arity: self.protocols[protocol.0].subject_arity,
         };
-        let methods = i
-            .methods
-            .iter()
-            .map(|m| self.fn_sig(module, m, std::slice::from_ref(&subject), span))
-            .collect();
+        // The impl's own generics are in scope in its methods' signatures — the whole
+        // point of `impl[T] Size for Pair[T]` is that `fn size(p: Pair[T])` may name
+        // that `T`. They sit after the subject and before the method's own, which is
+        // the shadowing order `Scope::find` documents.
+        let mut vars = vec![subject];
+        for g in &i.generics {
+            let id = self.solver.t.name(g);
+            let ty = self.solver.t.var(id);
+            vars.push(ScopeVar { name: g.clone(), ty, arity: 0 });
+        }
+        let methods = i.methods.iter().map(|m| self.fn_sig(module, m, &vars, span)).collect();
 
         let wheres =
             i.wheres.iter().filter_map(|w| bound_path(w).map(|p| (w.param.clone(), p))).collect();

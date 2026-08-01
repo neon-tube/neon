@@ -479,7 +479,13 @@ pub fn lower_module_with<'a>(
         let proto = env.protocols()[impl_def.protocol.0].name.clone();
         let head = impl_head(env, impl_def);
         for m in &impl_def.methods {
-            if !m.has_body || !m.generics.is_empty() {
+            // A generic body has no layout until it is instantiated, so it is lowered
+            // per call site off the instance worklist and not here — whether the
+            // generic belongs to the method (`Mappable::map[T, U]`) or to the impl
+            // itself (`impl[T] Size for Pair[T]`). Lowering an impl-generic body here
+            // built a repr out of the impl's rigid `T` and tripped codegen's
+            // type-variable guard.
+            if !m.has_body || !m.generics.is_empty() || !impl_def.generics.is_empty() {
                 continue;
             }
             let name = mangle_impl(&proto, &head, &m.name);
@@ -738,6 +744,16 @@ fn impl_head(env: &Env, impl_def: &crate::typecheck::env::ImplDef) -> String {
         return h.clone();
     }
     match impl_def.target.map(|t| repr_of(&env.solver.t, t)) {
+        // A GENERIC impl is keyed by its head alone, arguments dropped. Spelling them
+        // spells the HOLE — `impl[T] Display for List[T]` keyed as `list_T`, which no
+        // receiver's head can equal, since a receiver's arguments are always filled in
+        // (`list_i64`). That is not a collapse: a generic impl never names a symbol by
+        // itself, because its body exists only as instances and `mangle_instance` spells
+        // the substitution onto this key. `repr_head` is the same function the receiver's
+        // side uses, so the two agree by construction rather than by review.
+        Some(r) if !impl_def.generics.is_empty() => {
+            repr_head(&r).unwrap_or_else(|| repr_key(&r))
+        }
         Some(Repr::Record { name: Some(n), .. }) => n,
         // Everything else spells its full structure through `repr_key`, which carries
         // an injectivity obligation of its own. The `_ => String::new()` this replaces
@@ -778,40 +794,25 @@ fn find_impl_id(
         .map(crate::typecheck::env::ImplId)
 }
 
-fn find_impl_method(
-    env: &Env,
-    protocol: crate::typecheck::env::ProtocolId,
-    head: &str,
-    method: &str,
-) -> Option<(Option<String>, TyId)> {
-    for impl_def in env.impls() {
-        if impl_def.protocol == protocol && impl_head(env, impl_def) == head {
-            if let Some(m) = impl_def.methods.iter().find(|m| m.name == method) {
-                return Some((m.native.clone(), m.throws));
-            }
-        }
-    }
-    None
-}
-
 /// The head of an impl target written in the AST, matching `impl_head`.
 ///
-/// Resolved through the environment rather than read off the syntax. `impl_head` derives
-/// its head from the checked `ImplDef`, whose identity is now the QUALIFIED name, so
-/// taking `path.last()` here produced `Mappable$List$fold` where dispatch called
-/// `Mappable$std::collections::list::List$fold` — the exact "call a symbol nothing
-/// defines" failure the doc above warns about. It also means the two spellings of one
-/// type (`List` and `std::collections::list::List`) now key the same body.
+/// The impl is found by where it was written, not by re-deriving its head from the
+/// syntax, so there is only ONE spelling of an impl's key in the compiler:
+/// `impl_head`'s. Re-deriving was a second spelling that agreed with the first for a
+/// plain nominal and disagreed everywhere else — `impl[T] Display for List[T]` indexed
+/// its body under `List`'s qualified name while dispatch called `Display$list_T$..`,
+/// and every tuple target read as the empty string, collapsing two tuple impls' bodies
+/// onto one key. Both are the "call a symbol nothing defines" failure, and both are
+/// the general lesson about a key derived twice.
 ///
-/// Falls back to the written last segment when the path does not resolve, which happens
-/// only for a target the checker already rejected.
-fn ast_head(env: &Env, module: &[String], ty: &ast::TypeSpec) -> String {
-    match &ty.kind {
-        ast::TypeSpecKind::Named { path, .. } => env
-            .lookup(module, path)
-            .unwrap_or_else(|| path.last().cloned().unwrap_or_default()),
-        _ => String::new(),
-    }
+/// `None` for an impl the checker dropped — an unknown protocol — which has already
+/// been reported and has no `ImplDef` to lower against.
+fn impl_def_at<'e>(
+    env: &'e Env,
+    module: &[String],
+    span: &crate::parser::Span,
+) -> Option<&'e crate::typecheck::env::ImplDef> {
+    env.impls().iter().find(|d| d.module == module && d.span == *span)
 }
 
 /// Index every impl method that has a body under the same `protocol$head$method` key
@@ -826,11 +827,13 @@ fn collect_impl_bodies<'a>(
     for d in decls {
         match &d.kind {
             DeclKind::Impl(i) => {
-                let proto = i.protocol.last().cloned().unwrap_or_default();
-                let head = ast_head(env, module, &i.target);
-                for m in &i.methods {
-                    if m.body.is_some() {
-                        out.insert(mangle_impl(&proto, &head, &m.name), m);
+                if let Some(def) = impl_def_at(env, module, &d.span) {
+                    let proto = env.protocols()[def.protocol.0].name.clone();
+                    let head = impl_head(env, def);
+                    for m in &i.methods {
+                        if m.body.is_some() {
+                            out.insert(mangle_impl(&proto, &head, &m.name), m);
+                        }
                     }
                 }
             }
@@ -1966,7 +1969,14 @@ impl Lower<'_> {
                     return self.unhandled_note("dispatch: no method", repr, ty);
                 };
                 let throws = m.throws;
-                let generics = m.generics.clone();
+                // The impl's own generics monomorphise here too, on the same terms as
+                // the method's: `impl[T] Display for List[T]` has one body per element
+                // type, and its `T` is bound by the receiver — which is an argument, so
+                // the matching below reaches it without a second mechanism. Dispatch
+                // declines any impl whose generics the receiver does not bind, so every
+                // name in this list is one the match can find.
+                let generics: Vec<String> =
+                    impl_def.generics.iter().chain(m.generics.iter()).cloned().collect();
                 let mparams: Vec<TyId> = m.params.iter().map(|(_, t)| *t).collect();
                 let mret = m.ret;
                 // Set only on the generic-instance path, where the declared `throws` may
@@ -2027,22 +2037,21 @@ impl Lower<'_> {
                 // the impl the bound stood for.
                 let recv = args.first().copied();
                 let head = recv.and_then(|v| repr_head(self.b.value_repr(v)));
-                let proto = self.env.protocols()[protocol.0].name.clone();
                 match head {
                     Some(h) => {
-                        let found = find_impl_method(self.env, *protocol, &h, &method);
-                        match found {
-                            Some((Some(sym), throws)) => {
-                                let result = self.b.emit(Op::Native { symbol: sym, args }, repr.clone(), ty);
-                                self.wrap_throwing(result, throws, repr, ty)
-                            }
-                            Some((None, throws)) => {
-                                let result = self.b.emit(
-                                    Op::Call { func: mangle_impl(&proto, &h, &method), args },
-                                    repr.clone(),
-                                    ty,
-                                );
-                                self.wrap_throwing(result, throws, repr, ty)
+                        // Once the head names an impl there is nothing special left about
+                        // a bound: it is a direct call, and routing it back through the
+                        // `Direct` arm is what gives it the native case, the throws
+                        // handling and — the reason this stopped being a plain
+                        // `mangle_impl` — monomorphisation. A bound discharged onto a
+                        // GENERIC impl (`T := Pair[i64]` landing on `impl[T] Size for
+                        // Pair[T]`) names a body that exists only per instantiation, and
+                        // calling the un-instantiated symbol reached codegen with no
+                        // parameter reprs at all.
+                        match find_impl_id(self.env, *protocol, &h) {
+                            Some(id) => {
+                                let direct = Resolution::Direct(id);
+                                self.lower_dispatch(&direct, &method, args, repr, ty)
                             }
                             None => self.unhandled_note("bound: no impl", repr, ty),
                         }
