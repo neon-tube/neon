@@ -313,12 +313,25 @@ finished. The concrete pieces, in order, each closing an item already listed abo
    structurally smaller. The impl's `where`s are also in scope in its bodies, which is
    what makes a *recursive* bounded impl expressible. Pinned as `protocols/bounded_impl.neon`.
 
-5. **Records need a derive.** Bounded impls handle `List`/`Map`/tuples/unions; they cannot
-   iterate arbitrary named record fields, and there are no macros. `@derive(Serialize)`
-   generates an ordinary `impl` per record via the same structural walk the compiler already
-   does for `to_string`/`==`. The walk is shared by every derivable protocol, not
-   JSON-specific — the one irreducible bit of compiler magic, and it produces a normal,
-   overridable impl rather than a baked-in special case. **This is the only piece left.**
+5. ~~**Records need a derive.**~~ — **the mechanism is built, 2026-08-01**, and
+   `@derive("Display")` is the first protocol through it (`compiler/src/derive.rs`, pinned
+   as `records/derive_display.neon`). It generates an ordinary impl appended to the
+   record's module — checked, lowered and overridable like hand-written code — with an
+   interpolated string as the body, so each field is rendered by whatever impl covers it
+   and nested/generic records need no special support. A generic record derives a bounded
+   impl, which only works because of items 3 and 4.
+
+   Generation is a pass, not an annotation processor: `expand`'s `Context` cannot see the
+   AST by design, so `@derive`'s processor validates and `crate::derive` writes. `expand`
+   itself calls the pass, because four pipelines parse a module and the only thing they all
+   agree on is calling `expand`.
+
+   **What is left for JSON specifically:** `can_derive` answers `Display` and nothing else.
+   `Serialize` needs a *different body generator* — an interpolated string is the right
+   shape for rendering and the wrong one for emitting a structured document — plus the
+   protocol itself. The extension point is one match arm; the body is the work. Note also
+   that the pass, like `@cfg`, never sees stdlib sources (§17), so a `@derive` written in
+   the stdlib is silently ignored today — which a stdlib `Serialize` would immediately need.
 
 **Litmus test for "done": passed for `Display`/`List`, 2026-08-01.**
 `impl[T] Display for List[T] where T: Display` is expressible as an ordinary library impl
