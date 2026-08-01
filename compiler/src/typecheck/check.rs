@@ -671,8 +671,24 @@ impl Checker<'_> {
                     self.fn_body(module, f, &[]);
                 }
                 ast::DeclKind::Impl(i) => {
+                    // The impl's own `where`s hold throughout its bodies: inside
+                    // `impl[T] Size for Pair[T] where T: Size`, a call `size(p.a)` on a
+                    // still-rigid `T` is discharged by that clause, and it is what makes
+                    // a recursive bounded impl expressible at all. Without them the body
+                    // of every bounded impl was rejected against its own bound.
+                    let extra: Vec<(String, super::env::ProtocolId)> = i
+                        .wheres
+                        .iter()
+                        .filter_map(|w| match &w.bound.kind {
+                            ast::TypeSpecKind::Named { path, .. } => self
+                                .env
+                                .lookup_protocol(module, path)
+                                .map(|p| (w.param.clone(), p)),
+                            _ => None,
+                        })
+                        .collect();
                     for m in &i.methods {
-                        self.fn_body(module, m, &i.generics);
+                        self.fn_body_with_bounds(module, m, &i.generics, extra.clone());
                     }
                 }
                 ast::DeclKind::Protocol(p) => {

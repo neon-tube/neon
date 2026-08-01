@@ -1851,12 +1851,13 @@ impl Env {
     /// by nothing, and `Env::build` reports the declaration rather than letting every use
     /// fail mysteriously at the call site.
     ///
-    /// **Currently unreachable** (verified 2026-07-19): `type_satisfies` is called from
-    /// exactly one place, `check.rs`'s `where`-bound discharge, and that site branches on
-    /// `is_marker` *first* and answers markers itself with `ord_bound_vars()` in hand. If
-    /// a second caller ever reaches this path it will get a wrong answer, not an error:
-    /// the empty `bound` below makes every `where T: Ord` parameter unordered, so a
-    /// perfectly legal generic would be told its own bound does not hold.
+    /// The empty `bound` below is only correct for a type with no variables left in it,
+    /// and every caller owes that. `check.rs`'s `where`-bound discharge does not reach
+    /// here at all — it branches on `is_marker` first and answers markers itself, with
+    /// `ord_bound_vars()` in hand, precisely because its type may still be generic.
+    /// `dispatch::satisfies` does reach here, and skips a binding that is still a
+    /// variable before it asks: with no variables, there is no bound to consult, and a
+    /// marker on a concrete type is a question about structure alone.
     fn satisfies_marker(&mut self, ty: TyId, protocol: ProtocolId) -> bool {
         match self.protocols[protocol.0].name.as_str() {
             "Ord" => super::ordered::is_ordered(self, ty, &std::collections::HashSet::new()),

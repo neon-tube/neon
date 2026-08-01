@@ -216,6 +216,7 @@ protocols/a_marker_cannot_be_implemented.neon
 protocols/a_variable_union_receiver_is_not_rigid.neon
 protocols/ambiguity_resolved_by_qualification.neon
 protocols/ambiguous_call.neon
+protocols/bounded_impl.neon
 protocols/declare_and_impl.neon
 protocols/default_body_is_checked.neon
 protocols/dispatch_on_receiver.neon
@@ -224,6 +225,7 @@ protocols/generic_impl_head.neon
 protocols/impl_for_primitive.neon
 protocols/impl_missing_method.neon
 protocols/imported_method_reaches_an_outer_scope.neon
+protocols/library_impl_for_a_container.neon
 protocols/local_name_shadows_protocol_method.neon
 protocols/no_impl_for_receiver.neon
 protocols/orphan_impl_fills_a_gap.neon

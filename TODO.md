@@ -10,8 +10,8 @@ and in the corpus files the fixes are pinned by.
 
 What remains is of a different kind: one structural gap awaiting infrastructure (§19),
 one language decision (§16), the perf programs, one verification-tooling gap (13c), the
-serialization roadmap (the plan-of-record for finishing dispatch, including generic
-impls — former §7b), and the deliberately-separate unproven leads and environment
+serialization roadmap (the plan-of-record for finishing dispatch — now down to its last
+item, the record derive), and the deliberately-separate unproven leads and environment
 hazards. Each item still has a repro or a file:line.
 
 ---
@@ -283,38 +283,63 @@ finished. The concrete pieces, in order, each closing an item already listed abo
    `Bound` path's per-variant impl lookup finds nothing for a record's Display). Items
    2-5 below are what close it.
 
-2. **Parse `where` on impls.** `ast::ImplDecl` has no `wheres` and `parser::impl_decl` has no
-   `where` clause. Cheap; unblocks bounded impls, which do not parse today.
+2. ~~**Parse `where` on impls.**~~ — **built 2026-08-01.** `ast::ImplDecl.wheres`, printed by
+   the formatter, carried onto `ImplDef` as `(param, protocol path)` like `FnSig::wheres`.
 
-3. **Impl-head unification, not intersection** (absorbs former item 7b — generic impls
-   never apply). Applicability in `dispatch.rs::applicable` does
-   `intersect(receiver, target)`, so `impl[T] Tag for Pair[T]` never matches anything —
-   its `T` is rigid, the meet is always empty; the whole feature parses, type-checks its
-   own body, and never fires (`Tag::tag(p)` → "no impl of `Tag` for `Pair[i64]`").
-   Treat the impl's own generics as flexible holes and *match* the receiver against the
-   head (`generic::infer`, the same machinery `solve_generics` uses), yielding a
-   substitution (`T ↦ i64`) that must also flow into the selection's ret/throws and
-   into lowering's instance key — the `InstanceJob` machinery that already
-   monomorphises method-level generics per call site. `ImplDef.generics` is stored and
-   consumed by nothing today; this is what consumes it.
+3. ~~**Impl-head unification, not intersection**~~ (absorbed former item 7b) — **built
+   2026-08-01.** `dispatch.rs::match_head` treats the impl's own generics as holes and
+   matches the receiver against the head via `generic::infer`, yielding `T ↦ i64`; the
+   emptiness test then judges the *substituted* head exactly as it judges a monomorphic
+   target, so a template that lines up structurally with an unrelated type is still
+   rejected. The substitution flows into the selection's ret/throws (`result_of`) and
+   into lowering, which counts the impl's generics as monomorphising generics alongside
+   the method's. Pinned as `protocols/generic_impl_head.neon`.
 
-4. **Discharge the context under the subst.** With `T ↦ i64`, `where T: Serialize` becomes a
-   subgoal resolved by another applicability query → `Direct(impl Serialize for i64)`. It
-   terminates because the type shrinks structurally. This is the existing `Bound` path, fired
-   at instance-lowering time when the impl itself is generic.
+   Three things had to be fixed underneath, each its own defect:
+   an impl's generics were not in scope in its own methods' signatures (`fn size(p:
+   Pair[T])` was "unknown type `T`"); a generic impl's body was lowered once, generically,
+   tripping codegen's type-variable guard; and the impl body index derived its key from
+   the syntax while dispatch derived it from the `ImplDef` — agreeing for a plain nominal
+   and for nothing else. That third one is now a single spelling, `impl_head` via
+   `impl_def_at`, which also closes the tuple half of the `_ => String::new()` collapse.
+
+4. ~~**Discharge the context under the subst.**~~ — **built 2026-08-01.** `where T:
+   Serialize` under `T ↦ i64` is a subgoal answered by `dispatch::satisfies`, a real
+   applicability query rather than `Env::type_satisfies` — which compares against the
+   impls' *written* targets and so answers no for every generic impl, the same defect one
+   level down. A failed bound declines the impl rather than erroring, so coverage is
+   computed over what really applies and the diagnostic names the uncovered values. A
+   cycle (`mu Tree = List[Tree]`) assumes its own goal; otherwise each subgoal is
+   structurally smaller. The impl's `where`s are also in scope in its bodies, which is
+   what makes a *recursive* bounded impl expressible. Pinned as `protocols/bounded_impl.neon`.
 
 5. **Records need a derive.** Bounded impls handle `List`/`Map`/tuples/unions; they cannot
    iterate arbitrary named record fields, and there are no macros. `@derive(Serialize)`
    generates an ordinary `impl` per record via the same structural walk the compiler already
    does for `to_string`/`==`. The walk is shared by every derivable protocol, not
    JSON-specific — the one irreducible bit of compiler magic, and it produces a normal,
-   overridable impl rather than a baked-in special case.
+   overridable impl rather than a baked-in special case. **This is the only piece left.**
 
-**Litmus test for "done":** delete the baked-in structural `to_string`/`==`/`cmp` walks for
-containers and replace them with `impl[T] Display for List[T] where T: Display` (and the
-Map/tuple analogues). If library impls can express what the compiler currently hardcodes,
-the machinery is complete and JSON falls out as one more protocol with zero JSON-specific
-compiler code. If they can't, a piece above is still missing.
+**Litmus test for "done": passed for `Display`/`List`, 2026-08-01.**
+`impl[T] Display for List[T] where T: Display` is expressible as an ordinary library impl
+and renders `[[1, 2], [3]]` correctly — the nested case, where the bound is discharged
+against `List[i64]` and answered by the same impl. Pinned as
+`protocols/library_impl_for_a_container.neon`.
+
+What the litmus has NOT yet done is the *deletion*: the baked-in structural
+`to_string`/`==`/`cmp` walks are still there, and the Map/tuple analogues are unwritten.
+The machinery is proven able to express them; replacing them is a stdlib change with its
+own blast radius, and `==`/`cmp` are the harder half because the compiler consults them
+structurally in places `Display` is not consulted. Worth doing, separately, and not the
+thing blocking JSON.
+
+Two known limits of the matcher, neither blocking and both honest failures rather than
+wrong answers: a generic impl declines a **union receiver** that would need a different
+substitution per variant (`Pair[i64] | Pair[str]` — `infer` binds nothing against a union,
+so the impl is not applicable and the diagnostic names the uncovered type); and the
+`Resolution::Bound` path picks an impl by head string with no specificity ordering, so a
+concrete `impl P for List[i64]` sitting under a generic `impl[T] P for List[T]` would lose
+to the generic one there. Both want the same fix — arms carrying their own substitution.
 
 Union *decode* has one extra obligation the encode side doesn't: choosing an arm. Use the
 emptiness checker (`solver.is_empty`, already the basis of `dispatch.rs:220`) to require the

@@ -1,0 +1,34 @@
+// TODO.md's litmus for "dispatch is finished": a container's rendering, which the
+// compiler has always done with a baked-in structural walk, written instead as an
+// ordinary library impl. `impl[T] Display for List[T] where T: Display` needs every
+// piece at once — a generic head matched against the receiver, the bound discharged
+// against what the head bound `T` to, and one lowered body per element type — and it
+// is the shape a stdlib `Serialize` is made of.
+
+use std::collections::list;
+use std::io;
+use std::string;
+
+impl[T] Display for List[T] where T: Display {
+    fn to_string(v: List[T]) -> str {
+        let out = "[";
+        let first = true;
+        for x in v {
+            if !first {
+                out = string::concat(out, ", ");
+            }
+            first = false;
+            out = string::concat(out, to_string(x));
+        }
+        string::concat(out, "]")
+    }
+}
+
+fn main() {
+    // One impl, a body per element type.
+    io::println(to_string([1, 2, 3]));
+    io::println(to_string(["a", "b"]));
+    // Nested: the bound is discharged against `List[i64]`, which this same impl covers.
+    io::println(to_string([[1, 2], [3]]));
+    io::println(to_string(list::new[i64]()));
+}

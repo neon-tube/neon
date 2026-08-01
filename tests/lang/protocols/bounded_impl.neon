@@ -1,0 +1,30 @@
+// A bounded impl. `impl[T] Size for Pair[T] where T: Size` applies exactly when its
+// own argument does, so the bound is discharged against the type the head bound `T`
+// to — and it recurses: `Pair[Pair[i64]]` needs `Size for Pair[i64]`, which needs
+// `Size for i64`, which is an ordinary impl. That subgoal is what a library
+// `Serialize` is made of.
+
+use std::io;
+use std::string;
+
+record Pair[T] { a: T, b: T }
+
+protocol Size for S {
+    fn size(s: S) -> i64
+}
+
+impl Size for i64 {
+    fn size(s: i64) -> i64 { 1 }
+}
+
+impl[T] Size for Pair[T] where T: Size {
+    fn size(p: Pair[T]) -> i64 { size(p.a) + size(p.b) }
+}
+
+fn main() {
+    io::println(to_string(size(7)));
+    io::println(to_string(size(Pair { a: 1, b: 2 })));
+    // Three levels: the bound is discharged twice on the way down.
+    let deep = Pair { a: Pair { a: 1, b: 2 }, b: Pair { a: 3, b: 4 } };
+    io::println(to_string(size(deep)));
+}

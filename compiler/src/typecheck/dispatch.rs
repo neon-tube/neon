@@ -228,14 +228,15 @@ fn applicable(
 ) -> Result<Selection, DispatchError> {
     // An emptiness query per candidate, not a name match.
     let mut hits: Vec<Hit> = Vec::new();
-    let ids: Vec<(ImplId, Option<TyId>, Vec<String>)> =
-        env.impls_of(protocol).map(|(id, i)| (id, i.target, i.generics.clone())).collect();
-    for (id, target, generics) in ids {
-        let Some(target) = target else { continue };
-        let Some((head, subst)) = match_head(env, target, &generics, receiver) else { continue };
+    for c in candidates(env, protocol) {
+        let Some(target) = c.target else { continue };
+        let Some((head, subst)) = match_head(env, target, &c.generics, receiver) else { continue };
+        if !bounds_hold(env, &c, &subst, &mut Vec::new()) {
+            continue;
+        }
         let meet = env.solver.t.intersect(receiver, head);
         if !env.solver.is_empty(meet) {
-            hits.push(Hit { id, head, subst });
+            hits.push(Hit { id: c.id, head, subst });
         }
     }
 
@@ -293,6 +294,106 @@ fn applicable(
 /// be compared against nor a layout an instance can be lowered at. The receiver is
 /// the only thing consulted, so every binding this produces is one lowering can
 /// re-derive from the receiver's own repr at the call site.
+/// One impl of a protocol, read out of the registry before the search borrows `env`
+/// mutably. `wheres` and `module` travel together because a bound is written as a path
+/// and resolves in the module that wrote it.
+struct Candidate {
+    id: ImplId,
+    target: Option<TyId>,
+    generics: Vec<String>,
+    wheres: Vec<(String, Vec<String>)>,
+    module: Vec<String>,
+}
+
+fn candidates(env: &Env, protocol: ProtocolId) -> Vec<Candidate> {
+    env.impls_of(protocol)
+        .map(|(id, i)| Candidate {
+            id,
+            target: i.target,
+            generics: i.generics.clone(),
+            wheres: i.wheres.clone(),
+            module: i.module.clone(),
+        })
+        .collect()
+}
+
+/// Discharge an impl's `where` clauses under the substitution its head produced.
+/// `impl[T] Serialize for List[T] where T: Serialize` matched against `List[i64]` binds
+/// `T := i64` and asks whether `i64` serializes; if it does not, this impl is not the
+/// one for `List[i64]`, and the caller declines it.
+///
+/// A failed bound *declines* rather than errors, which is what makes the diagnostic the
+/// right one: coverage is then computed over the impls that really do apply, so the
+/// error names the values left uncovered instead of an impl the author never meant.
+///
+/// A binding that is still a variable is not this call's obligation. Inside a generic
+/// body the receiver can be `Pair[T]` for the *caller's* rigid `T`, and whether that `T`
+/// serializes is settled by the caller's own bound, where the caller is called.
+fn bounds_hold(
+    env: &mut Env,
+    c: &Candidate,
+    subst: &HashMap<NameId, TyId>,
+    seen: &mut Vec<(ProtocolId, TyId)>,
+) -> bool {
+    for (param, path) in &c.wheres {
+        let n = env.solver.t.name(param);
+        let Some(&bound_to) = subst.get(&n) else { continue };
+        if env.is_error(bound_to) || super::generic::is_var(&env.solver.t, bound_to) {
+            continue;
+        }
+        let Some(pid) = env.lookup_protocol(&c.module, path) else { continue };
+        if !satisfies(env, pid, bound_to, seen) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Whether some impl of `protocol` covers `ty` — the subgoal a `where` bound raises.
+///
+/// This is `applicable`'s candidate loop with the method question removed, and it is a
+/// separate query rather than `Env::type_satisfies` because that one compares against
+/// the impls' *written* targets: a rigid `T` again, so it answers no for every generic
+/// impl, which is the same defect one level down. Markers and constructor-subject
+/// protocols have no impl head to match and are still its business.
+///
+/// `seen` assumes a goal already being proved. A recursive type asks its own question
+/// back — a `mu Tree = List[Tree]` needs `Serialize for Tree` in order to answer
+/// `Serialize for Tree` — and failing there would reject every recursive type, while
+/// the instance it stands for is finite: types are hash-consed, so the monomorphised
+/// body closes on itself rather than expanding forever. Otherwise this terminates
+/// because each subgoal is structurally smaller than the goal that raised it.
+fn satisfies(
+    env: &mut Env,
+    protocol: ProtocolId,
+    ty: TyId,
+    seen: &mut Vec<(ProtocolId, TyId)>,
+) -> bool {
+    if env.protocols()[protocol.0].is_marker || env.protocols()[protocol.0].subject_arity > 0 {
+        return env.type_satisfies(ty, protocol);
+    }
+    if seen.contains(&(protocol, ty)) {
+        return true;
+    }
+    seen.push((protocol, ty));
+    let mut heads = Vec::new();
+    for c in candidates(env, protocol) {
+        let Some(target) = c.target else { continue };
+        let Some((head, subst)) = match_head(env, target, &c.generics, ty) else { continue };
+        if bounds_hold(env, &c, &subst, seen) {
+            heads.push(head);
+        }
+    }
+    seen.pop();
+    if heads.is_empty() {
+        return false;
+    }
+    // A subtype of the *union*, not of any one head, so a union type is covered when its
+    // arms are covered between them — the same rule `type_satisfies` states.
+    let covered = env.solver.t.union_all(&heads);
+    env.solver.is_subtype(ty, covered)
+}
+
 fn match_head(
     env: &mut Env,
     target: TyId,
