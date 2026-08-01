@@ -144,6 +144,10 @@ pub struct ImplDecl {
     pub protocol: Vec<String>,
     pub generics: Vec<String>,
     pub target: TypeSpec,
+    /// `impl[T] Serialize for List[T] where T: Serialize` — what the impl's own
+    /// generics must satisfy for it to apply. Discharged against the substitution
+    /// the receiver produced, so the obligation is on the concrete argument.
+    pub wheres: Vec<WhereClause>,
     pub methods: Vec<FnDecl>,
     pub annotations: Vec<Annotation>,
 }

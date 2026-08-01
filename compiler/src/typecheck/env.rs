@@ -656,6 +656,11 @@ pub struct ImplDef {
     pub orphan: bool,
     pub module: Vec<String>,
     pub generics: Vec<String>,
+    /// What the impl's own generics must satisfy: `impl[T] Serialize for List[T]
+    /// where T: Serialize`. Stored as `(parameter, protocol path)` like
+    /// `FnSig::wheres`, and discharged against the substitution the receiver
+    /// produced rather than here — the obligation is on the concrete argument.
+    pub wheres: Vec<(String, Vec<String>)>,
     /// `None` when the target is a bare constructor — `impl Container for Box`,
     /// which names the constructor and not a type.
     pub target: Option<TyId>,
@@ -1538,11 +1543,15 @@ impl Env {
             .map(|m| self.fn_sig(module, m, std::slice::from_ref(&subject), span))
             .collect();
 
+        let wheres =
+            i.wheres.iter().filter_map(|w| bound_path(w).map(|p| (w.param.clone(), p))).collect();
+
         self.impls.push(ImplDef {
             protocol,
             orphan: i.orphan,
             module: module.to_vec(),
             generics: i.generics.clone(),
+            wheres,
             target,
             target_head: head,
             methods,

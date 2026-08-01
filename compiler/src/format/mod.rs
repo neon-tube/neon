@@ -720,6 +720,17 @@ impl<'a> Fmt<'a> {
         self.path(&i.protocol);
         self.push(" for ");
         self.ty(&i.target, TP_ANY);
+        if !i.wheres.is_empty() {
+            self.push(" where ");
+            for (n, w) in i.wheres.iter().enumerate() {
+                if n > 0 {
+                    self.push(", ");
+                }
+                self.push(&w.param);
+                self.push(": ");
+                self.ty(&w.bound, TP_ANY);
+            }
+        }
         self.push(" ");
         self.methods(&i.methods, span);
     }

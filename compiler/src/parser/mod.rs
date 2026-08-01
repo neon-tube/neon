@@ -514,20 +514,18 @@ where
         .then(path())
         .then_ignore(just(Token::For))
         .then(ty.clone())
+        .then(where_clauses(ty.clone()))
         .then(
             fn_like(ty, throws, block, true)
                 .repeated()
                 .collect::<Vec<_>>()
                 .delimited_by(just(Token::LBrace), just(Token::RBrace)),
         )
-        .map(|(((((annotations, orphan), generics), protocol), target), methods)| ImplDecl {
-            orphan,
-            protocol,
-            generics,
-            target,
-            methods,
-            annotations,
-        })
+        .map(
+            |((((((annotations, orphan), generics), protocol), target), wheres), methods)| {
+                ImplDecl { orphan, protocol, generics, target, wheres, methods, annotations }
+            },
+        )
         .boxed()
 }
 

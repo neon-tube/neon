@@ -873,6 +873,15 @@ fn a_use_group_flattens_its_prefix() {
 }
 
 #[test]
+fn an_impl_may_carry_a_where_clause() {
+    let m = ok("impl[T] Display for List[T] where T: Display { fn show(a: List[T]) -> str { \"\" } }");
+    let DeclKind::Impl(i) = &m.decls[0].kind else { panic!() };
+    assert_eq!(i.generics, vec!["T".to_string()]);
+    assert_eq!(i.wheres.len(), 1);
+    assert_eq!(i.wheres[0].param, "T");
+}
+
+#[test]
 fn a_protocol_may_carry_a_where_clause() {
     let m = ok("protocol Ord for T where T: Eq { fn cmp(a: T, b: T) -> i64 }");
     let DeclKind::Protocol(p) = &m.decls[0].kind else { panic!() };

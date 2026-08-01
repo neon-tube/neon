@@ -404,6 +404,10 @@ fn declarations_of_every_shape() {
         "impl Show for X {\n    fn show(v: X) -> str { \"X\" }\n}\n",
     );
     pin(
+        "impl[T]Show for List[T]where T:Show{fn show(v: List[T])->str{ return \"\"; }}\n",
+        "impl[T] Show for List[T] where T: Show { fn show(v: List[T]) -> str { return \"\"; } }\n",
+    );
+    pin(
         "protocol Map for C[_,_]{fn get(self: C)->i64}\n",
         "protocol Map for C[_, _] { fn get(self: C) -> i64 }\n",
     );

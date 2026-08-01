@@ -52,6 +52,9 @@ fn decl(d: &mut Decl) {
         }
         DeclKind::Impl(i) => {
             ty(&mut i.target);
+            for w in &mut i.wheres {
+                ty(&mut w.bound);
+            }
             for m in &mut i.methods {
                 fn_decl(m);
             }
