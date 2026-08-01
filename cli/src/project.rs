@@ -57,8 +57,9 @@ impl Project {
         self.root.join("_neon")
     }
 
-    /// Where the compiled executable lands.
+    /// Where the compiled executable lands. `.exe` on Windows, nothing anywhere else --
+    /// see `emit::executable_path`.
     pub fn executable(&self) -> PathBuf {
-        self.target_dir().join(&self.name)
+        crate::emit::executable_path(self.target_dir().join(&self.name))
     }
 }

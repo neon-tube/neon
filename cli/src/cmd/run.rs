@@ -28,7 +28,7 @@ fn build_file(path: &Path, flags: BuildFlags) -> Result<PathBuf> {
     let dir = std::env::temp_dir().join("neon-run");
     std::fs::create_dir_all(&dir)?;
     let stem = path.file_stem().unwrap_or_else(|| "program".as_ref());
-    let out = dir.join(stem);
+    let out = emit::executable_path(dir.join(stem));
     emit::to_executable(&checked, &out, &cfg)?;
     Ok(out)
 }

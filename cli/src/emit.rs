@@ -7,8 +7,28 @@ use crate::sysroot::Sysroot;
 use color_eyre::eyre::{bail, eyre, Result};
 use neon_compiler::backend::c;
 use neon_compiler::ir::{self, Stage};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+
+/// The name the linker will actually produce for a program the caller wants at `base`.
+///
+/// Everywhere but Windows that is `base` itself. On Windows a file without `.exe` is not
+/// executable, and the C compiler appends the suffix whether or not `-o` asked for it — so
+/// a caller that then tries to spawn the extensionless path is looking for a file nobody
+/// wrote. Deciding it here, once, keeps the path the build verbs hand to `to_executable`
+/// and the path they later run the same string.
+///
+/// An explicit `-o something.exe` is left alone rather than turned into `.exe.exe`; the
+/// comparison is case-insensitive because Windows treats `.EXE` as the same suffix.
+pub fn executable_path(base: PathBuf) -> PathBuf {
+    let suffix = std::env::consts::EXE_SUFFIX;
+    if suffix.is_empty() || base.extension().is_some_and(|e| e.eq_ignore_ascii_case("exe")) {
+        return base;
+    }
+    let mut name = base.clone().into_os_string();
+    name.push(suffix);
+    PathBuf::from(name)
+}
 
 /// Lower a checked program to an executable at `out`, writing a sibling `.c` file.
 pub fn to_executable(checked: &Checked, out: &Path, cfg: &BuildConfig) -> Result<()> {

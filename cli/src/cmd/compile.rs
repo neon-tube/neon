@@ -10,6 +10,8 @@ pub fn run(file: &OsString, output: Option<OsString>, flags: BuildFlags) -> Resu
     let path = PathBuf::from(file);
     let checked = frontend::check(&path, false)?;
     let cfg = BuildConfig::resolve(&path, flags)?;
-    let out = output.map(PathBuf::from).unwrap_or_else(|| path.with_extension(""));
+    let out = emit::executable_path(
+        output.map(PathBuf::from).unwrap_or_else(|| path.with_extension("")),
+    );
     emit::to_executable(&checked, &out, &cfg)
 }

@@ -52,7 +52,7 @@ pub fn run(file: &OsString, filter: Option<String>, flags: BuildFlags) -> Result
     let dir = std::env::temp_dir().join("neon-test");
     std::fs::create_dir_all(&dir)?;
     let stem = path.file_stem().unwrap_or_else(|| "program".as_ref());
-    let exe = dir.join(stem);
+    let exe = emit::executable_path(dir.join(stem));
     emit::to_test_executable(&checked, &all, &exe, &cfg)?;
 
     println!("running {} test{}\n", selected.len(), if selected.len() == 1 { "" } else { "s" });
