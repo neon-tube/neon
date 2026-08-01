@@ -39,6 +39,11 @@ int64_t neon_i64_rem(int64_t a, int64_t b) {
     return a % b;
 }
 
+// Wrapping negation, taken the long way round on purpose. `-a` is undefined at
+// `INT64_MIN`, so the negation happens in `uint64_t`, where it is defined to wrap. Written
+// as `-(uint64_t)a` that is what MSVC's C4146 warns about -- "result still unsigned", which
+// is the entire intent -- and `/WX` turns the warning into a build failure. Subtracting
+// from zero is the same operation in a spelling every compiler reads as deliberate.
 int64_t neon_i64_neg(int64_t a) {
-    return (int64_t)(-(uint64_t)a);
+    return (int64_t)((uint64_t)0 - (uint64_t)a);
 }
