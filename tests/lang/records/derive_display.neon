@@ -1,4 +1,4 @@
-// `@derive("Display")` writes the impl an author could have written by hand, and nothing
+// `@derive(Display)` writes the impl an author could have written by hand, and nothing
 // more: an ordinary `impl Display for P` appended to the module, type-checked and lowered
 // like any other code. A record has no built-in `to_string` -- asking for one without an
 // impl is an error naming the type -- so this is the difference between writing the walk
@@ -10,21 +10,21 @@
 
 use std::io;
 
-@derive("Display")
+@derive(Display)
 record P { x: i64, y: str }
 
 // A field whose type is itself derived. The hole dispatches to P's generated impl.
-@derive("Display")
+@derive(Display)
 record Nested { p: P, flag: bool }
 
 // No fields renders like the literal that builds one.
-@derive("Display")
+@derive(Display)
 record Empty {}
 
 // A generic record derives a BOUNDED impl -- `where T: Display` per parameter -- which is
 // not decoration: inside the impl `T` is rigid, so only a bound can answer `to_string` for
 // a field of type `T`. One impl, a body per instantiation.
-@derive("Display")
+@derive(Display)
 record Boxed[T] { item: T, count: i64 }
 
 fn main() {

@@ -265,21 +265,55 @@ where
     })
 }
 
-/// `@name` or `@name("string")`, and that is all: `@cfg("not(windows)")` rather
-/// than a nested expression, so the grammar needs no expression language of its
-/// own for a corner nobody reads.
+/// `@name`, or `@name(arg, ..)` where an arg is a path (`Display`, `linux`), a
+/// path applied to more args (`not(windows)`, `all(linux, x86_64)`), or a string
+/// literal.
+///
+/// The string used to be the *only* form — `@cfg("not(windows)")` — on the
+/// reasoning that the grammar needed no expression language for a corner nobody
+/// reads. That was wrong in both halves. `@cfg`'s contents *were* read, by a
+/// tokeniser and a recursive-descent parser hand-written inside `expand.rs` over
+/// the raw string: an expression language with its own diagnostics and no spans to
+/// point them at. And `@derive("Display")` quoted a *protocol name*, hiding the one
+/// identifier in the annotation that the language already knows how to spell.
+///
+/// So arguments are parsed here, once, and a string now means something: this is
+/// not a Neon name. See `ast::AnnArg`.
 fn annotations<'t, I>() -> impl P<'t, I, Vec<Annotation>>
 where
     I: ValueInput<'t, Token = Token, Span = Span>,
 {
+    let arg = recursive(|arg| {
+        let group = arg
+            .separated_by(just(Token::Comma))
+            .allow_trailing()
+            .collect::<Vec<AnnArg>>()
+            .delimited_by(just(Token::LParen), just(Token::RParen));
+        choice((
+            path().then(group.or_not()).map_with(|(path, args), e| AnnArg::Item {
+                path,
+                args: args.unwrap_or_default(),
+                span: e.span(),
+            }),
+            plain_str().map_with(|text, e| AnnArg::Str { text, span: e.span() }),
+        ))
+        .boxed()
+    });
+
     just(Token::At)
         .ignore_then(ident())
         .then(
-            plain_str()
+            arg.separated_by(just(Token::Comma))
+                .allow_trailing()
+                .collect::<Vec<AnnArg>>()
                 .delimited_by(just(Token::LParen), just(Token::RParen))
                 .or_not(),
         )
-        .map_with(|(name, arg), e| Annotation { name, arg, span: e.span() })
+        .map_with(|(name, args), e| Annotation {
+            name,
+            args: args.unwrap_or_default(),
+            span: e.span(),
+        })
         .repeated()
         .collect()
         .boxed()

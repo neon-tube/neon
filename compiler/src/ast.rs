@@ -76,8 +76,58 @@ pub struct FnDecl {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Annotation {
     pub name: String,
-    pub arg: Option<String>,
+    /// `@derive(Display, Eq)` has two; `@pure` has none. An empty list and no
+    /// parentheses at all are the same thing, so `@pure()` is spelled oddly rather
+    /// than wrongly.
+    pub args: Vec<AnnArg>,
     pub span: Span,
+}
+
+/// One argument of an annotation.
+///
+/// The rule the two variants encode: **quoted iff it is not a Neon name.** `@derive(Display)`
+/// names a protocol and `@cfg(linux)` names a key, so both are paths the language could in
+/// principle resolve; `@native("neon_str_len")` names a C symbol and `@doc("...")` is prose,
+/// and neither is a name Neon has any claim on. A string is where the language stops.
+///
+/// `Item` covers both a bare path and a call, because `all(linux, x86_64)` is not a second
+/// kind of argument — it is a path applied to arguments, and an annotation that wants a
+/// nested condition gets one from the same grammar as one that wants a plain name.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AnnArg {
+    /// `Display`, `std::fmt::Display`, `linux`, `not(windows)`, `all(linux, x86_64)`.
+    Item { path: Vec<String>, args: Vec<AnnArg>, span: Span },
+    /// `"neon_str_len"`, `"NeonBytes*"`, `"Adds two numbers."`.
+    Str { text: String, span: Span },
+}
+
+impl AnnArg {
+    pub fn span(&self) -> &Span {
+        match self {
+            AnnArg::Item { span, .. } | AnnArg::Str { span, .. } => span,
+        }
+    }
+
+    /// The path this argument names, if it is a bare name and not a call. `not(windows)`
+    /// is a path *with* arguments, so it is not a name and this is `None`.
+    pub fn name(&self) -> Option<&[String]> {
+        match self {
+            AnnArg::Item { path, args, .. } if args.is_empty() => Some(path),
+            _ => None,
+        }
+    }
+}
+
+impl Annotation {
+    /// The single string argument of `@native("sym")`, `@runtime("neon_file")` or
+    /// `@doc("...")`. `None` covers every other shape — no argument, an unquoted name,
+    /// more than one — which is what lets a processor report all of them the same way.
+    pub fn only_str(&self) -> Option<&str> {
+        match self.args.as_slice() {
+            [AnnArg::Str { text, .. }] => Some(text),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

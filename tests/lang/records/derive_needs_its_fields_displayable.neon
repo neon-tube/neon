@@ -13,7 +13,7 @@ use std::io;
 
 record Q { z: i64 }
 
-@derive("Display")
+@derive(Display)
 record R { q: Q }
 
 fn main() {

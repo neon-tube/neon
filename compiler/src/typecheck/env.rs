@@ -1187,8 +1187,12 @@ impl Env {
                     // `@runtime("neon_file")`: the backend represents this record as a
                     // pointer to that C type. Recorded by nominal name, which is the only
                     // identity that survives into the representation map.
-                    if let Some(sym) =
-                        r.annotations.iter().find(|a| a.name == "runtime").and_then(|a| a.arg.clone())
+                    if let Some(sym) = r
+                        .annotations
+                        .iter()
+                        .find(|a| a.name == "runtime")
+                        .and_then(|a| a.only_str())
+                        .map(str::to_string)
                     {
                         // Keyed by the qualified name, because `repr.rs` looks it up with
                         // the `#nominal` tag, which is now qualified.
@@ -1474,7 +1478,8 @@ impl Env {
             .annotations
             .iter()
             .find(|a| a.name == "native")
-            .and_then(|a| a.arg.clone());
+            .and_then(|a| a.only_str())
+            .map(str::to_string);
         FnSig {
             name: f.name.clone(),
             pure: f.annotations.iter().any(|a| a.name == "pure"),

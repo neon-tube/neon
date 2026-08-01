@@ -545,10 +545,8 @@ impl<'a> Fmt<'a> {
         for a in anns {
             self.push("@");
             self.push(&a.name);
-            if a.arg.is_some() {
-                self.push("(");
-                self.str_verbatim(a.span.start);
-                self.push(")");
+            if !a.args.is_empty() {
+                self.ann_args(&a.args);
             }
             self.advance(a.span.end);
             // `@native("...") fn len(..)` on one line, or stacked above the
@@ -561,6 +559,33 @@ impl<'a> Fmt<'a> {
                 self.write_indent();
             }
         }
+    }
+
+    /// `(Display, Eq)`, `(all(linux, x86_64))`, `("neon_str_len")`.
+    ///
+    /// Rendered from the tree rather than copied verbatim, because the group nests
+    /// and the verbatim helpers cannot find a matching `)` past an inner one.
+    /// Rendering also gives the spacing for free: an author's `all( linux ,x86_64 )`
+    /// normalises like any other comma list. A string argument is still the author's
+    /// bytes — an escape is not the character it denotes — so it is copied from its
+    /// own span and never re-quoted.
+    fn ann_args(&mut self, args: &[AnnArg]) {
+        self.push("(");
+        for (i, a) in args.iter().enumerate() {
+            if i > 0 {
+                self.push(", ");
+            }
+            match a {
+                AnnArg::Str { span, .. } => self.verbatim(span),
+                AnnArg::Item { path, args, .. } => {
+                    self.push(&path.join("::"));
+                    if !args.is_empty() {
+                        self.ann_args(args);
+                    }
+                }
+            }
+        }
+        self.push(")");
     }
 
     fn generic_params(&mut self, generics: &[String]) {

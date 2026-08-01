@@ -1,4 +1,4 @@
-//! `@derive("Display")` — generating an impl a user could have written by hand.
+//! `@derive(Display)` — generating an impl a user could have written by hand.
 //!
 //! This is the one place in the compiler that *adds* declarations, and it is a separate
 //! pass rather than an annotation processor for that reason. `expand`'s `Context`
@@ -25,15 +25,20 @@ use crate::lexer::Span;
 
 /// The protocols `@derive` knows how to write. A name outside this list is rejected by
 /// `expand`, so the pass below never meets one.
-pub fn can_derive(name: &str) -> bool {
-    name == "Display"
-}
-
-/// The argument of `@derive`, split. The arg is an opaque string like every annotation's
-/// (`docs/design/annotations.md`: "a processor brings its own parser"), so `@derive("Display,
-/// Eq")` is one annotation naming two protocols rather than a second syntax.
-pub fn protocols(arg: &str) -> Vec<String> {
-    arg.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+///
+/// Matched on the **last segment**, and the generated impl carries the whole path the author
+/// wrote. So `@derive(Display)` and a future `@derive(std::fmt::Display)` both land here, and
+/// which protocol the impl is actually *for* is settled where every other protocol name is
+/// settled — by resolution, on the generated impl. This pass runs before the checker and
+/// resolves nothing; pretending otherwise would mean a second name resolver that agreed with
+/// the real one only by luck.
+///
+/// The cost is that `@derive(mine::Display)`, naming some other protocol that happens to end
+/// in `Display`, gets a body written for the wrong protocol. That is a type error against the
+/// generated impl rather than a silent wrong answer, which is the same deal a hand-written
+/// impl of the wrong protocol gets.
+pub fn can_derive(path: &[String]) -> bool {
+    matches!(path.last().map(String::as_str), Some("Display"))
 }
 
 /// Append a generated impl for every `@derive` in the module, recursing into nested mods.
@@ -50,9 +55,9 @@ fn derive_decls(decls: &mut Vec<Decl>) {
                     if ann.name != "derive" {
                         continue;
                     }
-                    let Some(arg) = &ann.arg else { continue };
-                    for name in protocols(arg) {
-                        if let Some(decl) = derive_one(&name, r, ann, &d.span) {
+                    for arg in &ann.args {
+                        let Some(path) = arg.name() else { continue };
+                        if let Some(decl) = derive_one(path, r, ann, &d.span) {
                             generated.push(decl);
                         }
                     }
@@ -65,9 +70,12 @@ fn derive_decls(decls: &mut Vec<Decl>) {
     decls.extend(generated);
 }
 
-fn derive_one(protocol: &str, r: &RecordDecl, ann: &Annotation, span: &Span) -> Option<Decl> {
-    match protocol {
-        "Display" => Some(display_impl(r, ann, span)),
+/// Dispatch on the last segment, for the reason `can_derive` gives, and hand the whole path
+/// to the generator so the impl is written for the protocol the author named rather than for
+/// the compiler's idea of where it lives.
+fn derive_one(path: &[String], r: &RecordDecl, ann: &Annotation, span: &Span) -> Option<Decl> {
+    match path.last().map(String::as_str) {
+        Some("Display") => Some(display_impl(path, r, ann, span)),
         // `expand` rejected everything else before we got here.
         _ => None,
     }
@@ -84,7 +92,7 @@ fn derive_one(protocol: &str, r: &RecordDecl, ann: &Annotation, span: &Span) -> 
 /// A generic record derives a bounded impl, `where T: Display` per parameter. That is not
 /// decoration: without it the body cannot call `to_string` on a field of type `T` at all,
 /// because inside the impl `T` is rigid and only a bound can answer for it.
-fn display_impl(r: &RecordDecl, ann: &Annotation, span: &Span) -> Decl {
+fn display_impl(protocol: &[String], r: &RecordDecl, ann: &Annotation, span: &Span) -> Decl {
     let sp = || ann.span.clone();
     let target = self_type(r, &sp());
 
@@ -120,16 +128,20 @@ fn display_impl(r: &RecordDecl, ann: &Annotation, span: &Span) -> Decl {
         annotations: vec![],
     };
 
+    // The bound is spelled with the author's path too, so `where T: Display` and a qualified
+    // `where T: std::fmt::Display` resolve to whatever the impl's own protocol resolved to.
+    let bound =
+        TypeSpec { kind: TypeSpecKind::Named { path: protocol.to_vec(), args: vec![] }, span: sp() };
     let wheres = r
         .generics
         .iter()
-        .map(|g| WhereClause { param: g.clone(), bound: named("Display", vec![], &sp()) })
+        .map(|g| WhereClause { param: g.clone(), bound: bound.clone() })
         .collect();
 
     Decl {
         kind: DeclKind::Impl(ImplDecl {
             orphan: false,
-            protocol: vec!["Display".to_string()],
+            protocol: protocol.to_vec(),
             generics: r.generics.clone(),
             target,
             wheres,

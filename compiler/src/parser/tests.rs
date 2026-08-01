@@ -149,7 +149,7 @@ fn where_clauses_and_annotations() {
         DeclKind::Fn(f) => {
             assert_eq!(f.annotations.len(), 1);
             assert_eq!(f.annotations[0].name, "native");
-            assert_eq!(f.annotations[0].arg.as_deref(), Some("neon_x"));
+            assert_eq!(f.annotations[0].only_str(), Some("neon_x"));
             assert_eq!(f.wheres.len(), 1);
             assert_eq!(f.wheres[0].param, "T");
         }
@@ -654,20 +654,76 @@ fn empty_input_is_an_empty_module() {
 }
 
 #[test]
-fn annotations_take_an_optional_string() {
-    // One shape for all of them: `@name` or `@name("...")`. `@cfg` takes a
-    // string rather than a nested expression (`@cfg("not(windows)")`, not
-    // `@cfg(not(windows))`), so the grammar needs no expression language of its
-    // own; whatever evaluates the cfg parses its contents.
-    let m = ok(r#"@native("neon_x") @cfg("not(windows)") @doc("Adds two numbers.") fn f() {}"#);
+fn an_annotation_argument_is_a_name_or_a_string() {
+    // The two shapes, and the rule that tells them apart: a string is where the
+    // language stops. `neon_x` is a C symbol and `Adds two numbers.` is prose, so
+    // both are quoted; `windows` is a config key the language could resolve, so it
+    // is not.
+    let m = ok(r#"@native("neon_x") @cfg(not(windows)) @doc("Adds two numbers.") fn f() {}"#);
     match &m.decls[0].kind {
         DeclKind::Fn(f) => {
             let names: Vec<_> = f.annotations.iter().map(|a| a.name.as_str()).collect();
             assert_eq!(names, ["native", "cfg", "doc"]);
-            assert_eq!(f.annotations[1].arg.as_deref(), Some("not(windows)"));
-            assert_eq!(f.annotations[2].arg.as_deref(), Some("Adds two numbers."));
+            assert_eq!(f.annotations[0].only_str(), Some("neon_x"));
+            assert_eq!(f.annotations[2].only_str(), Some("Adds two numbers."));
+            // `not(windows)` is one argument -- a path applied to arguments -- and
+            // not a name, which is why `only_str` and `name` both decline it.
+            let cfg = &f.annotations[1].args[0];
+            assert_eq!(cfg.name(), None);
+            match cfg {
+                AnnArg::Item { path, args, .. } => {
+                    assert_eq!(path, &["not"]);
+                    assert_eq!(args[0].name().unwrap(), &["windows"]);
+                }
+                other => panic!("expected an item, got {other:?}"),
+            }
         }
         other => panic!("expected a fn, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_annotation_argument_list_nests_and_repeats() {
+    // `all(linux, any(x86_64, aarch64))` is the deepest shape `@cfg` needs, and
+    // `@derive(Display, Eq)` is the reason arguments are a list rather than one
+    // value. Both fall out of the same grammar; neither is a special case.
+    let m = ok("@cfg(all(linux, any(x86_64, aarch64))) @derive(Display, Eq) fn f() {}");
+    match &m.decls[0].kind {
+        DeclKind::Fn(f) => {
+            match &f.annotations[0].args[0] {
+                AnnArg::Item { path, args, .. } => {
+                    assert_eq!(path, &["all"]);
+                    assert_eq!(args[0].name().unwrap(), &["linux"]);
+                    match &args[1] {
+                        AnnArg::Item { path, args, .. } => {
+                            assert_eq!(path, &["any"]);
+                            assert_eq!(args[0].name().unwrap(), &["x86_64"]);
+                            assert_eq!(args[1].name().unwrap(), &["aarch64"]);
+                        }
+                        other => panic!("expected an item, got {other:?}"),
+                    }
+                }
+                other => panic!("expected an item, got {other:?}"),
+            }
+            let derived: Vec<_> =
+                f.annotations[1].args.iter().map(|a| a.name().unwrap().join("::")).collect();
+            assert_eq!(derived, ["Display", "Eq"]);
+        }
+        other => panic!("expected a fn, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_annotation_argument_may_be_a_qualified_path() {
+    // A protocol is nameable, so it is spellable the way every other protocol is.
+    // The pass that reads this resolves nothing -- see `derive::can_derive` -- but
+    // the grammar must not be what stops it.
+    let m = ok("@derive(std::fmt::Display) record P {}");
+    match &m.decls[0].kind {
+        DeclKind::Record(r) => {
+            assert_eq!(r.annotations[0].args[0].name().unwrap(), &["std", "fmt", "Display"]);
+        }
+        other => panic!("expected a record, got {other:?}"),
     }
 }
 
@@ -677,7 +733,7 @@ fn an_annotation_may_have_no_argument() {
     match &m.decls[0].kind {
         DeclKind::Fn(f) => {
             assert_eq!(f.annotations[0].name, "inline");
-            assert!(f.annotations[0].arg.is_none());
+            assert!(f.annotations[0].args.is_empty());
         }
         other => panic!("expected a fn, got {other:?}"),
     }
@@ -689,7 +745,7 @@ fn annotations_on_records() {
     match &m.decls[0].kind {
         DeclKind::Record(r) => {
             assert!(r.opaque);
-            assert_eq!(r.annotations[0].arg.as_deref(), Some("NeonBytes*"));
+            assert_eq!(r.annotations[0].only_str(), Some("NeonBytes*"));
         }
         other => panic!("expected a record, got {other:?}"),
     }

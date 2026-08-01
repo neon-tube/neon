@@ -38,19 +38,19 @@ fn decl(d: &mut Decl) {
     match &mut d.kind {
         DeclKind::Fn(f) => fn_decl(f),
         DeclKind::Record(r) => {
-            for a in &mut r.annotations {
-                a.span = ZERO;
-            }
+            annotations(&mut r.annotations);
             for f in &mut r.fields {
                 field(f);
             }
         }
         DeclKind::Protocol(p) => {
+            annotations(&mut p.annotations);
             for m in &mut p.methods {
                 fn_decl(m);
             }
         }
         DeclKind::Impl(i) => {
+            annotations(&mut i.annotations);
             ty(&mut i.target);
             for w in &mut i.wheres {
                 ty(&mut w.bound);
@@ -62,6 +62,7 @@ fn decl(d: &mut Decl) {
         DeclKind::TypeAlias(a) | DeclKind::MuType(a) | DeclKind::Newtype(a) => ty(&mut a.value),
         DeclKind::Use(u) => u.span = ZERO,
         DeclKind::Mod(m) => {
+            annotations(&mut m.annotations);
             for d in &mut m.decls {
                 decl(d);
             }
@@ -77,13 +78,37 @@ fn decl(d: &mut Decl) {
     }
 }
 
+/// An annotation and, recursively, its arguments. `@cfg(all(linux, x86_64))` nests, and
+/// every level of it carries a span the formatter is entitled to move.
+///
+/// The five annotated declarations all route through here rather than each zeroing the
+/// list itself. When only `record` and `fn` did, `protocol`, `impl` and `mod` were left
+/// holding real positions — a hole no round-trip test could reach, because none of them
+/// happened to be annotated.
+fn annotations(anns: &mut [Annotation]) {
+    for a in anns {
+        a.span = ZERO;
+        ann_args(&mut a.args);
+    }
+}
+
+fn ann_args(args: &mut [AnnArg]) {
+    for a in args {
+        match a {
+            AnnArg::Item { args, span, .. } => {
+                *span = ZERO;
+                ann_args(args);
+            }
+            AnnArg::Str { span, .. } => *span = ZERO,
+        }
+    }
+}
+
 /// A `FnDecl` carries no span of its own — the enclosing `Decl` holds it, and a protocol
 /// or impl method has none at all — so this only descends. Every position a diagnostic
 /// about a signature can point at lives on a `Param`, an `Annotation` or a `TypeSpec`.
 fn fn_decl(f: &mut FnDecl) {
-    for a in &mut f.annotations {
-        a.span = ZERO;
-    }
+    annotations(&mut f.annotations);
     for p in &mut f.params {
         p.span = ZERO;
         ty(&mut p.ty);

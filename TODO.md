@@ -314,7 +314,7 @@ finished. The concrete pieces, in order, each closing an item already listed abo
    what makes a *recursive* bounded impl expressible. Pinned as `protocols/bounded_impl.neon`.
 
 5. ~~**Records need a derive.**~~ — **the mechanism is built, 2026-08-01**, and
-   `@derive("Display")` is the first protocol through it (`compiler/src/derive.rs`, pinned
+   `@derive(Display)` is the first protocol through it (`compiler/src/derive.rs`, pinned
    as `records/derive_display.neon`). It generates an ordinary impl appended to the
    record's module — checked, lowered and overridable like hand-written code — with an
    interpolated string as the body, so each field is rendered by whatever impl covers it
@@ -372,7 +372,7 @@ an error rather than a silent drop, and the pass reaches methods and nested mods
 the first is a trap rather than a gap:
 
 1. **The driver expands the user's module only** (`cli/src/frontend.rs:83`); the stdlib is
-   parsed by `stdlib::parse_from` and never runs through `expand`. So a `@cfg("windows")`
+   parsed by `stdlib::parse_from` and never runs through `expand`. So a `@cfg(windows)`
    written in `std::path` today is **silently ignored** — the annotation is dropped and the
    branch it guards is compiled in on every platform. `@runtime`/`@pure` still work there
    only because their readers go to the AST rather than to `Meta`. `docs/design/annotations.md`
@@ -382,7 +382,7 @@ the first is a trap rather than a gap:
 2. **The keys are the HOST, not the target.** `Config::with([std::env::consts::OS,
    std::env::consts::ARCH])` is where the *compiler* is running. That is harmless while
    there is no cross-compilation, and stops being harmless the moment there is: a program
-   built on Linux for Windows would take every `@cfg("linux")` branch. The Windows runtime
+   built on Linux for Windows would take every `@cfg(linux)` branch. The Windows runtime
    work makes this live rather than hypothetical — the runtime already cross-compiles under
    mingw-w64 — so whoever adds `--target` owns this line too, and the two must agree or
    `@cfg` becomes a second, quieter source of truth about the platform.

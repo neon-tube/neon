@@ -671,15 +671,35 @@ mean deciding where the expression ends before the lexer knows.
 hole's `to_string` resolution is written to the hole expression's own id and overwrites the
 call's. `TODO.md` item 2 has the repro.
 
-### Annotations are `@name` or `@name("string")`
+### An annotation argument is a name, or a string when it is not a name
 
     @native("neon_str_len") fn len(s: str) -> i64
-    @cfg("not(windows)") fn spawn(...)
+    @cfg(not(windows)) fn spawn(...)
+    @derive(Display) record Point { x: i64, y: i64 }
     @doc("Adds two numbers.") fn add(a: i64, b: i64) -> i64
 
-One shape for all of them. **`@cfg` takes a string**, not a nested expression:
-`@cfg("not(windows)")`, not `@cfg(not(windows))`. Whatever evaluates the cfg parses its
-contents; the grammar needs no expression language of its own for a corner nobody reads.
+`@name`, or `@name(arg, ..)` where an arg is a path, a path applied to more args, or a
+string literal. **Quoted iff it is not a Neon name.** `Display` is a protocol and `windows`
+is a config key — both are things the language could in principle resolve, so both are
+written as names. `neon_str_len` is a C symbol and `Adds two numbers.` is prose; neither is
+a name Neon has any claim on. A string is where the language stops.
+
+*This replaces the original rule*, which was that the argument is always an opaque string
+and a processor brings its own parser: `@cfg("not(windows)")`, on the reasoning that the
+grammar needed no expression language for a corner nobody reads. Both halves were wrong.
+The corner *was* read — by a tokeniser and a recursive-descent parser written by hand inside
+`expand.rs`, over the raw string, which is an expression language with worse diagnostics and
+no spans to attach them to. `@cfg("all(linux")` was reported against the whole annotation
+because a hand-rolled parser had nothing finer to point at; a config key had to permit `-`
+because that parser had no notion of an identifier. And `@derive("Display")` was the case
+that made it plain: it quoted a *protocol name*, hiding the one identifier in the annotation
+from every part of the compiler that knows what to do with identifiers.
+
+Deleting that parser removed more code than the grammar added, and `@cfg(all(linux)` is now
+caught by the same machinery as every other unbalanced `)`, with a span on the token that
+broke it. The one thing given up: a config key must be an identifier, so a target-shaped
+`x86_64-unknown-linux` has to be spelled `x86_64_unknown_linux`. Nothing sets a hyphenated
+key today, and a key that is a name in the source should be a name.
 
 ### Comments and blank lines survive lexing
 

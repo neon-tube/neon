@@ -1,6 +1,6 @@
 # Annotations
 
-An annotation is `@name` or `@name("arg")` written before a `record`, `protocol`, `impl`,
+An annotation is `@name` or `@name(arg, ..)` written before a `record`, `protocol`, `impl`,
 `fn` or `mod`. Each name is handled by exactly one **built-in processor** that runs in a
 pass between parsing and type-checking (`compiler/src/expand.rs`), sees the declaration its
 annotation is on, and may drop it or pull metadata off it.
@@ -18,9 +18,14 @@ annotation is on, and may drop it or pull metadata off it.
   cannot be described inconsistently in five places.
 - **Unknown is an error.** A name with no processor is a hard error, not a silent no-op, so
   a typo'd `@cfg` cannot quietly miscompile.
-- **The arg is an opaque string; a processor brings its own parser.** `@cfg("all(linux,
-  x86)")` parses the string itself. The annotation grammar stays `@name("...")`; the meaning
-  of the `...` is the processor's business.
+- **An argument is a name; a string is where the language stops.** The grammar is
+  `arg := path | path(arg, ..) | "text"`, so `@cfg(all(linux, x86_64))` and
+  `@derive(Display)` are parsed once, by the parser, into `ast::AnnArg`. A processor
+  validates a *shape* — it does not parse. Quoting is reserved for what is genuinely not a
+  Neon name: a C symbol (`@native("neon_str_len")`), a C type (`@runtime("NeonBytes*")`),
+  prose (`@doc("...")`). This replaced an earlier rule that the arg was always an opaque
+  string; `docs/decisions.md` records what that cost. The one consequence to know: a config
+  key must be an identifier, so it cannot contain `-`.
 - **A processor cannot rewrite the AST.** Its `Context` carries the config, the metadata
   table and the error list — and not the node — so the only decisions available are *keep*
   and *omit*. That restriction is what keeps expansion from becoming a macro system by
@@ -84,20 +89,34 @@ code; it looks like an omission rather than a decision.
   it documents, and keeps the node. Any target. The key is a bare name, so two same-named
   things in different modules collide; that is tolerable only because `Meta::docs` is a `Vec`
   of pairs nothing looks up by key yet.
-- **`@cfg("cond")`** — keeps the node iff `cond` holds against the active config, else omits
+- **`@cfg(cond)`** — keeps the node iff `cond` holds against the active config, else omits
   it. `cond` is `key | not(cond) | all(cond, ..) | any(cond, ..)`, evaluated against a set of
   keys the driver seeds from the host OS and arch (until cross-compilation exists) and, later,
-  `neon.toml`. A key is true iff it is in the set. The set is built once and read-only
-  thereafter, so a condition cannot flip mid-pass and drop both of two mutually exclusive
-  branches. A malformed condition is an error and, conservatively, keeps the node.
+  `neon.toml`. A key is true iff it is in the set — an unknown key is *false*, not an error,
+  because there is no registry of legal keys and asking about one this build never heard of
+  is the normal case. The set is built once and read-only thereafter, so a condition cannot
+  flip mid-pass and drop both of two mutually exclusive branches. `expand` no longer parses
+  the condition — the grammar does — so an unbalanced one is a parse error; what remains a
+  `@cfg` diagnostic is a condition that parses but cannot mean anything (`not` with two
+  operands, an empty `all`, a key applied to arguments), and those conservatively keep the
+  node.
+- **`@derive(Display)`** — the record gets an ordinary generated `impl`, written by
+  `compiler/src/derive.rs`. Only on a `record`; several protocols per annotation
+  (`@derive(Display, Eq)`) are several arguments, not a list inside one. The processor
+  itself only *validates*, because generating a declaration means holding the AST and
+  `Context` deliberately does not; the generation is called from `expand` directly, after
+  the processor walk, so a `@cfg`-omitted record derives nothing. The protocol path is
+  carried into the generated impl unchanged and resolved there like any other — this pass
+  resolves nothing, and the derivable set is matched on the last segment.
 
 ## Not yet
 
 - **Expanding the stdlib.** See the note above: the pass runs on the user's module only.
   Running it over stdlib sources too is what would make `@cfg` usable for platform-specific
   stdlib code, and would put stdlib annotation typos through the same diagnostics as
-  everything else.
-- **Node replacement / injection.** The pass supports keep and omit; a processor that
-  *rewrites* a node or *adds* declarations (a `derive`) is the natural next capability and
-  fits the same walk — but it is exactly the step that turns `Context` into something with
-  the AST in it, which is the line this design has been holding.
+  everything else. It now also gates `@derive`: a stdlib `@derive` is silently ignored,
+  because the pass that writes the impl never sees stdlib sources.
+- **Node replacement.** A processor that *rewrites* the node it sits on still does not
+  exist, and `Context` still cannot see the AST. `@derive` shows the shape the line actually
+  holds: adding declarations is a pass over the module, called from `expand`, while what a
+  *processor* may decide is unchanged — keep or omit, never rewrite.

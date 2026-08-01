@@ -1,17 +1,23 @@
 //! The annotation-expansion pass: built-in processors that run over the parsed AST
 //! between parsing and type-checking.
 //!
-//! An annotation is `@name` or `@name("arg")` on a `record`, `protocol`, `impl`, `fn`
+//! An annotation is `@name` or `@name(arg, ..)` on a `record`, `protocol`, `impl`, `fn`
 //! or `mod`. Each name maps to exactly one built-in processor; an unrecognised name is
 //! an error, not a silent no-op, so a typo'd `@cfg` cannot quietly miscompile. A
 //! processor sees the node its annotation is on and decides whether the node survives
 //! (`@cfg` drops code the target does not want) and may pull metadata off it into a
-//! side table (`@doc`). The arg is an opaque string: a processor brings its own parser.
+//! side table (`@doc`).
+//!
+//! Arguments arrive **parsed** (`ast::AnnArg`), so a processor validates a shape rather
+//! than parsing a string. `@cfg` used to carry its condition as text and tokenise it here,
+//! by hand, with error messages that had no span to point at — a second expression language
+//! living inside a string literal. The grammar now covers it, and every diagnostic below
+//! can underline the argument it is about.
 //!
 //! This runs before the checker so a dropped branch is never type-checked and never
 //! has to resolve.
 
-use crate::ast::{self, Annotation, Decl, DeclKind, FnDecl, Module};
+use crate::ast::{self, AnnArg, Annotation, Decl, DeclKind, FnDecl, Module};
 use crate::lexer::Span;
 use std::collections::HashSet;
 
@@ -35,6 +41,11 @@ pub struct Meta {
 
 /// The active `@cfg` keys. Empty by default; the driver fills it from the target and
 /// `neon.toml`. A key is true iff it is in this set.
+///
+/// A key must be an **identifier**, because `@cfg(linux)` is parsed as a path. That is a
+/// real constraint on whatever fills this set: a target-shaped `x86_64-unknown-linux` has
+/// to be spelled `x86_64_unknown_linux`. Nothing sets a hyphenated key today, and a key
+/// that is written as a name in source should be one.
 #[derive(Debug, Clone, Default)]
 pub struct Config {
     keys: HashSet<String>,
@@ -241,6 +252,34 @@ fn run(anns: &[Annotation], target: &Target, cx: &mut Context) -> Decision {
     decision
 }
 
+// ---- argument shapes ----
+
+/// The one string argument of an annotation whose argument is *not* a Neon name: a C symbol,
+/// a C type, a sentence of prose. `example` is the whole spelling (`@native("neon_str_len")`)
+/// so the message shows the fix rather than describing it.
+///
+/// Every wrong shape lands here — no argument, an unquoted name, two arguments — because the
+/// author's mistake is the same one either way and splitting it into three near-identical
+/// messages buys nothing.
+fn one_str<'a>(ann: &'a Annotation, cx: &mut Context, what: &str, example: &str) -> Option<&'a str> {
+    match ann.only_str() {
+        Some(s) => Some(s),
+        None => {
+            let span = ann.args.first().map_or_else(|| ann.span.clone(), |a| a.span().clone());
+            cx.error(span, format!("`@{}` needs {what} in quotes, e.g. `{example}`", ann.name));
+            None
+        }
+    }
+}
+
+/// A marker annotation takes nothing. Reported against the argument, which is the part to
+/// delete.
+fn no_args(ann: &Annotation, cx: &mut Context) {
+    if let Some(a) = ann.args.first() {
+        cx.error(a.span().clone(), format!("`@{}` takes no argument", ann.name));
+    }
+}
+
 // ---- the built-in processors ----
 
 /// `@native("symbol")` — the fn's body is a runtime symbol. It requires the symbol and
@@ -250,9 +289,7 @@ impl Processor for Native {
     fn run(&self, ann: &Annotation, target: &Target, cx: &mut Context) -> Decision {
         match target {
             Target::Fn(f) => {
-                if ann.arg.is_none() {
-                    cx.error(ann.span.clone(), "`@native` needs the runtime symbol, e.g. `@native(\"neon_str_len\")`");
-                }
+                one_str(ann, cx, "the runtime symbol", "@native(\"neon_str_len\")");
                 if f.body.is_some() {
                     cx.error(ann.span.clone(), "`@native` fn must have no body: its body is the runtime symbol");
                 }
@@ -280,12 +317,8 @@ impl Processor for Runtime {
     fn run(&self, ann: &Annotation, target: &Target, cx: &mut Context) -> Decision {
         match target {
             Target::Record(r) => {
-                match &ann.arg {
-                    Some(sym) => cx.meta.runtime.push((r.name.clone(), sym.clone())),
-                    None => cx.error(
-                        ann.span.clone(),
-                        "`@runtime` needs the C type, e.g. `@runtime(\"neon_file\")`",
-                    ),
+                if let Some(sym) = one_str(ann, cx, "the C type", "@runtime(\"neon_file\")") {
+                    cx.meta.runtime.push((r.name.clone(), sym.to_string()));
                 }
                 if !r.fields.is_empty() {
                     cx.error(
@@ -317,9 +350,7 @@ impl Processor for Pure {
     fn run(&self, ann: &Annotation, target: &Target, cx: &mut Context) -> Decision {
         match target {
             Target::Fn(f) => {
-                if ann.arg.is_some() {
-                    cx.error(ann.span.clone(), "`@pure` takes no argument");
-                }
+                no_args(ann, cx);
                 if !f.annotations.iter().any(|a| a.name == "native") {
                     cx.error(
                         ann.span.clone(),
@@ -355,9 +386,7 @@ impl Processor for Inline {
     fn run(&self, ann: &Annotation, target: &Target, cx: &mut Context) -> Decision {
         match target {
             Target::Fn(f) => {
-                if ann.arg.is_some() {
-                    cx.error(ann.span.clone(), "`@inline` takes no argument");
-                }
+                no_args(ann, cx);
                 if f.annotations.iter().any(|a| a.name == "native") {
                     cx.error(
                         ann.span.clone(),
@@ -379,15 +408,14 @@ impl Processor for Inline {
 struct Doc;
 impl Processor for Doc {
     fn run(&self, ann: &Annotation, target: &Target, cx: &mut Context) -> Decision {
-        match &ann.arg {
-            Some(text) => cx.meta.docs.push((target_name(target), text.clone())),
-            None => cx.error(ann.span.clone(), "`@doc` needs its text, e.g. `@doc(\"what this is\")`"),
+        if let Some(text) = one_str(ann, cx, "its text", "@doc(\"what this is\")") {
+            cx.meta.docs.push((target_name(target), text.to_string()));
         }
         Decision::Keep
     }
 }
 
-/// `@derive("Display")` — the record gets an impl the author could have written.
+/// `@derive(Display)` — the record gets an impl the author could have written.
 ///
 /// This processor only VALIDATES. The impl is written by `crate::derive`, a pass that runs
 /// after this one, because generating a declaration means holding the AST and `Context`
@@ -410,50 +438,52 @@ impl Processor for Derive {
             );
             return Decision::Keep;
         }
-        match &ann.arg {
-            None => cx.error(
+        if ann.args.is_empty() {
+            cx.error(
                 ann.span.clone(),
-                "`@derive` needs the protocol to derive, e.g. `@derive(\"Display\")`",
-            ),
-            Some(arg) => {
-                let names = crate::derive::protocols(arg);
-                if names.is_empty() {
-                    cx.error(
-                        ann.span.clone(),
-                        "`@derive` names no protocol; write `@derive(\"Display\")`",
-                    );
-                }
-                for name in names {
-                    if !crate::derive::can_derive(&name) {
-                        cx.error(
-                            ann.span.clone(),
-                            format!(
-                                "cannot derive `{name}`: the compiler can write `Display`. \
-                                 Anything else is an ordinary `impl {name} for ..`"
-                            ),
-                        );
-                    }
-                }
+                "`@derive` needs the protocol to derive, e.g. `@derive(Display)`",
+            );
+        }
+        for arg in &ann.args {
+            let Some(path) = arg.name() else {
+                cx.error(arg.span().clone(), "`@derive` names a protocol, e.g. `@derive(Display)`");
+                continue;
+            };
+            if !crate::derive::can_derive(path) {
+                let name = path.join("::");
+                cx.error(
+                    arg.span().clone(),
+                    format!(
+                        "cannot derive `{name}`: the compiler can write `Display`. \
+                         Anything else is an ordinary `impl {name} for ..`"
+                    ),
+                );
             }
         }
         Decision::Keep
     }
 }
 
-/// `@cfg("cond")` — keep the node iff `cond` holds against the active config. `cond` is
-/// `key`, `not(cond)`, `all(cond, ..)` or `any(cond, ..)`; `@cfg` brings its own parser.
+/// `@cfg(cond)` — keep the node iff `cond` holds against the active config. `cond` is
+/// `key`, `not(cond)`, `all(cond, ..)` or `any(cond, ..)`, and it is ordinary annotation
+/// syntax rather than a string this processor parses for itself.
 struct Cfg;
 impl Processor for Cfg {
     fn run(&self, ann: &Annotation, _target: &Target, cx: &mut Context) -> Decision {
-        let Some(src) = &ann.arg else {
-            cx.error(ann.span.clone(), "`@cfg` needs a condition, e.g. `@cfg(\"linux\")`");
+        // Two conditions are not an implicit `all`: `@cfg(linux, x86_64)` reads like one and
+        // would mean whatever this happened to fold, so it is a mistake to point at.
+        let [cond] = ann.args.as_slice() else {
+            cx.error(
+                ann.span.clone(),
+                "`@cfg` needs one condition, e.g. `@cfg(linux)` or `@cfg(all(linux, x86_64))`",
+            );
             return Decision::Keep;
         };
-        match eval_cfg(src, cx.config) {
+        match eval_cfg(cond, cx.config) {
             Ok(true) => Decision::Keep,
             Ok(false) => Decision::Omit,
-            Err(msg) => {
-                cx.error(ann.span.clone(), format!("`@cfg`: {msg}"));
+            Err((span, msg)) => {
+                cx.error(span, format!("`@cfg`: {msg}"));
                 Decision::Keep
             }
         }
@@ -480,115 +510,65 @@ fn target_name(target: &Target) -> String {
     }
 }
 
-// ---- the `@cfg` mini-language ----
+// ---- the `@cfg` condition ----
 
-/// `key | not(cond) | all(cond, ..) | any(cond, ..)`, evaluated against `config`. A
-/// tiny recursive-descent parser over the raw string, so `@cfg` owns its own grammar.
-fn eval_cfg(src: &str, config: &Config) -> Result<bool, String> {
-    let tokens = cfg_tokens(src)?;
-    let mut p = CfgParser { tokens: &tokens, pos: 0 };
-    let v = p.cond(config)?;
-    if p.pos != p.tokens.len() {
-        return Err(format!("unexpected `{}` after the condition", p.tokens[p.pos]));
-    }
-    Ok(v)
-}
-
-/// Split a condition into words and punctuation. There are no operators, so a word is a
-/// run of alphanumerics, `_` and `-`; `-` is allowed because config keys are target-shaped
-/// (`x86_64-unknown-linux`) and splitting one on the hyphen would turn a key into a
-/// syntax error.
+/// `key | not(cond) | all(cond, ..) | any(cond, ..)`, evaluated against `config`.
 ///
-/// Anything else is rejected here rather than passed through as an unknown key, so a
-/// mistyped `@cfg("linux && macos")` is a diagnostic instead of a condition that quietly
-/// never holds.
-fn cfg_tokens(src: &str) -> Result<Vec<String>, String> {
-    let mut out = Vec::new();
-    let mut word = String::new();
-    for c in src.chars() {
-        match c {
-            '(' | ')' | ',' => {
-                if !word.is_empty() {
-                    out.push(std::mem::take(&mut word));
-                }
-                out.push(c.to_string());
+/// This used to be a tokeniser and a recursive-descent parser over the raw string, on the
+/// grounds that `@cfg` owned its grammar. It owned the grammar's *problems*: a condition had
+/// no spans, so `@cfg("all(linux")` was reported against the whole annotation; a config key
+/// had to allow `-` because the tokeniser had no idea what an identifier was; and a legal
+/// condition and a typo'd one were told apart by hand-written code that nothing else in the
+/// compiler resembled. All of that is the parser's job now, and what is left here is the
+/// evaluation — a walk over `AnnArg` that decides what the shapes *mean*.
+///
+/// A malformed condition returns `Err` with the span of the part that is wrong. `Cfg` above
+/// then keeps the node: a condition nobody can evaluate should not silently delete code.
+fn eval_cfg(cond: &AnnArg, config: &Config) -> Result<bool, (Span, String)> {
+    let AnnArg::Item { path, args, span } = cond else {
+        return Err((
+            cond.span().clone(),
+            "a condition is a key like `linux`, not a string".to_string(),
+        ));
+    };
+    // A key is one identifier. `@cfg(std::linux)` is not a lookup into anything -- the config
+    // is a flat set -- so it is a mistake rather than a key that happens never to be set.
+    let [key] = path.as_slice() else {
+        let p = path.join("::");
+        return Err((span.clone(), format!("`{p}` is a path; a condition key is one name")));
+    };
+    match key.as_str() {
+        "not" => match args.as_slice() {
+            [inner] => Ok(!eval_cfg(inner, config)?),
+            _ => Err((span.clone(), "`not` takes one condition".to_string())),
+        },
+        // Both fold from their identity, and both require an operand: `all()` is an error
+        // rather than a vacuous `true`, because an empty fold is always a mistake and
+        // answering it keeps code that was meant to be conditional.
+        "all" | "any" => {
+            if args.is_empty() {
+                return Err((span.clone(), format!("`{key}` needs at least one condition")));
             }
-            c if c.is_whitespace() => {
-                if !word.is_empty() {
-                    out.push(std::mem::take(&mut word));
-                }
+            let all = key == "all";
+            let mut acc = all;
+            for a in args {
+                let v = eval_cfg(a, config)?;
+                acc = if all { acc && v } else { acc || v };
             }
-            c if c.is_alphanumeric() || c == '_' || c == '-' => word.push(c),
-            other => return Err(format!("unexpected character `{other}` in the condition")),
+            Ok(acc)
         }
-    }
-    if !word.is_empty() {
-        out.push(word);
-    }
-    Ok(out)
-}
-
-struct CfgParser<'a> {
-    tokens: &'a [String],
-    pos: usize,
-}
-
-impl CfgParser<'_> {
-    fn peek(&self) -> Option<&str> {
-        self.tokens.get(self.pos).map(String::as_str)
-    }
-    fn bump(&mut self) -> Option<&str> {
-        let t = self.tokens.get(self.pos).map(String::as_str);
-        if t.is_some() {
-            self.pos += 1;
-        }
-        t
-    }
-    fn expect(&mut self, tok: &str) -> Result<(), String> {
-        match self.bump() {
-            Some(t) if t == tok => Ok(()),
-            Some(t) => Err(format!("expected `{tok}`, found `{t}`")),
-            None => Err(format!("expected `{tok}`, found end of condition")),
-        }
-    }
-
-    /// One condition. `all`/`any` fold over a comma-separated list, seeded with their
-    /// identity (`true` for `all`, `false` for `any`), and both require at least one
-    /// operand — the loop parses before it checks for a comma, so `all()` is an error
-    /// rather than a vacuous `true`.
-    ///
-    /// A bare word is a key lookup and is *always* well-formed: an unrecognised key is
-    /// false, not a diagnostic. There is no registry of legal keys to check against, and
-    /// asking about a key this build has never heard of is the normal case.
-    fn cond(&mut self, config: &Config) -> Result<bool, String> {
-        let head = self.bump().ok_or("empty condition")?.to_string();
-        match head.as_str() {
-            "not" => {
-                self.expect("(")?;
-                let v = self.cond(config)?;
-                self.expect(")")?;
-                Ok(!v)
-            }
-            "all" | "any" => {
-                self.expect("(")?;
-                let all = head == "all";
-                let mut acc = all;
-                loop {
-                    let v = self.cond(config)?;
-                    acc = if all { acc && v } else { acc || v };
-                    match self.peek() {
-                        Some(",") => {
-                            self.bump();
-                        }
-                        _ => break,
-                    }
-                }
-                self.expect(")")?;
-                Ok(acc)
-            }
-            "(" | ")" | "," => Err(format!("expected a condition, found `{head}`")),
-            key => Ok(config.keys.contains(key)),
-        }
+        // A bare key is a lookup and is *always* well-formed: an unrecognised key is false,
+        // not a diagnostic. There is no registry of legal keys to check against, and asking
+        // about one this build has never heard of is the normal case. Applying a key to
+        // arguments is different -- `linux(x86_64)` cannot be a lookup under any reading.
+        _ if !args.is_empty() => Err((
+            span.clone(),
+            format!(
+                "`{key}` is a config key, so it takes no arguments; \
+                 only `not`, `all` and `any` do"
+            ),
+        )),
+        key => Ok(config.keys.contains(key)),
     }
 }
 

@@ -1,0 +1,47 @@
+// `@cfg(cond)` keeps a declaration iff `cond` holds, and the condition is ordinary
+// annotation syntax -- a name, or a name applied to more of them. It used to be a string
+// (`@cfg("not(windows)")`) that `expand` tokenised and parsed by hand; a condition now
+// goes through the same parser as everything else, so an unbalanced one is a parse error
+// with a span rather than a message pointing at the whole annotation.
+//
+// The conditions here are deliberately host-independent: the driver seeds the config with
+// the host's OS and arch, so a test naming either would pass on one machine and drop the
+// wrong branch on another. `nowhere` is a key no build sets, which is a *false* key rather
+// than an error -- there is no registry of legal keys, and asking about one this build has
+// never heard of is the normal case.
+
+use std::io;
+
+// Two declarations of the same name, one of which is dropped. This is the property that
+// makes `@cfg` worth having: an omitted decl leaves no trace for name resolution, so this
+// is not a redefinition -- it is one definition, chosen.
+@cfg(nowhere)
+fn platform() -> str { "the impossible branch" }
+
+@cfg(not(nowhere))
+fn platform() -> str { "the branch that survives" }
+
+// Nesting, and both connectives. `all` and `any` fold from their identity, and an empty
+// one is an error rather than a vacuous answer, so every condition here has an operand.
+@cfg(all(not(nowhere), any(nowhere, not(nowhere))))
+fn nested() -> str { "nested conditions hold" }
+
+// A `@cfg` on a mod is decided before its body is walked, so annotations inside a dropped
+// branch are never looked up -- which is what lets code written for another target use
+// annotations this build does not have.
+@cfg(nowhere)
+mod dropped {
+    @not_an_annotation
+    fn never_seen() {}
+}
+
+@cfg(not(nowhere))
+mod kept {
+    fn hello() -> str { "from a kept mod" }
+}
+
+fn main() {
+    io::println(platform());
+    io::println(nested());
+    io::println(kept::hello());
+}

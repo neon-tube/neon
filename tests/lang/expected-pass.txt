@@ -28,6 +28,7 @@ basics/atom_literals.neon
 basics/block_expression.neon
 basics/block_scope.neon
 basics/bool_literals.neon
+basics/cfg_selects_a_declaration.neon
 basics/comments.neon
 basics/const_is_evaluated_at_compile_time.neon
 basics/const_may_not_cycle.neon

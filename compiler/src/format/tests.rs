@@ -380,9 +380,21 @@ fn declarations_of_every_shape() {
         "@native(\"neon_len\") fn len(s: str) -> i64 { 0 }\n",
     );
     pin(
-        "@cfg(\"not(windows)\")\n@doc(\"Spawns.\")\nfn spawn(){}\n",
-        "@cfg(\"not(windows)\")\n@doc(\"Spawns.\")\nfn spawn() {}\n",
+        "@cfg(not(windows))\n@doc(\"Spawns.\")\nfn spawn(){}\n",
+        "@cfg(not(windows))\n@doc(\"Spawns.\")\nfn spawn() {}\n",
     );
+    // Arguments are rendered from the tree, so a nested group normalises its spacing
+    // like any other comma list -- and a string argument keeps the author's bytes,
+    // because an escape is not the character it denotes.
+    pin(
+        "@cfg(all( linux ,any(x86_64,aarch64) )) fn f(){}\n",
+        "@cfg(all(linux, any(x86_64, aarch64))) fn f() {}\n",
+    );
+    pin(
+        "@derive(Display,Eq) record P { x: i64 }\n",
+        "@derive(Display, Eq) record P { x: i64 }\n",
+    );
+    pin("@native(\"a\\tb\") fn t(){}\n", "@native(\"a\\tb\") fn t() {}\n");
     // Annotations survive on a protocol, impl and mod, not just fn and record.
     pin(
         "@doc(\"a\") protocol P for T { fn a(v: T) -> i64 }\n",

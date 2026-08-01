@@ -67,14 +67,14 @@ fn doc_pulls_text_into_metadata_and_keeps_the_node() {
 #[test]
 fn cfg_keeps_when_the_key_is_active() {
     let cfg = Config::with(["linux".to_string()]);
-    let (m, _, errs) = run(r#"@cfg("linux") fn only_linux() {} fn always() {}"#, cfg);
+    let (m, _, errs) = run(r#"@cfg(linux) fn only_linux() {} fn always() {}"#, cfg);
     assert!(errs.is_empty(), "{errs:?}");
     assert_eq!(survivors(&m), vec!["only_linux", "always"]);
 }
 
 #[test]
 fn cfg_omits_when_the_key_is_inactive() {
-    let (m, _, errs) = run(r#"@cfg("windows") fn only_win() {} fn always() {}"#, Config::default());
+    let (m, _, errs) = run(r#"@cfg(windows) fn only_win() {} fn always() {}"#, Config::default());
     assert!(errs.is_empty(), "{errs:?}");
     assert_eq!(survivors(&m), vec!["always"]);
 }
@@ -83,21 +83,45 @@ fn cfg_omits_when_the_key_is_inactive() {
 fn cfg_understands_not_all_and_any() {
     let cfg = Config::with(["linux".to_string(), "x86".to_string()]);
     let keep = |src: &str| survivors(&run(src, cfg.clone()).0).contains(&"f".to_string());
-    assert!(keep(r#"@cfg("not(windows)") fn f() {}"#));
-    assert!(!keep(r#"@cfg("not(linux)") fn f() {}"#));
-    assert!(keep(r#"@cfg("all(linux, x86)") fn f() {}"#));
-    assert!(!keep(r#"@cfg("all(linux, arm)") fn f() {}"#));
-    assert!(keep(r#"@cfg("any(windows, x86)") fn f() {}"#));
-    assert!(!keep(r#"@cfg("any(windows, arm)") fn f() {}"#));
-    assert!(keep(r#"@cfg("all(linux, any(x86, arm))") fn f() {}"#));
+    assert!(keep(r#"@cfg(not(windows)) fn f() {}"#));
+    assert!(!keep(r#"@cfg(not(linux)) fn f() {}"#));
+    assert!(keep(r#"@cfg(all(linux, x86)) fn f() {}"#));
+    assert!(!keep(r#"@cfg(all(linux, arm)) fn f() {}"#));
+    assert!(keep(r#"@cfg(any(windows, x86)) fn f() {}"#));
+    assert!(!keep(r#"@cfg(any(windows, arm)) fn f() {}"#));
+    assert!(keep(r#"@cfg(all(linux, any(x86, arm))) fn f() {}"#));
 }
 
+/// An unbalanced condition is a PARSE error now, not an expand one. That is the whole point
+/// of moving the grammar out of `expand`: `@cfg(all(linux)` is caught by the same machinery
+/// that catches every other missing `)`, with a span on the token that broke it, instead of
+/// by a hand-written tokeniser whose only span was the annotation.
 #[test]
-fn a_malformed_cfg_condition_is_an_error_not_a_silent_drop() {
-    let (m, _, errs) = run(r#"@cfg("all(linux") fn f() {}"#, Config::default());
-    assert!(errs.iter().any(|e| e.message.contains("`@cfg`")), "{errs:?}");
-    // Conservative: on a bad condition the node is kept, not silently dropped.
-    assert_eq!(survivors(&m), vec!["f"]);
+fn an_unbalanced_cfg_condition_is_a_parse_error() {
+    let src = "@cfg(all(linux) fn f() {}";
+    let tokens = lexer::lex(src).expect("lexes");
+    let (_, errs) = parser::parse(&tokens, src.len());
+    assert_eq!(errs.len(), 1, "{errs:?}");
+    assert!(errs[0].to_string().contains("found `fn`"), "{}", errs[0]);
+}
+
+/// A condition that parses but cannot mean anything is still expansion's problem, and is
+/// still conservative: the node is kept, not silently dropped. Dropping on a condition
+/// nobody can evaluate deletes code on the strength of a mistake.
+#[test]
+fn a_meaningless_cfg_condition_is_an_error_not_a_silent_drop() {
+    for src in [
+        "@cfg(not(linux, windows)) fn f() {}", // `not` is unary
+        "@cfg(all()) fn f() {}",               // an empty fold is always a mistake
+        "@cfg(linux(x86_64)) fn f() {}",       // a key is not a connective
+        "@cfg(std::linux) fn f() {}",          // the config set is flat
+        r#"@cfg("linux") fn f() {}"#,          // the old spelling
+        "@cfg(linux, x86_64) fn f() {}",       // not an implicit `all`
+    ] {
+        let (m, _, errs) = run(src, Config::default());
+        assert!(errs.iter().any(|e| e.message.contains("`@cfg`")), "{src}: {errs:?}");
+        assert_eq!(survivors(&m), vec!["f"], "{src}");
+    }
 }
 
 #[test]
@@ -105,11 +129,11 @@ fn cfg_reaches_methods_and_nested_mods() {
     // A method dropped by cfg.
     let src = r#"
         protocol P for T {
-            @cfg("windows") fn win(v: T) -> i64
+            @cfg(windows) fn win(v: T) -> i64
             fn common(v: T) -> i64
         }
         mod inner {
-            @cfg("windows") fn win() {}
+            @cfg(windows) fn win() {}
             fn keep() {}
         }
     "#;
@@ -160,7 +184,7 @@ fn derived(m: &Module) -> Vec<(String, String, Vec<String>, Vec<String>)> {
 
 #[test]
 fn derive_generates_an_impl_for_the_record() {
-    let (m, _, errs) = run(r#"@derive("Display") record P { x: i64 }"#, Config::default());
+    let (m, _, errs) = run(r#"@derive(Display) record P { x: i64 }"#, Config::default());
     assert!(errs.is_empty(), "{errs:?}");
     assert_eq!(derived(&m), vec![("Display".into(), "P".into(), vec![], vec![])]);
     // The record itself survives: a derive adds, it does not replace.
@@ -172,7 +196,7 @@ fn derive_generates_an_impl_for_the_record() {
 #[test]
 fn deriving_a_generic_record_bounds_each_parameter() {
     let (m, _, errs) =
-        run(r#"@derive("Display") record Box[T, U] { a: T, b: U }"#, Config::default());
+        run(r#"@derive(Display) record Box[T, U] { a: T, b: U }"#, Config::default());
     assert!(errs.is_empty(), "{errs:?}");
     let g = vec!["T".to_string(), "U".to_string()];
     assert_eq!(derived(&m), vec![("Display".into(), "Box".into(), g.clone(), g)]);
@@ -180,16 +204,36 @@ fn deriving_a_generic_record_bounds_each_parameter() {
 
 #[test]
 fn one_derive_may_name_several_protocols() {
-    // The arg is an opaque string, so a list is the processor's own parsing rather than
-    // new syntax -- the same division `@cfg` makes.
-    assert_eq!(crate::derive::protocols(" Display , Display "), vec!["Display", "Display"]);
+    // A list of arguments, not a list inside one argument: `@derive(Display, Display)` is
+    // the grammar's comma, so the processor does no parsing of its own.
+    let (m, _, errs) = run("@derive(Display, Display) record P { x: i64 }", Config::default());
+    assert!(errs.is_empty(), "{errs:?}");
+    assert_eq!(derived(&m).len(), 2);
+}
+
+/// A quoted protocol is the old spelling, and it is now a diagnostic rather than a name.
+/// `Display` is a protocol the language can resolve; putting it in a string hides the one
+/// identifier in the annotation from everything that reads identifiers.
+#[test]
+fn a_derived_protocol_is_a_name_not_a_string() {
+    let (_, _, errs) = run(r#"@derive("Display") record P { x: i64 }"#, Config::default());
+    assert!(errs.iter().any(|e| e.message.contains("names a protocol")), "{errs:?}");
+}
+
+/// The path is carried into the generated impl rather than flattened to its last segment,
+/// so which `Display` the impl is for stays a question for resolution.
+#[test]
+fn a_derived_protocol_keeps_its_path() {
+    let (m, _, errs) = run("@derive(std::fmt::Display) record P { x: i64 }", Config::default());
+    assert!(errs.is_empty(), "{errs:?}");
+    assert_eq!(derived(&m), vec![("std::fmt::Display".into(), "P".into(), vec![], vec![])]);
 }
 
 /// A `@cfg`-omitted record derives nothing, because it is gone before the derive pass runs.
 #[test]
 fn a_dropped_record_derives_nothing() {
     let (m, _, errs) = run(
-        r#"@cfg("windows") @derive("Display") record P { x: i64 }"#,
+        r#"@cfg(windows) @derive(Display) record P { x: i64 }"#,
         Config::default(),
     );
     assert!(errs.is_empty(), "{errs:?}");
@@ -198,7 +242,7 @@ fn a_dropped_record_derives_nothing() {
 
 #[test]
 fn derive_is_only_for_a_record() {
-    let (_, _, errs) = run(r#"@derive("Display") fn f() {}"#, Config::default());
+    let (_, _, errs) = run(r#"@derive(Display) fn f() {}"#, Config::default());
     assert!(errs.iter().any(|e| e.message.contains("not a fn")), "{errs:?}");
 }
 
@@ -212,7 +256,7 @@ fn derive_needs_an_argument() {
 /// as "no impl" against a call site that looks perfectly correct.
 #[test]
 fn an_underivable_protocol_is_an_error() {
-    let (m, _, errs) = run(r#"@derive("Serialize") record P { x: i64 }"#, Config::default());
+    let (m, _, errs) = run(r#"@derive(Serialize) record P { x: i64 }"#, Config::default());
     assert!(errs.iter().any(|e| e.message.contains("cannot derive `Serialize`")), "{errs:?}");
     assert!(derived(&m).is_empty());
 }
