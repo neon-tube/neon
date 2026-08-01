@@ -32,9 +32,9 @@ pub struct Program {
     /// The runtime symbols of natives declared `@pure`. A native not in this set is
     /// effectful; see the `@pure` processor in `expand.rs` for why that is the default.
     pub pure_natives: std::collections::HashSet<String>,
-    /// Functions declared `@inline`, by name. Codegen emits these `static inline
-    /// __attribute__((always_inline))` so the C compiler cannot decline: a plain hint
-    /// measurably does not move gcc on the wrappers this exists for.
+    /// Functions declared `@inline`, by name. Codegen emits these `NEON_INLINE` -- the
+    /// runtime's spelling of a forced inline -- so the C compiler cannot decline: a plain
+    /// hint measurably does not move gcc on the wrappers this exists for.
     pub inlined: std::collections::HashSet<String>,
 }
 

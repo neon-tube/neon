@@ -189,11 +189,11 @@ fn signature(types: &TypeTable, f: &Func, inlined: bool) -> String {
         })
         .collect();
     let params = if params.is_empty() { "void".to_string() } else { params.join(", ") };
-    // `static inline` as well as the attribute: `always_inline` on an externally visible
-    // function still forces an out-of-line copy to exist, and gcc warns when it cannot
-    // reconcile the two. Internal linkage is correct here anyway -- the whole program is
-    // one translation unit, so nothing outside it can call these.
-    let qual = if inlined { "static inline __attribute__((always_inline)) " } else { "" };
+    // `NEON_INLINE` rather than the GNU attribute spelled out: it carries `static` and the
+    // `inline` keyword along with the force, because MSVC's `__forceinline` *is* `inline`
+    // and cannot be written beside it. `neon/portability.h` holds the three spellings; see
+    // it for why the storage class belongs inside the macro rather than beside it.
+    let qual = if inlined { "NEON_INLINE " } else { "" };
     format!("{qual}{} {}({})", fn_ret_type(types, f), mangle(&f.name), params)
 }
 
