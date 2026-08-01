@@ -2436,8 +2436,16 @@ fn c_string(s: &str) -> String {
             b'\t' => out.push_str("\\t"),
             b'\r' => out.push_str("\\r"),
             0x20..=0x7e => out.push(b as char),
+            // OCTAL, not hex, and the difference is a miscompile. A C hex escape has no
+            // length limit — it eats every hex digit that follows — so `"\x01" "a"`
+            // written as `\x01a` is ONE character, `0x1a`, and the literal is a byte
+            // shorter than the length handed to `neon_str_lit` beside it. `"\x01a"`
+            // printed `1a 00`. An octal escape is capped at three digits, so `\001`
+            // ends where it is written whatever follows it. This file already reasons
+            // about maximal munch for `mangle`; the string literals had the same hazard
+            // and not the same care.
             _ => {
-                let _ = write!(out, "\\x{b:02x}");
+                let _ = write!(out, "\\{b:03o}");
             }
         }
     }

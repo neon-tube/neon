@@ -1,0 +1,33 @@
+// A C hex escape has NO length limit — it consumes every hex digit that follows — so a
+// non-printable byte emitted as `\xNN` merges with the next character when that character
+// is itself a hex digit. `"\x01a"` became the single byte `0x1a`, one byte shorter than
+// the length passed to `neon_str_lit` beside it, and printing it walked off the end of
+// the literal: `01 61` in, `1a 00` out. Octal escapes are capped at three digits and end
+// where they are written.
+//
+// Each case compares a literal against the same bytes built at RUN TIME, which is what
+// makes this a test. `byte_len` alone would not catch it: the length is handed to
+// `neon_str_lit` beside the data and stayed correct while the data was destroyed.
+
+use std::io;
+use std::string;
+
+fn same(a: str, b: str) -> str {
+    if a == b { "same" } else { "different" }
+}
+
+fn main() {
+    // The original repro: 0x01 then `a`.
+    io::println(same("\x01a", string::concat("\x01", "a")));
+    // Digits are hex digits too.
+    io::println(same("\x0b7", string::concat("\x0b", "7")));
+    // Uppercase, and a run of them.
+    io::println(same("\x02ABCDEF", string::concat("\x02", "ABCDEF")));
+    // A multi-byte character is a run of escapes, and its last byte is exposed the same
+    // way: `é` is c3 a9, and a following `a` would extend that escape past a byte.
+    io::println(same("éa", string::concat("é", "a")));
+    // A non-hex-digit neighbour was always fine, and must stay fine.
+    io::println(same("\x01z", string::concat("\x01", "z")));
+    // The length must still agree with the data.
+    io::println(to_string(string::byte_len("\x01a")));
+}
