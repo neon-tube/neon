@@ -350,6 +350,33 @@ arms' JSON projections be pairwise disjoint, and reject as a compile error when 
 
 ## Later — not now
 
+### 17. `std::path` is POSIX-only, and `@cfg` is the mechanism that would fix it
+
+`std::path`'s own header says it is wrong for Windows paths and does not pretend
+otherwise. `@cfg` is what it wants — `all`/`any`/`not` all parse, a malformed condition is
+an error rather than a silent drop, and the pass reaches methods and nested mods
+(`compiler/src/expand.rs`, tests in `expand/tests.rs`). Two things stand in the way, and
+the first is a trap rather than a gap:
+
+1. **The driver expands the user's module only** (`cli/src/frontend.rs:83`); the stdlib is
+   parsed by `stdlib::parse_from` and never runs through `expand`. So a `@cfg("windows")`
+   written in `std::path` today is **silently ignored** — the annotation is dropped and the
+   branch it guards is compiled in on every platform. `@runtime`/`@pure` still work there
+   only because their readers go to the AST rather than to `Meta`. `docs/design/annotations.md`
+   records this as looking like an omission rather than a decision, and it is the whole of
+   what "make `@cfg` usable for platform-specific stdlib code" means.
+
+2. **The keys are the HOST, not the target.** `Config::with([std::env::consts::OS,
+   std::env::consts::ARCH])` is where the *compiler* is running. That is harmless while
+   there is no cross-compilation, and stops being harmless the moment there is: a program
+   built on Linux for Windows would take every `@cfg("linux")` branch. The Windows runtime
+   work makes this live rather than hypothetical — the runtime already cross-compiles under
+   mingw-w64 — so whoever adds `--target` owns this line too, and the two must agree or
+   `@cfg` becomes a second, quieter source of truth about the platform.
+
+Do 1 before writing a single `@cfg` in the stdlib, because until it lands the failure mode
+is a silently wrong program rather than an error.
+
 ### 18. Model-check the compiler with Kani
 
 The runtime has CBMC models (`runtime/models/`, rules in its README). The compiler is Rust
