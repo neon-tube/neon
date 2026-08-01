@@ -1,11 +1,19 @@
 #include "libneon_rt.h"
 
+#include "platform.h"
+
 #include <stdlib.h>
 
 // ---- lifecycle ----
 
 void neon_rt_init(void) {
-    // Nothing yet; a hook for allocator/setup once there is any.
+    // The standard streams, unmodified. A Windows CRT opens them in text mode, so every
+    // `\n` `println` writes would leave the process as `\r\n` -- one more byte than the
+    // program produced, which changes what a pipe reads and what a golden file matches.
+    // The rest of the runtime writes bytes (`neon_io_writev` goes to a descriptor opened
+    // `_O_BINARY`), and stdout should not be the one stream that disagrees. A no-op
+    // everywhere else.
+    neon_plat_stdio_binary();
 }
 
 void neon_retain(neon_header* h) {

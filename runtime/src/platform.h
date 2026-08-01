@@ -1,0 +1,215 @@
+#ifndef NEON_PLATFORM_H
+#define NEON_PLATFORM_H
+
+// The one place the runtime names an operating system.
+//
+// Everything below is a POSIX call that Windows either spells differently or does not have
+// at all. It is deliberately a single seam rather than an `#ifdef` at each call site: the
+// interesting code -- the resume-after-a-short-write loop, the grow-and-read loop -- is the
+// same on both systems and is written once, in `file.c`, against these.
+//
+// The contract is POSIX's, because that is the one the callers were written to: a failing
+// call returns -1 with `errno` set, and `errno` is what travels back to Neon as `IoError`.
+// Windows' CRT sets `errno` for all of these, so the failure channel needs no translation
+// even where the call does.
+//
+// Not installed, like `internal.h`: generated C never sees this file, and nothing here is
+// part of the ABI.
+
+#include "neon/portability.h" // NEON_NORETURN
+
+#include <errno.h>
+#include <stddef.h>
+#include <stdint.h>
+
+// A count of bytes transferred, or -1. `ssize_t` is POSIX and has no Windows spelling;
+// `int64_t` says the same thing and is the width the callers already work in (`fd` and the
+// error codes are `int64_t` all the way out to Neon).
+typedef int64_t neon_ssize;
+
+// `mode` for `neon_plat_open`, matching what `neon_io_open` takes from Neon.
+#define NEON_OPEN_READ 0
+#define NEON_OPEN_WRITE 1
+#define NEON_OPEN_APPEND 2
+
+#ifdef _WIN32
+
+#include <fcntl.h>
+#include <io.h>
+#include <limits.h>
+#include <process.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/stat.h>
+#include <windows.h>
+
+// No `writev`, so the vector type is ours. The field names are POSIX's because on the other
+// branch this *is* `struct iovec`, which is what lets `file.c` be written once.
+typedef struct neon_iovec {
+    void* iov_base;
+    size_t iov_len;
+} neon_iovec;
+
+// Windows' narrow file APIs decode their path in the process's ANSI code page, not UTF-8.
+// A Neon `str` is UTF-8, so a path with any byte over 127 would open a different file --
+// silently, and only for the users whose filenames are not ASCII. Widening to UTF-16 and
+// using the `_w` entry points is the only way to pass the path through unchanged.
+//
+// The caller frees. NULL means failure with `errno` set, which is the same channel the
+// calls themselves use.
+static inline wchar_t* neon_plat_widen(const char* utf8) {
+    int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8, -1, NULL, 0);
+    if (n <= 0) {
+        errno = EILSEQ; // not valid UTF-8, so it names no file
+        return NULL;
+    }
+    wchar_t* w = (wchar_t*)malloc((size_t)n * sizeof(wchar_t));
+    if (w == NULL) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8, -1, w, n) <= 0) {
+        free(w);
+        errno = EILSEQ;
+        return NULL;
+    }
+    return w;
+}
+
+static inline int neon_plat_open(const char* path, int mode) {
+    // `_O_BINARY` on every mode, and it is not optional: without it the CRT translates
+    // LF to CRLF on write and back on read, so a program that writes a byte count reads
+    // a different one back, and anything that is not text is corrupted outright. Neon's
+    // file API is bytes -- `read_all` returns a `str` measured in bytes -- so translation
+    // would be a lie about what was on disk.
+    int flags = mode == NEON_OPEN_READ ? (_O_RDONLY | _O_BINARY)
+                : mode == NEON_OPEN_WRITE
+                    ? (_O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY)
+                    : (_O_WRONLY | _O_CREAT | _O_APPEND | _O_BINARY);
+    wchar_t* w = neon_plat_widen(path);
+    if (w == NULL) {
+        return -1;
+    }
+    int fd = _wopen(w, flags, _S_IREAD | _S_IWRITE);
+    free(w);
+    return fd;
+}
+
+static inline int neon_plat_close(int fd) {
+    return _close(fd);
+}
+
+static inline neon_ssize neon_plat_read(int fd, void* buf, size_t n) {
+    // `_read` counts in `unsigned int`. A short read is not an error to any caller here --
+    // `read_all` loops until it sees zero -- so clamping is a smaller read, not a failure.
+    if (n > (size_t)INT_MAX) n = (size_t)INT_MAX;
+    return _read(fd, buf, (unsigned int)n);
+}
+
+// One `writev`'s worth of work, as a sequence of `_write`s. Windows has no gathering write
+// on a CRT descriptor, so the pieces do reach the kernel separately here -- but they still
+// reach it without being concatenated into a temporary, which is the ownership property
+// `neon_io_writev` is built on.
+//
+// The return is `writev`'s: bytes actually transferred, which may be short, and the caller
+// resumes from there. Stopping at the first short `_write` rather than pressing on keeps
+// that resume point exact.
+static inline neon_ssize neon_plat_writev(int fd, neon_iovec* v, int n) {
+    neon_ssize total = 0;
+    for (int i = 0; i < n; i++) {
+        size_t len = v[i].iov_len;
+        if (len > (size_t)INT_MAX) len = (size_t)INT_MAX;
+        int got = _write(fd, v[i].iov_base, (unsigned int)len);
+        if (got < 0) {
+            return total > 0 ? total : -1; // a partial write already made progress
+        }
+        total += got;
+        if ((size_t)got < v[i].iov_len) {
+            break;
+        }
+    }
+    return total;
+}
+
+static inline int neon_plat_exists(const char* path) {
+    wchar_t* w = neon_plat_widen(path);
+    if (w == NULL) {
+        return -1;
+    }
+    int r = _waccess(w, 0); // 0 == F_OK
+    free(w);
+    return r;
+}
+
+static inline int neon_plat_remove(const char* path) {
+    wchar_t* w = neon_plat_widen(path);
+    if (w == NULL) {
+        return -1;
+    }
+    int r = _wremove(w);
+    free(w);
+    return r;
+}
+
+// The standard streams carry program output verbatim. The CRT opens them in text mode, so
+// every `\n` a Neon program prints would leave as `\r\n` -- which changes the bytes a test
+// compares and the length a pipe downstream reads. `println` writing one byte more than it
+// was given is not a platform convention worth honouring.
+static inline void neon_plat_stdio_binary(void) {
+    _setmode(_fileno(stdout), _O_BINARY);
+    _setmode(_fileno(stderr), _O_BINARY);
+}
+
+NEON_NORETURN static inline void neon_plat_exit_now(int code) {
+    _exit(code);
+}
+
+#else
+
+#include <sys/uio.h>
+#include <unistd.h>
+
+#include <fcntl.h>
+#include <stdio.h> // remove
+
+typedef struct iovec neon_iovec;
+
+static inline int neon_plat_open(const char* path, int mode) {
+    int flags = mode == NEON_OPEN_READ ? O_RDONLY
+                : mode == NEON_OPEN_WRITE
+                    ? (O_WRONLY | O_CREAT | O_TRUNC)
+                    : (O_WRONLY | O_CREAT | O_APPEND);
+    return open(path, flags, 0666);
+}
+
+static inline int neon_plat_close(int fd) {
+    return close(fd);
+}
+
+static inline neon_ssize neon_plat_read(int fd, void* buf, size_t n) {
+    return read(fd, buf, n);
+}
+
+static inline neon_ssize neon_plat_writev(int fd, neon_iovec* v, int n) {
+    return writev(fd, v, n);
+}
+
+static inline int neon_plat_exists(const char* path) {
+    return access(path, F_OK);
+}
+
+static inline int neon_plat_remove(const char* path) {
+    return remove(path);
+}
+
+// Nothing to do: a POSIX stream never translates.
+static inline void neon_plat_stdio_binary(void) {
+}
+
+NEON_NORETURN static inline void neon_plat_exit_now(int code) {
+    _exit(code);
+}
+
+#endif
+
+#endif
