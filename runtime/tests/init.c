@@ -8,9 +8,10 @@
 // registers every test through the same attribute, so a translation unit that could not use
 // it could not define a test either; wrapping it here would suggest this file is the thing
 // standing between the suite and a compiler that lacks it, and it is not. mingw-w64's gcc
-// and clang both have it, and so does clang-cl — which is tinyunit's answer for Windows
-// toolchains, rather than a `#pragma section(".CRT$XCU")` spelling of the same idea. cl.exe
-// proper cannot compile a tinyunit test file at all; tinyunit `#error`s there, on purpose.
+// and clang both have it, and so does clang-cl. cl.exe does not, and tinyunit's `TEST` does
+// not need it to: it plants a pointer in `.CRT$XCU` there instead. So this line, not that
+// macro, is what would have to grow an MSVC spelling before this suite could build under
+// cl.exe — the opposite of what an earlier version of this comment claimed.
 
 #include "libneon_rt.h"
 

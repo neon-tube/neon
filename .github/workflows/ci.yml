@@ -124,10 +124,13 @@ jobs:
   # death test whose body is not deterministic up to the site would diverge here and not on
   # POSIX. Every one of ours is a one-liner.
   #
-  # MSVC does not build this suite and is not asked to: tinyunit registers tests through
-  # `__attribute__((constructor))` and `#error`s without it, so cl.exe cannot compile a test
-  # file at all. Its answer is clang-cl, which has the attribute. That is why the MSVC step
-  # below stops at the archive — not the fork question, which is settled.
+  # The MSVC step below stops at the archive, and tinyunit is NOT the reason. tinyunit
+  # builds and passes under cl.exe — it plants a pointer in `.CRT$XCU` where GNU compilers
+  # get `__attribute__((constructor))`, and its own CI runs four MSVC jobs green. What is
+  # unproven is whether *this* runtime's sources and this repo's CMake branch compile there,
+  # which is exactly what that step exists to find out. If it goes green, adding
+  # `-DNEON_RT_TESTS=ON` and a `ctest` to it is the next step and nothing in tinyunit stands
+  # in the way.
   runtime-windows:
     runs-on: windows-latest
     steps:

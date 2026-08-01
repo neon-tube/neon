@@ -109,13 +109,15 @@ endif()
 # mingw-w64 targets Windows with a GNU driver, so it takes the GNU branch -- the split here
 # is on the compiler, not on the operating system, and `MSVC` is exactly that test.
 #
-# `MSVC` is true for anything driving the `cl` command line, which includes clang-cl, and
-# that is the reason to keep this branch rather than the reason to distrust it: clang-cl is
-# the only MSVC-ABI toolchain that can build the *test suite*, because tinyunit registers
-# tests through `__attribute__((constructor))` and clang-cl has it while cl.exe does not.
-# The `NEON_MSVC` macros in `include/neon/portability.h` deliberately do NOT fire for
-# clang-cl -- it takes the GNU spellings there -- so this branch and that header answer two
-# different questions and are meant to disagree about clang-cl.
+# `MSVC` is true for anything driving the `cl` command line, which includes clang-cl. The
+# `NEON_MSVC` macros in `include/neon/portability.h` deliberately do NOT fire for clang-cl
+# -- it takes the GNU spellings there -- so this branch and that header answer two different
+# questions and are meant to disagree about clang-cl. That disagreement is the trap here;
+# neither is wrong.
+#
+# Both MSVC-ABI toolchains are live targets for the test suite, not just clang-cl: tinyunit
+# registers tests under cl.exe too, through `.CRT$XCU` rather than a constructor attribute.
+# What is untested is this runtime under cl.exe, which the CI job says out loud.
 if(MSVC)
     # `_CRT_SECURE_NO_WARNINGS`: MSVC deprecates `strerror` (and friends) in favour of its
     # own `_s` variants, at a level `/WX` turns into an error. `neon_io_strerror` renders a
