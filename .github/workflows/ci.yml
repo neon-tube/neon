@@ -136,11 +136,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # `make` is in this list because cmake's "Unix Makefiles" generator looks for a
+      # program called `make`, and msys2 installs none by default: the first run of this job
+      # failed at configure with "unable to find a build program". `mingw-w64-x86_64-make`
+      # would not have fixed it -- that one is named `mingw32-make`.
       - uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
           update: false
-          install: mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake
+          install: mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake make
 
       # `-DCMAKE_BUILD_TYPE=None` and nothing else, matching what `runtime/build.rs` does:
       # the variants carry hand-picked flags and cmake must not inject its own. The
