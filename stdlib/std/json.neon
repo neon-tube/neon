@@ -1,0 +1,178 @@
+// JSON: a value type, a protocol that produces one, and a renderer.
+//
+// `Json` is an ordinary union, not an opaque handle, so a document is built and taken
+// apart with the language's own tools -- `match j { is str => .. }` -- and needs no
+// accessor API. That it is recursive is the whole shape of the format, and `mu type` is
+// how the language spells it.
+//
+// Numbers are `i64 | f64` rather than JSON's single double. The format says "number" and
+// means a double, but a language with an `i64` that rendered `1` as `1.0` -- or, worse,
+// silently lost precision above 2^53 -- would be lying about the value it was handed.
+// Rendering keeps them distinct; a reader that wants one kind converts.
+//
+// Encoding is `ToJson`, and it is deliberately NOT a format-generic `Serialize`. Serde's
+// genericity comes from a `Serializer` type parameter threaded through every impl, which
+// buys one derive across many formats; here it would buy nothing, because monomorphisation
+// means there is no dictionary to share and there is one format. If a second format ever
+// arrives, `impl[T] ToJson for T where T: Serialize` re-expresses this in terms of a
+// generic protocol without breaking a single caller.
+//
+// What is not here yet: decoding. `FromJson` needs dispatch on the *expected* type rather
+// than on an argument -- the checker already does this, see `dispatch.rs` -- and the union
+// arm-selection obligation recorded in TODO.md. Encode first.
+
+use std::collections::list;
+use std::collections::map;
+use std::string;
+
+// A JSON document. Every arm is a type you already have, so `1.5`, `"hi"` and `null` are
+// `Json` values with no wrapping step.
+mu type Json = null | bool | i64 | f64 | str | List[Json] | Map[str, Json]
+
+// How a type renders as JSON. One method, and the value it returns is a `Json` rather
+// than text: composing documents is what the encoder does most, and composing *strings*
+// would mean re-parsing to nest.
+protocol ToJson for T {
+    fn to_json(v: T) -> Json
+}
+
+// The primitives are already `Json` arms, so their impls are the identity. They exist so
+// that a generic body with `where T: ToJson` can call `to_json` on a field of type `T`
+// whatever `T` turns out to be -- without them the bound is unsatisfiable for exactly the
+// types most records are made of.
+impl ToJson for bool { fn to_json(v: bool) -> Json { v } }
+impl ToJson for i64 { fn to_json(v: i64) -> Json { v } }
+impl ToJson for f64 { fn to_json(v: f64) -> Json { v } }
+impl ToJson for str { fn to_json(v: str) -> Json { v } }
+
+impl[T] ToJson for List[T] where T: ToJson {
+    fn to_json(v: List[T]) -> Json {
+        let out: List[Json] = [];
+        for x in v {
+            out = list::push(out, to_json(x));
+        };
+        out
+    }
+}
+
+// Only `str` keys. JSON object keys are strings, and a `Map[i64, V]` that quietly
+// stringified its keys would not round-trip -- so that is a conversion the caller makes
+// on purpose rather than one this impl makes silently.
+impl[V] ToJson for Map[str, V] where V: ToJson {
+    fn to_json(v: Map[str, V]) -> Json {
+        let out: Map[str, Json] = map::new[str, Json]();
+        for k in map::keys(v) {
+            out = map::set(out, k, to_json(v[k]));
+        };
+        out
+    }
+}
+
+// An object from its fields, in one call. This is the shape `@derive(ToJson)` generates
+// against: a derive that emitted a `map::new` and one `map::set` per field would work, but
+// it would need `std::collections::map` in scope in the *user's* module to do it, and a
+// generated body that depends on the author's imports is a generated body that breaks on
+// someone else's file.
+fn object(fields: List[(str, Json)]) -> Json {
+    let out: Map[str, Json] = map::new[str, Json]();
+    for f in fields {
+        let (name, v) = f;
+        out = map::set(out, name, v);
+    };
+    out
+}
+
+// Compact JSON text: no spaces, no trailing newline.
+//
+// Object keys are emitted in sorted order. A `Map` is unordered -- `keys` walks the hash
+// table, and the same map built two ways can walk differently -- so *some* order has to be
+// imposed for the output to be a function of the value. Sorted is the one that is stable
+// across runs, across builds, and under a rehash; insertion order is not available to
+// recover here, and field order would only be recoverable for derived records anyway.
+fn stringify(j: Json) -> str {
+    match j {
+        is null => "null",
+        is bool => if j { "true" } else { "false" },
+        is i64 => to_string(j),
+        is f64 => to_string(j),
+        is str => quote(j),
+        is List[Json] => {
+            let parts: List[str] = [];
+            for x in j {
+                parts = list::push(parts, stringify(x));
+            };
+            let inner = string::join(parts, ",");
+            "[#{inner}]"
+        },
+        is Map[str, Json] => {
+            let parts: List[str] = [];
+            for k in list::sort(map::keys(j)) {
+                let v = stringify(j[k]);
+                let key = quote(k);
+                parts = list::push(parts, "#{key}:#{v}");
+            };
+            let inner = string::join(parts, ",");
+            "{#{inner}}"
+        },
+    }
+}
+
+// `s` as a quoted JSON string literal, escapes and all. Public because rendering a string
+// as JSON is useful without building a document around it.
+//
+// Byte-oriented, like the rest of `std::string`. A multi-byte UTF-8 character passes
+// through as its bytes, which is what JSON wants -- the format is UTF-8 and only requires
+// escaping for `"`, `\` and the C0 controls. Invalid UTF-8 in, invalid UTF-8 out: this
+// does not validate, and `str` in this language does not either.
+fn quote(s: str) -> str {
+    let parts: List[str] = ["\""];
+    let n = string::byte_len(s);
+    let i = 0;
+    while i < n {
+        // Cannot throw: `i < n` is `byte_at`'s own bound, checked one line up.
+        let b = try! string::byte_at(s, i);
+        parts = list::push(parts, esc::byte(b, try! string::char_at(s, i)));
+        i = i + 1;
+    };
+    parts = list::push(parts, "\"");
+    string::join(parts, "")
+}
+
+internal mod esc {
+    // The escape for one byte, or the byte itself when none is needed. `c` is the byte as
+    // a one-byte string, already sliced by the caller, so the common path is a return
+    // rather than a re-slice.
+    //
+    // The two-character forms are the ones JSON names; every other C0 control takes the
+    // `\u00XX` form. Codes above 0x7F are *not* escaped: they are UTF-8 continuation and
+    // lead bytes, and escaping them per byte would produce `Ã` for a byte that is
+    // half a character -- text no decoder would reassemble.
+    fn byte(b: i64, c: str) -> str {
+        if b == 34 {
+            "\\\""
+        } else if b == 92 {
+            "\\\\"
+        } else if b == 10 {
+            "\\n"
+        } else if b == 13 {
+            "\\r"
+        } else if b == 9 {
+            "\\t"
+        } else if b == 8 {
+            "\\b"
+        } else if b == 12 {
+            "\\f"
+        } else if b < 32 {
+            let hi = hex(b / 16);
+            let lo = hex(b % 16);
+            "\\u00#{hi}#{lo}"
+        } else {
+            c
+        }
+    }
+
+    fn hex(v: i64) -> str {
+        // Cannot throw: every caller passes a nibble, and there are sixteen digits.
+        try! string::char_at("0123456789abcdef", v)
+    }
+}

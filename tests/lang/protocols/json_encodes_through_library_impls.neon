@@ -1,0 +1,61 @@
+// `std::json` as the serialization roadmap's payload: a `Json` value that is an ordinary
+// recursive union, a `ToJson` protocol whose recursive cases are library impls, and a
+// renderer that takes the union apart with `match`.
+//
+// The container impls are the litmus shape `library_impl_for_a_container.neon` proved for
+// `Display`, now carrying a real workload: `impl[T] ToJson for List[T] where T: ToJson`
+// needs a generic head matched against the receiver, the bound discharged against what the
+// head bound `T` to, and one lowered body per element type -- and `[[1], [2, 3]]` discharges
+// the bound against `List[i64]`, which the same impl covers.
+//
+// This file is also the repro that graduated TODO.md's lead L5. `to_json`'s return type is
+// the recursive `Json`, which mentions no `T`, so every monomorphisation used to re-derive
+// it through `substitute`'s reserve/define cycle and mint a FRESH TyId for the same type.
+// `ctype.rs` keys C structs on `TyId`, so the backend emitted several byte-identical structs
+// and gcc rejected the assignment between them. `Types::mentions_var` is the fix: a
+// substitution that binds no variable occurring in the type returns the type unchanged.
+
+use std::io;
+use std::json;
+use std::collections::map;
+
+fn main() {
+    // Every arm of the union renders.
+    io::println(json::stringify(null));
+    io::println(json::stringify(true));
+    io::println(json::stringify(42));
+    io::println(json::stringify(1.5));
+    io::println(json::stringify("hi"));
+
+    // `i64` and `f64` stay distinct arms rather than collapsing to JSON's single double.
+    // 2^53+1 is the case that shows why: it renders exactly as an `i64`, and a double
+    // cannot hold it -- as an `f64` it would come out 9007199254740992.
+    //
+    // The reverse does not show up in the output: `to_string` renders `1.0` as `1`, so an
+    // integral f64 is indistinguishable from an i64 once printed. That is `Display for f64`
+    // and not this module, and both spellings are valid JSON numbers.
+    io::println(json::stringify(json::to_json(9007199254740993)));
+    io::println(json::stringify(json::to_json(0.5)));
+
+    // The library impls, including the nested case where the bound is discharged against
+    // `List[i64]` and answered by this same impl.
+    io::println(json::stringify(json::to_json([1, 2])));
+    io::println(json::stringify(json::to_json(["a", "b"])));
+    io::println(json::stringify(json::to_json([[1], [2, 3]])));
+
+    // A map encodes through its value impl. Keys are sorted, so the output is a function of
+    // the value rather than of the hash order `keys` happens to walk.
+    let m = map::set(map::set(map::new[str, i64](), "b", 2), "a", 1);
+    io::println(json::stringify(json::to_json(m)));
+
+    // Escaping: the two-character forms JSON names, `\u00XX` for any other C0 control, and
+    // multi-byte UTF-8 straight through -- escaping it per byte would emit half a character.
+    io::println(json::quote("quote\" back\\ tab\t nl\n cr\r"));
+    io::println(json::quote("ctrl\x01\x1f done"));
+    io::println(json::quote("caf\u{e9} \u{1f600}"));
+
+    // An empty document of each shape.
+    let none: List[json::Json] = [];
+    io::println(json::stringify(none));
+    io::println(json::stringify(json::object([])));
+}

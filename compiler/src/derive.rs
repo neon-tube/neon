@@ -18,8 +18,8 @@
 //! is numbered with the rest of the module. Nothing here has to know about expression ids.
 
 use crate::ast::{
-    Annotation, Block, Decl, DeclKind, Expr, ExprId, ExprKind, FnDecl, ImplDecl, Module, Param,
-    RecordDecl, StrPart, TypeSpec, TypeSpecKind, WhereClause,
+    Annotation, Block, Decl, DeclKind, Elem, Expr, ExprId, ExprKind, FnDecl, ImplDecl, Module,
+    Param, RecordDecl, StrPart, TypeSpec, TypeSpecKind, WhereClause,
 };
 use crate::lexer::Span;
 
@@ -38,7 +38,7 @@ use crate::lexer::Span;
 /// generated impl rather than a silent wrong answer, which is the same deal a hand-written
 /// impl of the wrong protocol gets.
 pub fn can_derive(path: &[String]) -> bool {
-    matches!(path.last().map(String::as_str), Some("Display"))
+    matches!(path.last().map(String::as_str), Some("Display") | Some("ToJson"))
 }
 
 /// Append a generated impl for every `@derive` in the module, recursing into nested mods.
@@ -73,9 +73,25 @@ fn derive_decls(decls: &mut Vec<Decl>) {
 /// Dispatch on the last segment, for the reason `can_derive` gives, and hand the whole path
 /// to the generator so the impl is written for the protocol the author named rather than for
 /// the compiler's idea of where it lives.
+///
+/// The path is carried VERBATIM. A bare `@derive(ToJson)` in a module that never imported
+/// `ToJson` is "unknown protocol `ToJson`", which is exactly what a hand-written
+/// `impl ToJson for P` would say there — a protocol name resolves the way every other name
+/// resolves, through the author's imports, and `@derive` gets no private route. So the three
+/// spellings are the three you would use anywhere else:
+///
+/// ```text
+/// use std::json;             @derive(json::ToJson)
+/// use std::json::ToJson;     @derive(ToJson)
+///                            @derive(std::json::ToJson)
+/// ```
+///
+/// `Display` needs none of them only because it is in the prelude, which is a fact about the
+/// prelude and not a privilege of the derive.
 fn derive_one(path: &[String], r: &RecordDecl, ann: &Annotation, span: &Span) -> Option<Decl> {
     match path.last().map(String::as_str) {
         Some("Display") => Some(display_impl(path, r, ann, span)),
+        Some("ToJson") => Some(to_json_impl(path, r, ann, span)),
         // `expand` rejected everything else before we got here.
         _ => None,
     }
@@ -165,6 +181,110 @@ fn named(name: &str, args: Vec<TypeSpec>, span: &Span) -> TypeSpec {
         kind: TypeSpecKind::Named { path: vec![name.to_string()], args },
         span: span.clone(),
     }
+}
+
+/// `impl[T] ToJson for P[T] where T: ToJson { fn to_json(v: P[T]) -> std::json::Json { .. } }`
+///
+/// The body is one call:
+///
+/// ```text
+/// std::json::object([("x", to_json(v.x)), ("y", to_json(v.y))])
+/// ```
+///
+/// which is the `Display` trick in the shape a structured document needs. There, each field
+/// became an interpolation hole and the hole did the dispatch; here each field becomes an
+/// ordinary `to_json` call and dispatch does the same work. So this pass again knows nothing
+/// about field types: a nested derived record, a `List[T]` with a library impl and a
+/// primitive all encode through whatever impl covers them, and a field whose type has no
+/// `ToJson` is a dispatch error naming that type.
+///
+/// Field ORDER is not preserved, and cannot be: `object` builds a `Map`, and `stringify`
+/// sorts keys because a map has no order to recover. Emitting fields in declaration order
+/// here would be discarded three lines later. See `std::json`'s header for why sorted is
+/// the honest choice rather than a limitation to work around.
+///
+/// The two support names — the `Json` type and the `object` builder — are written as
+/// ABSOLUTE paths, unlike the protocol, which keeps the author's spelling. The protocol is a
+/// name the author chose and resolution must settle (see `can_derive`); these two are this
+/// pass's own scaffolding, and a generated body that only compiled when the author happened
+/// to `use std::json` would break on someone else's file. Absolute paths resolve with no
+/// import, so `@derive(ToJson)` works in a module that imports nothing.
+fn to_json_impl(protocol: &[String], r: &RecordDecl, ann: &Annotation, span: &Span) -> Decl {
+    let sp = || ann.span.clone();
+    let target = self_type(r, &sp());
+
+    // `[("x", to_json(v.x)), ..]` — one tuple per field, in declaration order. The order is
+    // not load-bearing (see above); it just makes the generated source readable when dumped.
+    let fields: Vec<Elem> = r
+        .fields
+        .iter()
+        .map(|f| {
+            let name = expr(ExprKind::Str(vec![StrPart::Text(f.name.clone())]), &sp());
+            let call = expr(
+                ExprKind::Call {
+                    callee: Box::new(expr(ExprKind::Path(vec!["to_json".to_string()]), &sp())),
+                    generics: vec![],
+                    args: vec![field_of("v", &f.name, &sp())],
+                },
+                &sp(),
+            );
+            Elem::Value(expr(ExprKind::Tuple(vec![name, call]), &sp()))
+        })
+        .collect();
+
+    let call = expr(
+        ExprKind::Call {
+            callee: Box::new(expr(ExprKind::Path(json_path("object")), &sp())),
+            generics: vec![],
+            args: vec![expr(ExprKind::List(fields), &sp())],
+        },
+        &sp(),
+    );
+
+    let body = Block { stmts: vec![], tail: Some(Box::new(call)), span: sp() };
+
+    let method = FnDecl {
+        name: "to_json".to_string(),
+        generics: vec![],
+        params: vec![Param { name: "v".to_string(), ty: target.clone(), span: sp() }],
+        throws: None,
+        ret: Some(TypeSpec {
+            kind: TypeSpecKind::Named { path: json_path("Json"), args: vec![] },
+            span: sp(),
+        }),
+        wheres: vec![],
+        body: Some(body),
+        annotations: vec![],
+    };
+
+    // As in `display_impl`: the bound carries the author's protocol path, so a qualified
+    // `@derive(json::ToJson)` bounds its parameters by the same protocol the impl is for.
+    let bound =
+        TypeSpec { kind: TypeSpecKind::Named { path: protocol.to_vec(), args: vec![] }, span: sp() };
+    let wheres = r
+        .generics
+        .iter()
+        .map(|g| WhereClause { param: g.clone(), bound: bound.clone() })
+        .collect();
+
+    Decl {
+        kind: DeclKind::Impl(ImplDecl {
+            orphan: false,
+            protocol: protocol.to_vec(),
+            generics: r.generics.clone(),
+            target,
+            wheres,
+            methods: vec![method],
+            annotations: vec![],
+        }),
+        span: span.clone(),
+    }
+}
+
+/// A name in `std::json`, spelled absolutely. See `to_json_impl` for why these are not
+/// derived from the author's path the way the protocol is.
+fn json_path(name: &str) -> Vec<String> {
+    vec!["std".to_string(), "json".to_string(), name.to_string()]
 }
 
 fn field_of(base: &str, field: &str, span: &Span) -> Expr {

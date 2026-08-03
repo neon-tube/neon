@@ -168,6 +168,7 @@ match/guards.neon
 match/impossible_arm_on_a_type_parameter.neon
 match/is_sum_type.neon
 match/literal_patterns.neon
+match/narrowed_arm_passes_to_a_generic_fn.neon
 match/narrowed_scrutinee_flows_bare.neon
 match/non_exhaustive_fails.neon
 match/non_exhaustive_null_fails.neon
@@ -226,6 +227,7 @@ protocols/generic_impl_head.neon
 protocols/impl_for_primitive.neon
 protocols/impl_missing_method.neon
 protocols/imported_method_reaches_an_outer_scope.neon
+protocols/json_encodes_through_library_impls.neon
 protocols/library_impl_for_a_container.neon
 protocols/local_name_shadows_protocol_method.neon
 protocols/no_impl_for_receiver.neon
@@ -236,6 +238,7 @@ protocols/two_impls_may_not_overlap_unnested.neon
 protocols/union_receiver_dispatches_by_variant.neon
 records/derive_display.neon
 records/derive_needs_its_fields_displayable.neon
+records/derive_to_json.neon
 records/boxed_record_reaching_a_pointer_cycle.neon
 records/declare_construct_access.neon
 records/generic.neon
@@ -273,6 +276,7 @@ resources/resource_lifecycle.neon
 resources/resource_with_refcounted_payload.neon
 resources/using_holds_a_resource_across_a_region.neon
 strings/an_escape_ends_where_it_is_written.neon
+strings/byte_at.neon
 strings/interpolated_dispatch.neon
 strings/interpolation_basic.neon
 strings/interpolation_display.neon

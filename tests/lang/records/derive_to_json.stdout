@@ -1,0 +1,8 @@
+{"x":1,"y":"hi"}
+{"flag":true,"p":{"x":2,"y":"in"}}
+{}
+{"count":1,"item":7}
+{"count":2,"item":{"x":3,"y":"deep"}}
+{"items":[1,2,3],"name":"h"}
+[{"x":1,"y":"a"},{"x":2,"y":"b"}]
+{"x":0,"y":"say \"hi\"\n"}

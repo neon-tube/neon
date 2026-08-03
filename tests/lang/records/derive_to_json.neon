@@ -1,0 +1,68 @@
+// `@derive(ToJson)` writes the encoder an author could have written: an ordinary
+// `impl ToJson for P`, appended to the module and checked like any other code. It is
+// the second protocol through the derive mechanism after `Display`, and the one that showed
+// the mechanism generalises -- `Display`'s body is an interpolated string, and a structured
+// document needs a different body generator against the same scaffolding.
+//
+// The protocol name in a `@derive` resolves the way every other name resolves -- through
+// this module's imports -- and the derive gets no private route to it. `ToJson` lives in
+// `std::json` rather than in the prelude, so all three spellings below are the ordinary
+// ones, and each is exercised here:
+//
+//     use std::json;             @derive(json::ToJson)
+//     use std::json::ToJson;     @derive(ToJson)
+//                                @derive(std::json::ToJson)
+//
+// A bare `@derive(ToJson)` in a module that imported none of them is "unknown protocol
+// `ToJson`" -- what a hand-written `impl ToJson for P` says in the same module. `Display`
+// needs no import only because it is in the prelude, which is a fact about the prelude and
+// not a privilege of `@derive`.
+//
+// The generated BODY is a different question and does not go through the author's imports:
+// it names `std::json::Json` and `std::json::object` absolutely, because a generated body
+// that compiled only when the author happened to `use std::json` would break on someone
+// else's file.
+//
+// Keys come out SORTED, not in declaration order: the body builds a `Map`, and a map has no
+// order to recover. See `std::json`'s header.
+
+use std::io;
+use std::json;
+use std::json::ToJson;
+
+// Through `use std::json`.
+@derive(json::ToJson)
+record P { x: i64, y: str }
+
+// Through `use std::json::ToJson`, so the bare name resolves. A field whose type is itself
+// derived: the `to_json` call dispatches to P's generated impl.
+@derive(ToJson)
+record Nested { p: P, flag: bool }
+
+// Fully qualified, needing no import at all. Also: no fields is an empty object.
+@derive(std::json::ToJson)
+record Empty {}
+
+// A generic record derives a BOUNDED impl -- `where T: json::ToJson` per parameter -- which
+// is what lets the body call `to_json` on a field of type `T` at all: inside the impl `T` is
+// rigid, so only a bound can answer for it. One impl, a body per instantiation.
+@derive(json::ToJson)
+record Boxed[T] { item: T, count: i64 }
+
+// A field with a library impl rather than a derived one.
+@derive(json::ToJson)
+record Holder { items: List[i64], name: str }
+
+fn main() {
+    io::println(json::stringify(json::to_json(P { x: 1, y: "hi" })));
+    io::println(json::stringify(json::to_json(Nested { p: P { x: 2, y: "in" }, flag: true })));
+    io::println(json::stringify(json::to_json(Empty {})));
+    io::println(json::stringify(json::to_json(Boxed { item: 7, count: 1 })));
+    // Two instantiations of the one derived impl, the second nesting a derived record.
+    io::println(json::stringify(json::to_json(Boxed { item: P { x: 3, y: "deep" }, count: 2 })));
+    io::println(json::stringify(json::to_json(Holder { items: [1, 2, 3], name: "h" })));
+    // The list impl encodes its elements through the derived impl.
+    io::println(json::stringify(json::to_json([P { x: 1, y: "a" }, P { x: 2, y: "b" }])));
+    // Escaping applies to derived field values like any other string.
+    io::println(json::stringify(json::to_json(P { x: 0, y: "say \"hi\"\n" })));
+}

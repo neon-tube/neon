@@ -10,9 +10,9 @@ and in the corpus files the fixes are pinned by.
 
 What remains is of a different kind: one structural gap awaiting infrastructure (§19),
 one language decision (§16), the perf programs, one verification-tooling gap (13c), the
-serialization roadmap (the plan-of-record for finishing dispatch — now down to its last
-item, the record derive), and the deliberately-separate unproven leads and environment
-hazards. Each item still has a repro or a file:line.
+serialization roadmap (the plan-of-record for finishing dispatch — now down to decode, the
+encoder having landed 2026-08-03), and the deliberately-separate unproven leads and
+environment hazards. Each item still has a repro or a file:line.
 
 ---
 
@@ -267,10 +267,14 @@ pipeline, or types that distinguish a drop from a witness release.
 
 ## Serialization — completing protocol dispatch
 
-A stdlib JSON module wants `protocol Serialize`/`Deserialize` with library impls for the
+A stdlib JSON module wants an encode/decode protocol pair with library impls for the
 recursive cases and a derive for records — the serde shape, but resolved statically at
-monomorphisation so there are no dictionaries. None of it is expressible until dispatch is
-finished. The concrete pieces, in order, each closing an item already listed above:
+monomorphisation so there are no dictionaries. None of it was expressible until dispatch was
+finished. The concrete pieces, in order, each closing an item already listed above; items 1-6
+are built, and what remains is decode (item 6's tail).
+
+The pair is `ToJson`/`FromJson` rather than `Serialize`/`Deserialize` — format-specific by
+decision, with the reasoning in item 6.
 
 1. ~~**Lower `Resolution::Switch` and `Resolution::Bound` on a union receiver**~~ —
    **built 2026-07-22** (former items 7 and 7c): a dispatched call on a union receiver
@@ -326,12 +330,56 @@ finished. The concrete pieces, in order, each closing an item already listed abo
    itself calls the pass, because four pipelines parse a module and the only thing they all
    agree on is calling `expand`.
 
-   **What is left for JSON specifically:** `can_derive` answers `Display` and nothing else.
-   `Serialize` needs a *different body generator* — an interpolated string is the right
-   shape for rendering and the wrong one for emitting a structured document — plus the
-   protocol itself. The extension point is one match arm; the body is the work. Note also
-   that the pass, like `@cfg`, never sees stdlib sources (§17), so a `@derive` written in
-   the stdlib is silently ignored today — which a stdlib `Serialize` would immediately need.
+6. ~~**The JSON encoder.**~~ — **built 2026-08-03.** `stdlib/std/json.neon`: a `Json` value
+   (`mu type Json = null | bool | i64 | f64 | str | List[Json] | Map[str, Json]`), a
+   `ToJson` protocol with library impls for the primitives and the recursive cases, a
+   `stringify`/`quote` renderer, and `@derive(ToJson)` as the second protocol through the
+   derive mechanism (`derive.rs::to_json_impl`). Pinned as `records/derive_to_json.neon` and
+   `protocols/json_encodes_through_library_impls.neon`.
+
+   It is `ToJson`, **not** a format-generic `Serialize`, and that was a decision rather than
+   a shortcut. Serde's genericity comes from a `Serializer` type parameter threaded through
+   every impl; here it would need a protocol whose methods accept field values of arbitrary
+   type — a nested higher-order bound, landing exactly on the `Resolution::Bound`
+   specificity limit recorded below — and it would buy nothing, because monomorphisation
+   means there is no dictionary to share and there is one format. `impl[T] ToJson for T
+   where T: Serialize` re-expresses it generically later, on the bounded-impl machinery item
+   4 already built, so the choice forecloses nothing.
+
+   Three things worth knowing, each of which cost something to find:
+
+   - **The derive writes ABSOLUTE paths for its scaffolding** (`std::json::Json`,
+     `std::json::object`) while keeping the author's spelling for the protocol. A generated
+     body that only compiled when the author happened to `use std::json` would break on
+     someone else's file. Fully-qualified paths resolve with no import, which is what makes
+     this work.
+   - **The protocol name resolves like any other name**, through the author's imports; the
+     derive gets no private route to it, and a bare `@derive(ToJson)` in a module that
+     imported nothing is "unknown protocol `ToJson`" — what the equivalent hand-written impl
+     says there. So the spellings are the ordinary three (`use std::json` +
+     `@derive(json::ToJson)`, `use std::json::ToJson` + `@derive(ToJson)`, or a fully
+     qualified `@derive(std::json::ToJson)`), all pinned in the corpus file. Resolving a bare
+     derivable name to the module the compiler knows it lives in was tried and **rejected**:
+     it makes `@derive` a second name resolver, agreeing with the real one only by luck, for
+     the sake of saving an import. `Display` needs no import only because it is in the
+     prelude — a fact about the prelude, not a privilege of the derive.
+
+   Building it also surfaced and fixed two latent middle-end defects: L5 under Unproven
+   leads, which it graduated, and a narrowing/inference gap — a match arm's subject carries
+   the earlier arms' exclusions (`Map[str, Json] & !List[Json]`), and `generic::infer`
+   declined any DNF path with a negative atom, so a narrowed arm could not be passed to
+   *anything* generic. `single_record` now discharges a negated atom it can prove disjoint
+   by nominal identity. Sound but not complete: two structural records, or one nominal at
+   differing arguments, still decline, and those want the emptiness solver `infer` does not
+   carry. Pinned as `match/narrowed_arm_passes_to_a_generic_fn.neon`.
+
+   **What is left is decode.** `FromJson` is `fn from_json(j: Json) -> T`, where the subject
+   appears only in the return, so dispatch is on the *expected* type — which
+   `dispatch.rs:105` already implements (`dispatch_position` finds no parameter mentioning
+   the subject, and `expected` becomes the receiver). That path has **no corpus test**, and
+   `Selection.receiver_pos` is `None` down it, so it is the part most likely to have a hole;
+   encode was built first for exactly that reason. Union decode then carries the extra
+   obligation recorded at the end of this section.
 
 **Litmus test for "done": passed for `Display`/`List`, 2026-08-01.**
 `impl[T] Display for List[T] where T: Display` is expressible as an ordinary library impl
@@ -371,13 +419,14 @@ an error rather than a silent drop, and the pass reaches methods and nested mods
 (`compiler/src/expand.rs`, tests in `expand/tests.rs`). Two things stand in the way, and
 the first is a trap rather than a gap:
 
-1. **The driver expands the user's module only** (`cli/src/frontend.rs:83`); the stdlib is
-   parsed by `stdlib::parse_from` and never runs through `expand`. So a `@cfg(windows)`
-   written in `std::path` today is **silently ignored** — the annotation is dropped and the
-   branch it guards is compiled in on every platform. `@runtime`/`@pure` still work there
-   only because their readers go to the AST rather than to `Meta`. `docs/design/annotations.md`
-   records this as looking like an omission rather than a decision, and it is the whole of
-   what "make `@cfg` usable for platform-specific stdlib code" means.
+1. ~~**The driver expands the user's module only.**~~ — **stale, and it was already fixed
+   when this entry was written.** `stdlib::parse_from` runs `expand` on every stdlib module
+   (`compiler/src/stdlib.rs:58`), at that one assembly point so the cli and the test
+   harnesses cannot disagree; it landed in `bbe55cd`. A stdlib `@cfg` is therefore honoured,
+   a typo'd stdlib annotation is a broken toolchain rather than a silent no-op, and — since
+   `expand` also calls the derive pass (`expand.rs:165`) — a `@derive` written in the stdlib
+   is expanded too. Verified 2026-08-03 by putting a `@derive(Display)` on a stdlib record
+   and calling `to_string` on it from a user program.
 
 2. **The keys are the HOST, not the target.** `Config::with([std::env::consts::OS,
    std::env::consts::ARCH])` is where the *compiler* is running. That is harmless while
@@ -387,8 +436,8 @@ the first is a trap rather than a gap:
    mingw-w64 — so whoever adds `--target` owns this line too, and the two must agree or
    `@cfg` becomes a second, quieter source of truth about the platform.
 
-Do 1 before writing a single `@cfg` in the stdlib, because until it lands the failure mode
-is a silently wrong program rather than an error.
+So the remaining work here is item 2 and `std::path` itself; nothing blocks writing a `@cfg`
+in the stdlib today.
 
 ### 18. Model-check the compiler with Kani
 
@@ -409,15 +458,27 @@ Owner's call on timing; recorded so it is not lost.
 
 Marked as such because nobody built a repro. Worth a pass, not worth asserting.
 (L4 — qualified-path impls never matching — graduated: confirmed real and fixed with the
-identity change.)
+identity change. L5 — duplicate `TyId`s reaching the backend — graduated 2026-08-03:
+confirmed with a repro and fixed, see below.)
 
 - **L1.** `env.rs::satisfies_marker` matches the bare protocol name `"Ord"`, so a user
   `marker Ord` in any module may inherit the built-in rule.
 - **L2.** `ordered.rs:90/165` match bare `"List"`/`"Map"`.
 - **L3.** `repr.rs::variant_rank` collapses five variants into one sort rank used as a
   canonical layout ordering.
-- **L5.** Deferred-op duplicate `TyId`s reaching the backend, where `repr.rs`/`ctype.rs` key
-  on `HashMap<TyId, _>`.
+- ~~**L5.**~~ **Confirmed and fixed 2026-08-03.** The lead named the hazard —
+  `repr.rs`/`ctype.rs` key on `HashMap<TyId, _>`, so two ids for one type are two C structs —
+  but not the source of the duplicates, which was `substitute`. It returned early only on an
+  *empty* substitution, so substituting into a type that mentions none of the bound variables
+  still rebuilt it; interning makes that the identity for an acyclic type, but a recursive one
+  goes through `subst_rec`'s reserve/define and comes back as a fresh id **every call**.
+  `impl[T] ToJson for List[T]`, whose method returns the recursive `mu Json`, therefore minted
+  a distinct `Json` per monomorphisation and gcc rejected the assignment between two
+  byte-identical structs (`incompatible types when assigning to type 'nu2' from type 'nu0'`).
+  Fixed by `Types::mentions_var`, the occurs-check `substitute` was missing; pinned as
+  `protocols/json_encodes_through_library_impls.neon`. Note this was a *latent* defect that
+  needed a generic impl returning a recursive type to surface — the shape the serialization
+  work built first.
 - **L6.** `repr_components` checks `boxed` only on single-atom DNF paths; a multi-atom path
   falls to `record_intersection`, which lays each atom out inline — a second
   non-termination if such a type is constructible.
