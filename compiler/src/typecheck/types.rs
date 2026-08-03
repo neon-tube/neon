@@ -926,11 +926,86 @@ impl Types {
     /// cycle `env.rs` uses to build the recursive type in the first place. Completed
     /// types are memoized, so a shared (but acyclic) subtype is rebuilt once.
     pub fn substitute(&mut self, ty: TyId, subst: &HashMap<NameId, TyId>) -> TyId {
-        if subst.is_empty() {
+        if subst.is_empty() || !self.mentions_var(ty, subst) {
             return ty;
         }
         let mut p = Progress::default();
         self.subst_rec(ty, subst, &mut p)
+    }
+
+    /// Whether substituting `subst` could change `ty` — whether any variable it binds
+    /// occurs anywhere in `ty`'s graph.
+    ///
+    /// `substitute`'s pre-check, and not merely an optimisation. Rebuilding a type that
+    /// mentions none of the substituted variables is the identity *semantically*, but it
+    /// is not the identity on `TyId`s: interning makes the rebuild return the same id for
+    /// an acyclic type, while a recursive one goes through `reserve`/`define` in
+    /// `subst_rec` and comes back as a **fresh id every time**. Two structurally identical
+    /// ids then reach the backend, where `ctype.rs` keys its C structs on `TyId` and so
+    /// emits one struct per id — and a value of the one is not assignable to the other.
+    ///
+    /// That is how a generic impl whose method returns a recursive union
+    /// (`impl[T] ToJson for List[T]`, returning `mu Json = .. | List[Json] | ..`) produced
+    /// `incompatible types when assigning to type 'nu2' from type 'nu0'` for two structs
+    /// with byte-identical bodies: the return mentions no `T`, so every monomorphisation
+    /// minted its own `Json`. Recorded as lead L5 in TODO.md, which this confirms.
+    pub fn mentions_var(&self, ty: TyId, subst: &HashMap<NameId, TyId>) -> bool {
+        if subst.is_empty() {
+            return false;
+        }
+        let mut visited = std::collections::HashSet::new();
+        self.mentions_var_rec(ty, subst, &mut visited)
+    }
+
+    fn mentions_var_rec(
+        &self,
+        ty: TyId,
+        subst: &HashMap<NameId, TyId>,
+        visited: &mut std::collections::HashSet<TyId>,
+    ) -> bool {
+        if !visited.insert(ty) {
+            return false;
+        }
+        let d = self.data(ty);
+        // `has` is semantic membership, so this reads both cases of the variable component
+        // the way `subst_body` writes them: a finite set replaces the members it lists, and
+        // a cofinite one (`any`, and any negated set) unions in the image of every bound
+        // variable that is a member — so a bound variable the set does not exclude is a
+        // change to this type too.
+        let vars = self.atomset_of(d.vars);
+        if subst.keys().any(|n| vars.has(*n)) {
+            return true;
+        }
+        for (pos, neg) in self.rec_bdd.paths(d.records) {
+            for i in pos.iter().chain(&neg) {
+                let a = &self.rec_atoms[*i as usize];
+                if a.fields.iter().any(|&(_, t)| self.mentions_var_rec(t, subst, visited))
+                    || self.mentions_var_rec(a.rest, subst, visited)
+                {
+                    return true;
+                }
+            }
+        }
+        for (pos, neg) in self.tup_bdd.paths(d.tuples) {
+            for i in pos.iter().chain(&neg) {
+                let a = &self.tup_atoms[*i as usize];
+                if a.elems.iter().any(|&t| self.mentions_var_rec(t, subst, visited)) {
+                    return true;
+                }
+            }
+        }
+        for (pos, neg) in self.arrow_bdd.paths(d.arrows) {
+            for i in pos.iter().chain(&neg) {
+                let a = &self.arrow_atoms[*i as usize];
+                if a.params.iter().any(|&t| self.mentions_var_rec(t, subst, visited))
+                    || self.mentions_var_rec(a.throws, subst, visited)
+                    || self.mentions_var_rec(a.ret, subst, visited)
+                {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     fn subst_rec(&mut self, ty: TyId, subst: &HashMap<NameId, TyId>, p: &mut Progress) -> TyId {
