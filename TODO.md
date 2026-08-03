@@ -2,17 +2,62 @@
 
 Everything known-broken or undecided as of 2026-07-22, distilled from six middle-end
 audits, a compiler-wide collapsing-key sweep, the CBMC models and a fuzzing run — and
-then burned down: **the P0 section is empty.** Every known miscompile and
-wrong-program-accepted defect it held is fixed and corpus-pinned; resolved items are
-removed, not struck through, and their write-ups live in the design docs they produced
-(`docs/design/identity.md`, `docs/design/opacity.md`, `docs/design/checked-casts.md`)
-and in the corpus files the fixes are pinned by.
+then burned down. The P0 section was empty from that sweep until 2026-08-03, when the
+narrowing work walked into P1 below; resolved items are removed, not struck through, and
+their write-ups live in the design docs they produced (`docs/design/identity.md`,
+`docs/design/opacity.md`, `docs/design/checked-casts.md`) and in the corpus files the
+fixes are pinned by.
 
-What remains is of a different kind: one structural gap awaiting infrastructure (§19),
+Everything else is of a different kind: one structural gap awaiting infrastructure (§19),
 one language decision (§16), the perf programs, one verification-tooling gap (13c), the
 serialization roadmap (the plan-of-record for finishing dispatch — now down to decode, the
 encoder having landed 2026-08-03), and the deliberately-separate unproven leads and
 environment hazards. Each item still has a repro or a file:line.
+
+---
+
+## P1 — `is` against a structural record type is always false
+
+Found 2026-08-03 while building 13d. This is a **silently wrong answer**, not a decline:
+
+    type Wide   = { v: i64 | str }
+    type Narrow = { v: str }
+
+    fn f(w: Wide) -> str {
+        match w {
+            is Narrow => "narrow",
+            _ => "wide",
+        }
+    }
+
+    f({ v: "x" })   // "wide". Should be "narrow".
+
+`is Narrow` is `TypeSpecKind::Named`, so `lower.rs::type_test` emits `Op::IsVariant` with
+the resolved repr in `tested`. A structural record has no nominal name to compare, and the
+backend's rule for a *concrete* (non-erased) subject is to read `tested` as "not that
+variant" — see the comment at `lower.rs:2668`. For a tuple or arrow spec that rule is right
+and was chosen deliberately (`ConstBool(true)` was the bug it replaced). For a record
+refinement whose discriminator is a field's runtime tag it is simply wrong: the value IS a
+`Narrow`, and answering statically false silently takes the wrong arm.
+
+The corpus does not catch it because the only structural `is` tests are opacity ones
+(`records/opaque_no_structural_test.neon`), where answering false is the DESIRED outcome —
+so the tests that touch this path assert the behaviour that is wrong everywhere else.
+
+What it needs: on a concrete subject, compare field-wise against the tested shape — the
+union tag for a field whose declared repr is a union, and recursively for a nested record —
+rather than falling back to a name comparison that structural types cannot participate in.
+Opacity must keep its current answer, which is the constraint that makes this more than a
+one-liner: `opaque_no_structural_test.neon` and `opaque_no_any_laundering.neon` are the
+tests that must not move.
+
+**This blocks 13d below, and it is why 13d is not built.** 13d's whole premise is a record
+negation that survives pruning, which requires two overlapping record types, which requires
+structural records — so every program that exercises 13d also depends on this test being
+right. Worse, the two compose badly: with 13d's projection in place, a mistested value takes
+the wrong arm and is then *reinterpreted at that arm's repr*, turning a wrong branch into a
+`Map` read as a `List`. A compile error became memory-unsafe garbage. Both halves of 13d
+were written, measured against that, and reverted.
 
 ---
 
@@ -275,16 +320,25 @@ record type:
         }
     }
 
-**Pruning in `Projected::new` is a one-line fix and was reverted, because it is not the whole
-fix.** It makes the checker accept the program, and then lowering emits
-`_4 = _0.f_v;` — assigning the field's declared union repr to a `neon_list*` — because a field
-read is emitted at the field's repr with no projection to the narrower type the checker now
-believes. A C compiler error is worse than the honest decline above, so the decline stays.
+**Both halves were written on 2026-08-03 and reverted. Blocked on P1, not on effort.**
 
-Doing this properly is the lowering half: a field read whose checked type is narrower than
-the field's declared repr needs the tag test and projection `lower_dispatch_switch` already
-performs for a union receiver. Whoever does that can re-enable the prune in `Projected::new`
-in the same change, and the repro above is the test.
+The first half is one line: prune in `Projected::new`. That alone makes the checker accept
+the program and then lowering emits `_4 = _0.f_v;` — the field's declared union repr assigned
+to a `neon_list*` — because a field read is emitted at the field's repr with no projection.
+
+The second half fixes that: read at the declared repr and `Op::Cast` to the refined one, the
+same projection `lower_dispatch_switch` applies to a union receiver. Written, and the whole
+suite stayed green with it.
+
+What stopped it is P1. Every program that exercises this needs two overlapping record types,
+so it needs structural records, so it needs `is` against a structural type to work — and that
+is always false today. The two compose into something worse than either: the mistest sends
+the value down the wrong arm, and the new projection then reinterprets it at that arm's repr,
+so `map::len(w.v)` on a `Map` read as a `List` printed `94608184888736`. Without the
+projection the same program is a compile error. Shipping half of this trades a type error for
+memory-unsafe garbage, so neither half is in the tree.
+
+Do P1 first; then both halves land together and the repro above is the test.
 
 Separately and pre-existing, found while probing this: flow narrowing does not track field
 paths at all, so `match w.v { is List[i64] => list::len(w.v) }` refines nothing and reports
