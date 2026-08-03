@@ -489,9 +489,11 @@ impl fmt::Display for TypeError {
                 f,
                 "two impls of `{protocol}` both answer for `{overlap}`, and neither is \
                  nested inside the other, so there is no most-specific one to dispatch \
-                 to. Overlap is allowed only when one target is a subtype of the other -- \
+                 to. Overlap is allowed only when one target is STRICTLY narrower -- \
                  `impl P for i64` beside `impl P for i64 | str` is fine, because the \
-                 narrower one wins. Split the targets so they do not intersect"
+                 narrower one wins, but two impls for the same target are not nested and \
+                 neither can win. Split the targets so they do not intersect, or delete \
+                 the duplicate"
             ),
             TypeErrorKind::MuInParameter(n) => write!(
                 f,
@@ -938,7 +940,18 @@ impl Env {
                     continue;
                 }
                 // Nested is permitted: the narrower target wins at every value they share.
-                if self.solver.is_subtype(a, b) || self.solver.is_subtype(b, a) {
+                //
+                // EQUAL is not nested, and reading it as nested is what let a duplicate
+                // through. Two impls for the same target are mutual subtypes, so the old
+                // `a <: b || b <: a` was true of them and they were waved past this check —
+                // in the same module, with no diagnostic — and then collided in lowering,
+                // where `collect_impl_bodies` keys bodies by `protocol$head$method`: one
+                // body wins the slot and the other's call sites reach a `<todo: ..>` marker
+                // or the wrong body. Neither is narrower, so there is no most-specific one,
+                // which is exactly what this check exists to say.
+                let a_in_b = self.solver.is_subtype(a, b);
+                let b_in_a = self.solver.is_subtype(b, a);
+                if (a_in_b || b_in_a) && !(a_in_b && b_in_a) {
                     continue;
                 }
                 let protocol = self.protocols[self.impls[n].protocol.0].name.clone();

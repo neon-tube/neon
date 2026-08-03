@@ -238,6 +238,7 @@ protocols/no_impl_for_receiver.neon
 protocols/orphan_impl_fills_a_gap.neon
 protocols/orphan_impl_may_not_steal_covered_values.neon
 protocols/protocol_with_supertrait.neon
+protocols/two_impls_for_one_target_is_an_error.neon
 protocols/two_impls_may_not_overlap_unnested.neon
 protocols/union_receiver_dispatches_by_variant.neon
 records/derive_display.neon

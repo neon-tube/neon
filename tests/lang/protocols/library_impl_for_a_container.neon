@@ -1,34 +1,51 @@
-// TODO.md's litmus for "dispatch is finished": a container's rendering, which the
-// compiler has always done with a baked-in structural walk, written instead as an
-// ordinary library impl. `impl[T] Display for List[T] where T: Display` needs every
-// piece at once — a generic head matched against the receiver, the bound discharged
-// against what the head bound `T` to, and one lowered body per element type — and it
-// is the shape a stdlib `Serialize` is made of.
+// TODO.md's litmus for "dispatch is finished": a container's rendering, written as an
+// ordinary library impl rather than a walk baked into the compiler. It needs every piece at
+// once -- a generic head matched against the receiver, the bound discharged against what the
+// head bound `T` to, and one lowered body per element type.
+//
+// It used to be written HERE, in the test, to prove the machinery could express it. It now
+// lives in `std::collections::list` and `std::collections::map`, so this file exercises the
+// real impls instead of a fixture. That is what closing the litmus means: rendering a list
+// is something the stdlib does, not something each program re-derives.
+//
+// Writing your own `impl[T] Display for List[T]` on top of these is now a diagnostic --
+// `protocols/two_impls_for_one_target_is_an_error.neon` -- rather than the silent
+// mangled-name collision it was while the stdlib had no impl to collide with.
+//
+// `Display` is a protocol because formatting genuinely varies. Equality and order do not,
+// which is why they stay structural primitives with no impl to write and none to override
+// (docs/decisions.md, "Comparison is structural").
 
-use std::collections::list;
 use std::io;
-use std::string;
+use std::collections::list;
+use std::collections::map;
 
-impl[T] Display for List[T] where T: Display {
-    fn to_string(v: List[T]) -> str {
-        let out = "[";
-        let first = true;
-        for x in v {
-            if !first {
-                out = string::concat(out, ", ");
-            }
-            first = false;
-            out = string::concat(out, to_string(x));
-        }
-        string::concat(out, "]")
-    }
-}
+record Point { x: i64, y: i64 }
+
+@derive(Display)
+record Tagged { name: str, n: i64 }
 
 fn main() {
     // One impl, a body per element type.
     io::println(to_string([1, 2, 3]));
     io::println(to_string(["a", "b"]));
-    // Nested: the bound is discharged against `List[i64]`, which this same impl covers.
+    // Nested: the bound is discharged against `List[i64]`, which the same impl covers.
     io::println(to_string([[1, 2], [3]]));
     io::println(to_string(list::new[i64]()));
+
+    // A derived element renders through its own generated impl.
+    io::println(to_string([Tagged { name: "a", n: 1 }, Tagged { name: "b", n: 2 }]));
+
+    // A map sorts its keys, so the rendering is a function of the value rather than of the
+    // order `keys` happens to walk. That is what the extra `K: Ord` bound buys.
+    let m = map::set(map::set(map::new[str, i64](), "b", 2), "a", 1);
+    io::println(to_string(m));
+    io::println(to_string(map::new[str, i64]()));
+
+    // A map of lists: both impls, one inside the other.
+    let ml = map::set(map::new[str, List[i64]](), "k", [1, 2]);
+    io::println(to_string(ml));
+
+    // And through an interpolation hole, which is the same dispatch by another spelling.
+    io::println("list: #{[1, 2]}, map: #{m}");
 }

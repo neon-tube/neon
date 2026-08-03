@@ -3,7 +3,7 @@
 Everything known-broken or undecided as of 2026-07-22, distilled from six middle-end
 audits, a compiler-wide collapsing-key sweep, the CBMC models and a fuzzing run — and
 then burned down. The P0 section was empty from that sweep until 2026-08-03, when the
-narrowing and serialization work turned up the two P1s below; resolved items are removed, not struck through, and
+narrowing and serialization work turned up the P1 below; resolved items are removed, not struck through, and
 their write-ups live in the design docs they produced (`docs/design/identity.md`,
 `docs/design/opacity.md`, `docs/design/checked-casts.md`) and in the corpus files the
 fixes are pinned by.
@@ -118,34 +118,6 @@ Two ways out, and the second is an owner's call rather than an implementation:
 
 Until one lands, a widened container is only safe if nothing reads an element through it,
 which is not a property anyone can be asked to track.
-
----
-
-## P1 — two impls for one protocol and head are undiagnosed, and collide
-
-Found 2026-08-03 while trying to move container `Display` impls into the stdlib. Two impls
-of the same protocol for the same head check clean, in the SAME module, with no diagnostic:
-
-    protocol Sz for T { fn sz(v: T) -> i64 }
-    impl Sz for B { fn sz(v: B) -> i64 { 1 } }
-    impl Sz for B { fn sz(v: B) -> i64 { 2 } }   // accepted
-
-`two_impls_may_not_overlap_unnested.neon` covers overlapping but distinct targets; identical
-heads are not the same question and are not caught. They then collide in lowering, because
-`collect_impl_bodies` keys bodies by `protocol$head$method` — one body wins the slot and the
-other's call sites reach a `<todo: ..>` marker or the wrong body. Same failure shape as the
-derive-span bug fixed the same day, one level up: a key that two things can produce.
-
-**This blocks putting `Display` for `List` and `Map` in the stdlib**, which is otherwise
-ready — both impls are written and work (see below). Writing `impl[T] Display for List[T]`
-yourself is a documented, encouraged pattern; it is what
-`protocols/library_impl_for_a_container.neon` demonstrates. Shipping a stdlib impl of the
-same head would turn every program that already does that from working code into a silent
-miscompile, with no diagnostic pointing at the duplicate.
-
-Fix the diagnosis first. Then the stdlib impls are a small change, and the corpus file above
-graduates into being a test *of* the stdlib rather than a demonstration that the machinery
-could express one.
 
 ---
 
@@ -613,8 +585,20 @@ What is genuinely left is the third clause: the `List`/`Map` analogues are unwri
 user must hand-write `impl[T] Display for List[T]` to render a list. Both impls were written
 on 2026-08-03 and work — lists, nested lists and interpolation holes all render, and a map
 sorts its keys so the rendering is a function of the value (which needs `K: Ord` on top of
-`K: Display`). They are NOT in the tree, because they are blocked on the duplicate-impl P1
-above; see it for why shipping them today would be a regression.
+`K: Display`). Both are now IN the tree, in `std::collections::list` and `std::collections::map`, and
+`protocols/library_impl_for_a_container.neon` exercises them instead of defining its own —
+which is what closing the litmus means: rendering a list is something the stdlib does, not
+something each program re-derives.
+
+Landing them required fixing a hole they would otherwise have turned into a regression. Two
+impls of one protocol for the SAME target checked clean, in the same module, and then
+collided in lowering on `collect_impl_bodies`'s `protocol$head$method` key — one body won
+the slot and the other's call sites reached a `<todo: ..>` marker. `check_overlap` permits
+nesting and spelled it `a <: b || b <: a`, which is true of two equal targets: they are
+mutual subtypes, so a duplicate read as "nested". Nesting is now required to be STRICT.
+Pinned as `protocols/two_impls_for_one_target_is_an_error.neon`. Without it, every program
+that already wrote its own `impl[T] Display for List[T]` would have become a silent
+miscompile; with it, they get a diagnostic naming the duplicate.
 
 Two known limits of the matcher, neither blocking and both honest failures rather than
 wrong answers: a generic impl declines a **union receiver** that would need a different

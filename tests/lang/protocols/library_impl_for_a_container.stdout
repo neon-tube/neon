@@ -2,3 +2,8 @@
 [a, b]
 [[1, 2], [3]]
 []
+[Tagged { name: a, n: 1 }, Tagged { name: b, n: 2 }]
+{a: 1, b: 2}
+{}
+{k: [1, 2]}
+list: [1, 2], map: {a: 1, b: 2}

@@ -10,6 +10,8 @@
 // rather than in the prelude so that THIS module owns it: opacity is decided by the
 // declaring module's subtree, and the prelude's path is the root, which every program
 // shares. See docs/design/opacity.md.
+use std::string;
+
 opaque record List[T] {}
 
 protocol Mappable for C[_] {
@@ -53,6 +55,30 @@ impl Mappable for List {
 // so `push` in a loop is amortised O(1) as long as the old binding is not kept. Hold on to
 // the input as well and every `push` copies the whole list, which turns that loop
 // quadratic -- the one performance cliff in this module worth knowing about.
+
+// How a list renders. An ordinary library impl rather than a walk baked into the compiler:
+// `Display` is a protocol because formatting genuinely varies (docs/decisions.md), where
+// equality and order do not and stay structural primitives.
+//
+// This is the shape `protocols/library_impl_for_a_container.neon` was written to prove the
+// dispatch machinery could express -- a generic head matched against the receiver, the bound
+// discharged against whatever the head bound `T` to, and one lowered body per element type.
+// It lives here now rather than in a test, which is what "the litmus graduates" means.
+//
+// Nested lists need no special case: `[[1, 2], [3]]` discharges `T: Display` against
+// `List[i64]`, which this same impl covers.
+//
+// Not an orphan: this module declares `List`.
+impl[T] Display for List[T] where T: Display {
+    fn to_string(v: List[T]) -> str {
+        let parts: List[str] = [];
+        for x in v {
+            parts = push(parts, to_string(x));
+        };
+        let inner = string::join(parts, ", ");
+        "[#{inner}]"
+    }
+}
 
 @pure @native("neon_list_new") fn new[T]() -> List[T]
 // Preallocate capacity for `n` elements to avoid regrowth while building. The list comes

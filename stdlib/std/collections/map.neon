@@ -9,7 +9,31 @@
 // The map itself: nominal, covariant in its arguments, and opaque -- the storage is
 // native. Declared here rather than in the prelude for the same reason `List` is: the
 // declaring module owns it, and the prelude's path is the root every program shares.
+use std::collections::list;
+use std::string;
+
 opaque record Map[K, V] {}
+
+// How a map renders, an ordinary library impl for the reason `List`'s is one.
+//
+// Keys are SORTED, and that is not a formatting preference. A map is unordered -- `keys`
+// walks the table, so the same map built two ways can walk differently -- and a rendering
+// that varied run to run would not be a function of the value. Sorting needs `K: Ord` on top
+// of `K: Display`, which is a real restriction rather than a formality: a map keyed by
+// something with no order has no impl here, and rendering one has to be spelled at the call
+// site where a comparator can be supplied.
+impl[K, V] Display for Map[K, V] where K: Display, V: Display, K: Ord {
+    fn to_string(m: Map[K, V]) -> str {
+        let parts: List[str] = [];
+        for k in list::sort(keys(m)) {
+            let key = to_string(k);
+            let val = to_string(m[k]);
+            parts = list::push(parts, "#{key}: #{val}");
+        };
+        let inner = string::join(parts, ", ");
+        "{#{inner}}"
+    }
+}
 
 @pure @native("neon_map_new") fn new[K, V]() -> Map[K, V]
 @pure @native("neon_map_len") fn len[K, V](m: Map[K, V]) -> i64

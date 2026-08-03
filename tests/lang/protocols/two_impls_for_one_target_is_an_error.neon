@@ -1,0 +1,38 @@
+//@ compile-fail
+//@ error-contains: both answer for
+//@ error-contains: two impls for the same target are not nested
+
+// Two impls of one protocol for the SAME target. Neither is more specific, so there is no
+// most-specific one to dispatch to, and `most_specific` in `dispatch.rs` has no answer.
+//
+// This used to check clean. `check_overlap` permits nesting -- the narrower target wins at
+// every value they share -- and spelled that as `a <: b || b <: a`, which is true of two
+// EQUAL targets: they are mutual subtypes, so a duplicate read as "nested" and was waved
+// through. In the same module, with no diagnostic.
+//
+// It failed later and elsewhere. `collect_impl_bodies` keys bodies by
+// `protocol$head$method`, so the two impls collide on one key: one body wins the slot and
+// the other's call sites reach a `<todo: ..>` marker, or the wrong body. That is a C
+// compiler error or a wrong answer, neither of which names the duplicate.
+//
+// Nesting is now required to be STRICT, which is what the rule always meant.
+
+use std::io;
+
+record B { n: i64 }
+
+protocol Sz for T {
+    fn sz(v: T) -> i64
+}
+
+impl Sz for B {
+    fn sz(v: B) -> i64 { 1 }
+}
+
+impl Sz for B {
+    fn sz(v: B) -> i64 { 2 }
+}
+
+fn main() {
+    io::println(to_string(sz(B { n: 0 })));
+}
