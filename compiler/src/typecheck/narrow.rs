@@ -145,9 +145,16 @@ impl Test {
 /// `¬T` spans the field lattice, `undef` included, but the intersection with `s` puts
 /// the result back in the value lattice — so neither branch can pick up a "field
 /// absent" marker the subject did not already carry.
+/// Both sides are pruned of negations that subtract nothing (`Solver::prune`). The
+/// else-branch is the one that matters most: it is the next arm's subject, so pruning it is
+/// what stops a match from accumulating an exclusion per arm and handing the last one a type
+/// that no longer looks like anything the user wrote. The negations that *do* subtract
+/// something are exactly what the else-branch is for, and they survive.
 pub fn narrow_is(s: &mut Solver, subject: TyId, ty: TyId) -> Refined {
     let then_ty = s.t.intersect(subject, ty);
+    let then_ty = s.prune(then_ty);
     let else_ty = s.t.diff(subject, ty);
+    let else_ty = s.prune(else_ty);
     refined(s, subject, then_ty, else_ty)
 }
 
@@ -164,6 +171,7 @@ pub fn narrow(s: &mut Solver, subject: TyId, test: Test) -> Refined {
     // An inexact test rejects values its own type still contains, so the fallthrough
     // keeps the whole subject and the two branches overlap.
     let then_ty = s.t.intersect(subject, test.ty);
+    let then_ty = s.prune(then_ty);
     refined(s, subject, then_ty, subject)
 }
 

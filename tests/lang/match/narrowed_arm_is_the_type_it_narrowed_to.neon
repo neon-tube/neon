@@ -1,0 +1,106 @@
+// A narrowed match arm behaves exactly like the type it narrowed to -- in every consumer,
+// not just in the ones that were tried first.
+//
+// Every arm subtracts the arms before it, so from the second arm on the subject carries the
+// earlier arms' exclusions: `Map[str, i64] & !List[i64]` rather than `Map[str, i64]`. That
+// type is EQUAL to `Map[str, i64]` -- nothing is both -- but it does not look like it, and
+// the components of a type are canonical individually and not jointly (`types.rs`), so a BDD
+// cannot notice on its own.
+//
+// About ten queries in the checker ask "is this type a single atom, so I can take it apart",
+// and every one of them tested the DNF path for a single positive atom AND no negatives. So
+// all of them declined a narrowed value, with symptoms that looked unrelated:
+//
+//   - a generic call could not infer its arguments  (`generic::infer`)
+//   - `list::map` reported "no impl of `Mappable`"  (`dispatch::nominal_head`)
+//   - `<` reported that a record "has no order"     (`ordered::record_fields`)
+//
+// That third one is the reason this is a solver fix rather than ten consumer fixes: it is
+// not a decline, it is a confident explanation of something untrue.
+//
+// `Solver::prune` drops a negation that subtracts nothing, at the point narrowing produces
+// it. The pruned arm does not merely mean the same thing as `Map[str, i64]` -- it interns to
+// the same id -- so every consumer sees the type the user wrote, and none of them needed to
+// learn anything about negations.
+
+use std::io;
+use std::collections::list;
+use std::collections::map;
+
+type U = List[i64] | Map[str, i64]
+
+// Inference: the arm is passed to a function with a type parameter.
+fn size(u: U) -> i64 {
+    match u {
+        is List[i64] => list::len(u),
+        is Map[str, i64] => map::len(u),
+    }
+}
+
+// Order reversed, so the subtracted arm is the List one. Neither position is special --
+// the first arm only ever worked because nothing had been subtracted from it yet.
+fn size_flipped(u: U) -> i64 {
+    match u {
+        is Map[str, i64] => map::len(u),
+        is List[i64] => list::len(u),
+    }
+}
+
+// Constructor-subject dispatch: `map` is `Mappable`, resolved by the receiver's head.
+fn doubled(u: U) -> i64 {
+    match u {
+        is Map[str, i64] => map::len(u),
+        is List[i64] => list::sum(list::map(u, (x: i64) => (x * 2))),
+    }
+}
+
+// Ordering, which reads the record's fields to decide it has an order at all.
+record A { a: i64 }
+record B { b: str }
+type P = A | B
+
+fn is_small(p: P) -> bool {
+    match p {
+        is B => false,
+        is A => p < A { a: 5 },
+    }
+}
+
+// The same nominal at different arguments. A cheaper disjointness test -- "the tags differ"
+// -- cannot decide this one, because the tags are both `List`; only real emptiness can.
+type Q = List[i64] | List[str]
+
+fn count(q: Q) -> i64 {
+    match q {
+        is List[i64] => list::len(q),
+        is List[str] => list::len(q),
+    }
+}
+
+// Three nominals, so the last arm arrives carrying two negations at once.
+type T3 = A | B | List[i64]
+
+fn describe(v: T3) -> str {
+    match v {
+        is A => "a",
+        is B => "b",
+        is List[i64] => "list of #{list::len(v)}",
+    }
+}
+
+fn main() {
+    let l: U = [1, 2, 3];
+    let m: U = map::set(map::new[str, i64](), "k", 1);
+    io::println(to_string(size(l)));
+    io::println(to_string(size(m)));
+    io::println(to_string(size_flipped(l)));
+    io::println(to_string(size_flipped(m)));
+    io::println(to_string(doubled(l)));
+    io::println(to_string(is_small(A { a: 1 })));
+    io::println(to_string(is_small(A { a: 9 })));
+    io::println(to_string(count([1, 2])));
+    io::println(to_string(count(["a"])));
+    io::println(describe(A { a: 1 }));
+    io::println(describe(B { b: "x" }));
+    io::println(describe([7, 8]));
+}

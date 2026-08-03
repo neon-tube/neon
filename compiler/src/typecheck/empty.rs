@@ -24,7 +24,7 @@
 //! answer that was only true relative to a guess can never be replayed as if it were
 //! unconditional.
 
-use super::bdd::BddId;
+use super::bdd::{self, BddId};
 use super::types::*;
 use std::collections::{HashMap, HashSet};
 
@@ -84,6 +84,115 @@ impl Solver {
     /// the caller's taint across the nested query, because taint is a property of a
     /// derivation, not of the solver — a sibling subquery that used no assumption must
     /// stay memoizable even while an enclosing one is tainted.
+    /// `ty` with negated atoms that cannot overlap what they are subtracted from removed.
+    ///
+    /// A type's components are canonical individually and not jointly (`types.rs`), so a
+    /// BDD keeps `¬List` on a `Map` path with no way to notice that nothing is both. That
+    /// is not a wart in the abstract — it is what narrowing hands every arm of a match
+    /// after the first, because each arm subtracts the ones before it:
+    ///
+    /// ```text
+    /// match u {                            // u: List[i64] | Map[str, i64]
+    ///     is List[i64] => ..,              // u: List[i64]
+    ///     is Map[str, i64] => ..,          // u: Map[str, i64] & !List[i64]
+    /// }
+    /// ```
+    ///
+    /// The second arm's type is *equal* to `Map[str, i64]` and does not look like it, and
+    /// the difference was load-bearing in about ten places. Every "destructure this type
+    /// when it is a single atom" query in the checker — `generic::infer`'s templates,
+    /// `dispatch::nominal_head`, `ordered`'s field and element readers, `as_arrow` — tests
+    /// the DNF path for a single positive atom AND no negatives, so all of them declined a
+    /// narrowed value. The symptoms had nothing obvious in common: `list::map` on a
+    /// narrowed list reported "no impl of `Mappable`", and `<` on a narrowed record
+    /// reported that the record "has no order" — a confident explanation of something
+    /// untrue, which is worse than declining.
+    ///
+    /// Pruning here fixes the class rather than the instances. The result is not merely
+    /// equivalent to the unpruned type but interns to the *same id* the user would get by
+    /// writing `Map[str, i64]` directly, so every consumer sees the type they were always
+    /// meant to see and the negation stops reaching diagnostics.
+    ///
+    /// TOP LEVEL ONLY, deliberately. The redundancy is introduced at the top by the arm
+    /// subtraction, so that is where removing it pays; recursing into fields would need a
+    /// cycle guard for `mu` types and would spend emptiness queries on the overwhelming
+    /// majority of types that carry no negation at all. For the same reason a type whose
+    /// negatives all survive is returned by id, untouched.
+    pub fn prune(&mut self, ty: TyId) -> TyId {
+        let d = self.t.data(ty);
+        if d.records == bdd::FALSE && d.tuples == bdd::FALSE && d.arrows == bdd::FALSE {
+            return ty;
+        }
+        let mut changed = false;
+        let record = self.prune_kind(d.records, Kind::Record, &mut changed);
+        let tuple = self.prune_kind(d.tuples, Kind::Tuple, &mut changed);
+        let arrow = self.prune_kind(d.arrows, Kind::Arrow, &mut changed);
+        if !changed {
+            return ty;
+        }
+        // The kinds are rebuilt, so start from the type with all three cleared and union
+        // them back on. A `TyData` is the union of its components, which is what lets the
+        // base, atom and variable halves ride along untouched.
+        let mut rest = d;
+        rest.records = bdd::FALSE;
+        rest.tuples = bdd::FALSE;
+        rest.arrows = bdd::FALSE;
+        let mut acc = self.t.intern(rest);
+        for part in [record, tuple, arrow] {
+            acc = self.t.union(acc, part);
+        }
+        acc
+    }
+
+    /// One kind's DNF, rebuilt without the negatives that subtract nothing.
+    fn prune_kind(&mut self, bdd: BddId, kind: Kind, changed: &mut bool) -> TyId {
+        let paths = match kind {
+            Kind::Record => self.t.rec_bdd.paths(bdd),
+            Kind::Tuple => self.t.tup_bdd.paths(bdd),
+            Kind::Arrow => self.t.arrow_bdd.paths(bdd),
+        };
+        let mut acc = self.t.never();
+        for (pos, neg) in paths {
+            let mut shape = self.t.kind_top(kind);
+            for i in &pos {
+                let a = self.atom_type(*i, kind);
+                shape = self.t.intersect(shape, a);
+            }
+            for j in &neg {
+                let a = self.atom_type(*j, kind);
+                // Against the shape as it stands, not as it arrived: a negative already
+                // excluded by an earlier one subtracts nothing either, and dropping it is
+                // as sound as dropping one that never overlapped.
+                let overlap = self.t.intersect(shape, a);
+                if self.is_empty(overlap) {
+                    *changed = true;
+                } else {
+                    shape = self.t.diff(shape, a);
+                }
+            }
+            acc = self.t.union(acc, shape);
+        }
+        acc
+    }
+
+    /// A type holding exactly one atom of `kind`, so it can be met against a shape.
+    fn atom_type(&mut self, idx: u32, kind: Kind) -> TyId {
+        match kind {
+            Kind::Record => {
+                let a = self.t.rec_atoms[idx as usize].clone();
+                self.t.record(a)
+            }
+            Kind::Tuple => {
+                let a = self.t.tup_atoms[idx as usize].clone();
+                self.t.tuple(a.elems)
+            }
+            Kind::Arrow => {
+                let a = self.t.arrow_atoms[idx as usize].clone();
+                self.t.arrow(a.params, a.throws, a.ret)
+            }
+        }
+    }
+
     pub fn is_empty(&mut self, ty: TyId) -> bool {
         // A reserved id still awaiting its body reads as `never`, so a query that
         // races resolution answers wrongly and says nothing. That is exactly how

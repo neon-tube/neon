@@ -168,7 +168,7 @@ match/guards.neon
 match/impossible_arm_on_a_type_parameter.neon
 match/is_sum_type.neon
 match/literal_patterns.neon
-match/narrowed_arm_passes_to_a_generic_fn.neon
+match/narrowed_arm_is_the_type_it_narrowed_to.neon
 match/narrowed_scrutinee_flows_bare.neon
 match/non_exhaustive_fails.neon
 match/non_exhaustive_null_fails.neon

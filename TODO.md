@@ -365,13 +365,11 @@ decision, with the reasoning in item 6.
      prelude — a fact about the prelude, not a privilege of the derive.
 
    Building it also surfaced and fixed two latent middle-end defects: L5 under Unproven
-   leads, which it graduated, and a narrowing/inference gap — a match arm's subject carries
-   the earlier arms' exclusions (`Map[str, Json] & !List[Json]`), and `generic::infer`
-   declined any DNF path with a negative atom, so a narrowed arm could not be passed to
-   *anything* generic. `single_record` now discharges a negated atom it can prove disjoint
-   by nominal identity. Sound but not complete: two structural records, or one nominal at
-   differing arguments, still decline, and those want the emptiness solver `infer` does not
-   carry. Pinned as `match/narrowed_arm_passes_to_a_generic_fn.neon`.
+   leads, which it graduated, and the narrowing gap now fixed in `Solver::prune` — a match
+   arm's subject carries the earlier arms' exclusions (`Map[str, Json] & !List[Json]`), a
+   type equal to `Map[str, Json]` that does not look like it, and roughly ten "destructure
+   this single atom" queries declined it. Pinned as
+   `match/narrowed_arm_is_the_type_it_narrowed_to.neon`.
 
    **What is left is decode.** `FromJson` is `fn from_json(j: Json) -> T`, where the subject
    appears only in the return, so dispatch is on the *expected* type — which

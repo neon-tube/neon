@@ -52,7 +52,7 @@ pub struct TyId(pub u32);
 /// it: the three kinds are otherwise addressed by separate fields and separate methods,
 /// and this exists so the substitution walk can be written once instead of three times.
 #[derive(Clone, Copy)]
-enum Kind {
+pub(super) enum Kind {
     Record,
     Tuple,
     Arrow,
@@ -1105,7 +1105,7 @@ impl Types {
     /// ⊤ restricted to one kind: every record, or every tuple, or every function, and
     /// nothing else. It is the seed a DNF path is rebuilt from in `subst_kind`, since a
     /// path with no positive atoms denotes the whole kind rather than nothing.
-    fn kind_top(&mut self, kind: Kind) -> TyId {
+    pub(super) fn kind_top(&mut self, kind: Kind) -> TyId {
         let mut d = self.empty_data();
         match kind {
             Kind::Record => d.records = bdd::TRUE,
@@ -1251,7 +1251,7 @@ impl Types {
     }
 
     /// The `#nominal` tag of a record atom, when it is a single positive atom name.
-    pub(super) fn atom_tag(&self, a: &RecordAtom) -> Option<NameId> {
+    fn atom_tag(&self, a: &RecordAtom) -> Option<NameId> {
         let tag = a.get(self.nominal_label);
         let td = self.data(tag);
         let atoms = self.atomset_of(td.atoms);
