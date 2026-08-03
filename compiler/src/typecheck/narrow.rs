@@ -242,6 +242,13 @@ impl Projected {
         for f in found {
             ty = s.t.union(ty, f);
         }
+        // NOT pruned, deliberately, though a vacuous negation can be born here too:
+        // `rec_neg_field` subtracts each negated atom's field from the field being read, so
+        // projecting through a record negation that survived `Solver::prune` hands back
+        // `List[i64] & !Map[str, i64]` one level down. See TODO.md — pruning it here makes
+        // the CHECKER accept a program lowering cannot yet emit, trading an honest type
+        // error for a C compiler error, so the decline stays until the field read can
+        // project to its narrowed repr.
         if s.is_empty(ty) {
             return Projected::Absent;
         }

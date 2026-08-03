@@ -252,6 +252,44 @@ built the Neon row.
 
 ---
 
+### 13d. A projected field can carry the vacuous negation `prune` removes everywhere else
+
+`Solver::prune` drops a negation that subtracts nothing where narrowing produces one, which
+is why a narrowed arm now behaves as the type it narrowed to. Negations are born in *two*
+places, though, and the second is `narrow.rs`'s projection: `rec_neg_field` subtracts each
+negated atom's field from the field being read, so projecting through a record negation that
+survived pruning yields the same useless shape one level down.
+
+It takes structural records to reach, which is why nothing hit it before. Two NOMINAL records
+are always disjoint — by tag, or by arguments — so a negation between them is vacuous, pruned
+on the way in, and `rec_neg_field` never runs with a survivor. Overlap needs a written-out
+record type:
+
+    type Wide   = { v: List[i64] | Map[str, i64], n: i64 }
+    type Narrow = { v: Map[str, i64], n: i64 }
+
+    fn f(w: Wide) -> i64 {
+        match w {
+            is Narrow => 0,
+            _ => list::len(w.v),   // w.v: `List[i64] & !Map[str, i64]`, declined
+        }
+    }
+
+**Pruning in `Projected::new` is a one-line fix and was reverted, because it is not the whole
+fix.** It makes the checker accept the program, and then lowering emits
+`_4 = _0.f_v;` — assigning the field's declared union repr to a `neon_list*` — because a field
+read is emitted at the field's repr with no projection to the narrower type the checker now
+believes. A C compiler error is worse than the honest decline above, so the decline stays.
+
+Doing this properly is the lowering half: a field read whose checked type is narrower than
+the field's declared repr needs the tag test and projection `lower_dispatch_switch` already
+performs for a union receiver. Whoever does that can re-enable the prune in `Projected::new`
+in the same change, and the repro above is the test.
+
+Separately and pre-existing, found while probing this: flow narrowing does not track field
+paths at all, so `match w.v { is List[i64] => list::len(w.v) }` refines nothing and reports
+the whole union. Same area, different gap, and the more likely one to be noticed first.
+
 ### 13c. CBMC cannot reach map resize, clone or drop
 
 The heap is modelled as untyped bytes, so a witness release read out of a heap map is a
