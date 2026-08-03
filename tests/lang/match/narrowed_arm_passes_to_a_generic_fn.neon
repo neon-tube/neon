@@ -1,0 +1,65 @@
+// A narrowed arm can be passed to a GENERIC function, not just to a monomorphic one.
+//
+// Each arm of a match subtracts the arms before it, so the second arm's subject is
+// `Map[str, i64] & !List[i64]` rather than a bare `Map[str, i64]`. That type is correct and
+// the negation is vacuous -- a value cannot be both a Map and a List -- but the components
+// of a type are canonical individually and not jointly (`types.rs`), so a BDD keeps the
+// `!List` on the path with no way to discover it is redundant.
+//
+// `generic::infer` matches a parameter template structurally, and it used to require a path
+// with NO negative atoms. So `map::len(u)` in the second arm failed with "expected
+// `Map[K, V]`, found `Map[str, i64] & !List[i64]`": the arm narrowed correctly, and then
+// could not be handed to anything with a type parameter. The first arm was fine, because
+// nothing had been subtracted from it yet -- which is what makes this look like it depends
+// on arm order rather than on narrowing.
+//
+// `infer` now discharges a negated atom it can prove disjoint from the positive one by
+// nominal identity: different `#nominal` tags, no shared values, nothing contributed. Two
+// structural records, or the same nominal at different arguments, are still declined -- the
+// proof is sound rather than complete.
+
+use std::io;
+use std::collections::list;
+use std::collections::map;
+
+type U = List[i64] | Map[str, i64]
+
+fn size(u: U) -> i64 {
+    match u {
+        is List[i64] => list::len(u),
+        is Map[str, i64] => map::len(u),
+    }
+}
+
+// Order reversed, so the subtracted arm is the List one. Neither position is special.
+fn size_flipped(u: U) -> i64 {
+    match u {
+        is Map[str, i64] => map::len(u),
+        is List[i64] => list::len(u),
+    }
+}
+
+// Three nominals, so the last arm carries two negations at once.
+record A { a: i64 }
+record B { b: i64 }
+type T3 = A | B | List[i64]
+
+fn describe(v: T3) -> str {
+    match v {
+        is A => "a",
+        is B => "b",
+        is List[i64] => "list of #{list::len(v)}",
+    }
+}
+
+fn main() {
+    let l: U = [1, 2, 3];
+    let m: U = map::set(map::new[str, i64](), "k", 1);
+    io::println(to_string(size(l)));
+    io::println(to_string(size(m)));
+    io::println(to_string(size_flipped(l)));
+    io::println(to_string(size_flipped(m)));
+    io::println(describe(A { a: 1 }));
+    io::println(describe(B { b: 2 }));
+    io::println(describe([7, 8]));
+}

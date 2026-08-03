@@ -6,7 +6,7 @@
 //! structurally and binds a bare variable where it meets one, which is all a
 //! function signature needs.
 
-use super::types::{NameId, TyId, Types};
+use super::types::{NameId, RecordAtom, TyId, Types};
 use std::collections::{HashMap, HashSet};
 
 /// Refine `subst` so `template[subst]` can match `concrete`. A variable binds to the
@@ -134,6 +134,32 @@ fn bdd_empty(b: super::bdd::BddId) -> bool {
 }
 
 /// The fields of `ty` when it is exactly one record atom (a nominal or a struct).
+///
+/// Negated atoms are tolerated when they cannot overlap the positive one, because
+/// `Map[str, i64] & !List[i64]` *is* `Map[str, i64]` and inference has no reason to decline
+/// it. That shape is not exotic — it is what narrowing hands the second and later arms of a
+/// match on a union of nominals, since each arm subtracts the ones before it:
+///
+/// ```text
+/// match u {                          // u: List[i64] | Map[str, i64]
+///     is List[i64] => list::len(u),  // u: List[i64]
+///     is Map[str, i64] => map::len(u), // u: Map[str, i64] & !List[i64]
+/// }
+/// ```
+///
+/// The negation survives because the components are canonical individually and not jointly
+/// (see `types.rs`): a BDD cannot drop `!List` from a `Map` path without being told the two
+/// are disjoint. So the second arm used to fail with "expected `Map[K, V]`, found
+/// `Map[str, i64] & !List[i64]`" — the arm narrowed correctly and then could not be passed
+/// to anything generic.
+///
+/// The disjointness proof here is deliberately the cheap one: two record atoms with
+/// *different* `#nominal` tags cannot share a value, so the negation contributes nothing.
+/// That is a sound proof, not a heuristic, but it is not a complete one — two structural
+/// records, or the same nominal at different arguments (`Map[str, i64] & !Map[str, str]`),
+/// are not decided here and still return `None`. Those want the emptiness solver, which
+/// `infer` does not currently carry; declining them is the same conservative answer as
+/// before, so this only ever accepts more than it used to.
 fn single_record(t: &Types, ty: TyId) -> Option<Vec<(NameId, TyId)>> {
     let d = t.data(ty);
     if d.base != 0 || !t.atomset_of(d.atoms).is_empty_set() || !t.atomset_of(d.vars).is_empty_set() {
@@ -143,11 +169,24 @@ fn single_record(t: &Types, ty: TyId) -> Option<Vec<(NameId, TyId)>> {
         return None;
     }
     match t.rec_bdd.paths(d.records).as_slice() {
-        [(pos, neg)] if neg.is_empty() && pos.len() == 1 => {
+        [(pos, neg)] if pos.len() == 1 => {
             let a = &t.rec_atoms[pos[0] as usize];
-            Some(a.fields.clone())
+            let vacuous = neg
+                .iter()
+                .all(|&i| nominally_disjoint(t, a, &t.rec_atoms[i as usize]));
+            vacuous.then(|| a.fields.clone())
         }
         _ => None,
+    }
+}
+
+/// Whether two record atoms are disjoint on nominal identity alone: both carry a `#nominal`
+/// tag and the tags differ, so no value is an inhabitant of both. Says nothing — `false` —
+/// about two atoms that are structural, or that share a tag.
+fn nominally_disjoint(t: &Types, a: &RecordAtom, b: &RecordAtom) -> bool {
+    match (t.atom_tag(a), t.atom_tag(b)) {
+        (Some(x), Some(y)) => x != y,
+        _ => false,
     }
 }
 

@@ -1251,7 +1251,7 @@ impl Types {
     }
 
     /// The `#nominal` tag of a record atom, when it is a single positive atom name.
-    fn atom_tag(&self, a: &RecordAtom) -> Option<NameId> {
+    pub(super) fn atom_tag(&self, a: &RecordAtom) -> Option<NameId> {
         let tag = a.get(self.nominal_label);
         let td = self.data(tag);
         let atoms = self.atomset_of(td.atoms);
