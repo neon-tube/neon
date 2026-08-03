@@ -196,6 +196,16 @@ neon_str neon_str_char_at_unchecked(neon_str s, int64_t i) {
     return r;
 }
 
+// The same byte as `neon_str_char_at_unchecked`, as its numeric value rather than as a
+// one-byte string. Unsigned, so a byte above 0x7F reads as 128..=255 rather than as a
+// negative — the caller is classifying bytes, and a sign here would make every non-ASCII
+// byte compare below every ASCII one.
+int64_t neon_str_byte_at_unchecked(neon_str s, int64_t i) {
+    int64_t b = (unsigned char)neon_str_data(&s)[i];
+    neon_str_release(s);
+    return b;
+}
+
 int64_t neon_str_index_of(neon_str s, neon_str needle) {
     int64_t r = str_index_of(s, needle);
     neon_str_release(s);

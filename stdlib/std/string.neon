@@ -9,6 +9,7 @@
 internal mod raw {
     @pure @native("neon_str_slice_unchecked") fn slice_unchecked(s: str, from: i64, to: i64) -> str
     @pure @native("neon_str_char_at_unchecked") fn char_at_unchecked(s: str, i: i64) -> str
+    @pure @native("neon_str_byte_at_unchecked") fn byte_at_unchecked(s: str, i: i64) -> i64
     @pure @native("neon_str_index_of") fn index_of(s: str, needle: str) -> i64
     @pure @native("neon_str_is_int") fn is_int(s: str) -> bool
     @pure @native("neon_str_parse_int") fn parse_int(s: str) -> i64
@@ -29,6 +30,18 @@ fn char_at(s: str, i: i64) throws IndexError -> str {
         throw IndexError { message: "index #{i} out of range" };
     }
     raw::char_at_unchecked(s, i)
+}
+
+// The byte at `i` as a number, 0..=255. `char_at` hands back the same byte as a one-byte
+// `str`, which is what you want to print or concatenate; this is what you want to
+// *classify*, because comparing a byte against a range is one test where comparing a
+// one-byte string against a set of literals is one test per member. Unsigned, so a byte
+// from the middle of a UTF-8 sequence sorts above ASCII rather than below it.
+fn byte_at(s: str, i: i64) throws IndexError -> i64 {
+    if i < 0 or i >= byte_len(s) {
+        throw IndexError { message: "index #{i} out of range" };
+    }
+    raw::byte_at_unchecked(s, i)
 }
 
 // Thrown by `to_int`, which is the only thing here that parses.

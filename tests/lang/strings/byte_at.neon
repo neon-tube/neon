@@ -1,0 +1,32 @@
+// `byte_at` is `char_at`'s numeric half. `char_at` hands back the byte as a one-byte `str`,
+// which is what you want to print or concatenate; this is what you want to CLASSIFY, because
+// comparing a byte against a range is one test where comparing a one-byte string against a
+// set of literals is one test per member. `std::json`'s escaper is what wanted it: deciding
+// whether a byte is a C0 control is `b < 32`.
+//
+// Unsigned, which is the part worth pinning. A signed char would read the lead byte of a
+// UTF-8 sequence as negative, and every `b < 32` control test would then also catch every
+// non-ASCII byte -- silently, and only for non-English text.
+
+use std::io;
+use std::string;
+
+fn main() {
+    io::println(to_string(try! string::byte_at("hello", 0)));
+    io::println(to_string(try! string::byte_at("hello", 4)));
+    // A control byte, and the escapes that produce one.
+    io::println(to_string(try! string::byte_at("a\tb", 1)));
+    io::println(to_string(try! string::byte_at("\x00", 0)));
+    // `é` is two bytes, both above 0x7F, and both read positive.
+    io::println(to_string(try! string::byte_at("\u{e9}", 0)));
+    io::println(to_string(try! string::byte_at("\u{e9}", 1)));
+    // Byte-oriented like the rest of the module: the index is a byte offset, so the length
+    // that bounds it is the byte length.
+    io::println(to_string(string::byte_len("\u{e9}")));
+
+    // Out of range throws rather than trapping, and so does a negative index.
+    let past = try? string::byte_at("hi", 2);
+    io::println(if past is null { "past end throws" } else { "no throw" });
+    let neg = try? string::byte_at("hi", -1);
+    io::println(if neg is null { "negative throws" } else { "no throw" });
+}

@@ -107,6 +107,14 @@ TEST(slice_and_char_at) {
     neon_str_release(c);
 }
 
+TEST(byte_at) {
+    EXPECT_EQ(neon_str_byte_at_unchecked(neon_str_lit("hello", 5), 0), 104); // 'h'
+    EXPECT_EQ(neon_str_byte_at_unchecked(neon_str_lit("a\tb", 3), 1), 9);    // a control byte
+    // The high half of a UTF-8 sequence reads unsigned. Signed char would give -61 here,
+    // and every `b < 0x20` control test would then also catch every non-ASCII byte.
+    EXPECT_EQ(neon_str_byte_at_unchecked(neon_str_lit("\xc3\xa9", 2), 0), 195);
+}
+
 TEST(byte_len_and_is_empty) {
     EXPECT_EQ(neon_str_byte_len(neon_str_lit("h\xc3\xa9llo", 6)), 6); // bytes, not codepoints
     EXPECT(neon_str_is_empty(neon_str_lit("", 0)));
