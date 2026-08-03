@@ -121,6 +121,34 @@ which is not a property anyone can be asked to track.
 
 ---
 
+## P1 — two impls for one protocol and head are undiagnosed, and collide
+
+Found 2026-08-03 while trying to move container `Display` impls into the stdlib. Two impls
+of the same protocol for the same head check clean, in the SAME module, with no diagnostic:
+
+    protocol Sz for T { fn sz(v: T) -> i64 }
+    impl Sz for B { fn sz(v: B) -> i64 { 1 } }
+    impl Sz for B { fn sz(v: B) -> i64 { 2 } }   // accepted
+
+`two_impls_may_not_overlap_unnested.neon` covers overlapping but distinct targets; identical
+heads are not the same question and are not caught. They then collide in lowering, because
+`collect_impl_bodies` keys bodies by `protocol$head$method` — one body wins the slot and the
+other's call sites reach a `<todo: ..>` marker or the wrong body. Same failure shape as the
+derive-span bug fixed the same day, one level up: a key that two things can produce.
+
+**This blocks putting `Display` for `List` and `Map` in the stdlib**, which is otherwise
+ready — both impls are written and work (see below). Writing `impl[T] Display for List[T]`
+yourself is a documented, encouraged pattern; it is what
+`protocols/library_impl_for_a_container.neon` demonstrates. Shipping a stdlib impl of the
+same head would turn every program that already does that from working code into a silent
+miscompile, with no diagnostic pointing at the duplicate.
+
+Fix the diagnosis first. Then the stdlib impls are a small change, and the corpus file above
+graduates into being a test *of* the stdlib rather than a demonstration that the machinery
+could express one.
+
+---
+
 ## P2 — decisions. These need an owner's call, not an implementation.
 
 ### 16. Should block comments exist?
@@ -566,12 +594,27 @@ and renders `[[1, 2], [3]]` correctly — the nested case, where the bound is di
 against `List[i64]` and answered by the same impl. Pinned as
 `protocols/library_impl_for_a_container.neon`.
 
-What the litmus has NOT yet done is the *deletion*: the baked-in structural
-`to_string`/`==`/`cmp` walks are still there, and the Map/tuple analogues are unwritten.
-The machinery is proven able to express them; replacing them is a stdlib change with its
-own blast radius, and `==`/`cmp` are the harder half because the compiler consults them
-structurally in places `Display` is not consulted. Worth doing, separately, and not the
-thing blocking JSON.
+What the litmus was said to have NOT done was the *deletion* of the baked-in structural
+walks. Checked 2026-08-03, and that sentence was wrong in both halves:
+
+- **There is no built-in `to_string` walk left to delete.** `to_string` on a list, a tuple
+  or a record is "no impl of `Display`" today; `to_string_symbol` covers `i64`/`f64`/`bool`
+  only, and those are real `@native impl Display` declarations in the prelude — library
+  impls, not a walk. Nothing to remove.
+- **`==`/`cmp` must NOT be deleted.** Structural comparison is a decision, not an
+  omission: `docs/decisions.md` "Comparison is structural, and ordering is total within a
+  type" (2026-07-19) explicitly *replaced* "comparison operators are protocol calls", and
+  says no impl is required and none can override it, with no `Eq` and no `Ord` protocol.
+  Deleting those walks would undo that decision rather than finish this roadmap. The same
+  entry singles out `to_string` as the one that is rightly a protocol, because formatting
+  varies and equality does not.
+
+What is genuinely left is the third clause: the `List`/`Map` analogues are unwritten, so a
+user must hand-write `impl[T] Display for List[T]` to render a list. Both impls were written
+on 2026-08-03 and work — lists, nested lists and interpolation holes all render, and a map
+sorts its keys so the rendering is a function of the value (which needs `K: Ord` on top of
+`K: Display`). They are NOT in the tree, because they are blocked on the duplicate-impl P1
+above; see it for why shipping them today would be a regression.
 
 Two known limits of the matcher, neither blocking and both honest failures rather than
 wrong answers: a generic impl declines a **union receiver** that would need a different
