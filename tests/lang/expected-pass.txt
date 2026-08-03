@@ -171,6 +171,8 @@ match/is_sum_type.neon
 match/literal_patterns.neon
 match/narrowed_arm_is_the_type_it_narrowed_to.neon
 match/narrowed_scrutinee_flows_bare.neon
+match/narrowing_a_field_path_dissolves_on_write.neon
+match/narrowing_refines_a_field_path.neon
 match/non_exhaustive_fails.neon
 match/non_exhaustive_null_fails.neon
 match/null_union.neon

@@ -1,0 +1,31 @@
+//@ compile-fail
+//@ error-contains: expected `str`, found `i64 | str`
+
+// The soundness half of `narrowing_refines_a_field_path.neon`. `match w.v { is str => .. }`
+// proves something about the value `w` held when the test ran; writing `w` inside the arm
+// makes it no longer true, and the refinement has to dissolve with the write.
+//
+// `unrefine` already did this for a bare local -- `cur = cur.next` in a `while cur is Node`
+// loop is the case it was written for -- and a place needs the same treatment one level out:
+// writing `w` invalidates every refinement rooted at `w`, not just the one on `w` itself.
+//
+// If this compiled, `f` would return the `i64` that was just written where its signature
+// promises a `str`, with no cast anywhere to blame.
+
+use std::io;
+
+record W { v: i64 | str }
+
+fn f(w: W) -> str {
+    match w.v {
+        is str => {
+            w = W { v: 1 };
+            w.v
+        },
+        _ => "int",
+    }
+}
+
+fn main() {
+    io::println(f(W { v: "s" }));
+}

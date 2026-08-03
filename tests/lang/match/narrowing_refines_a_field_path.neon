@@ -1,0 +1,72 @@
+// Narrowing refines a PLACE, not only a binding: `match w.v` and `if w.v is str` refine the
+// later reads of `w.v` inside the branch.
+//
+// Before this, only a bare local narrowed -- `scrutinee_var` returned a name, refinements
+// were shadow bindings under that name, and a field access had no name to shadow. So
+// `match w.v { is str => .. }` narrowed nothing, and reading `w.v` in the arm came back at
+// the declared `i64 | str`. The test was allowed, told you nothing, and the arm could not use
+// what it had just proved.
+//
+// A place is spelled as its source path (`w.v`, `o.i.v`) and refined in the same `locals`
+// table that holds bindings, so it is the shadow-binding mechanism that already existed. `.`
+// is not an identifier character, so a place key cannot collide with a variable's.
+//
+// Rooted at a local, deliberately, because a refinement has to be invalidated when the thing
+// it describes is written -- see `assignment_dissolves_it` below, and
+// `narrowing_a_field_path_dissolves_on_write.neon` for the case that must NOT compile. A
+// place rooted in a call result would have nothing to hang that on.
+
+use std::io;
+use std::string;
+
+record W { v: i64 | str }
+record Inner { v: i64 | str }
+record Outer { i: Inner, n: i64 }
+record N { v: str | null }
+
+// A match on the path refines reads of the path.
+fn matched(w: W) -> str {
+    match w.v {
+        is str => w.v,
+        _ => "int",
+    }
+}
+
+// The same for an `if` condition, which goes through `cond_refinements`.
+fn conditioned(w: W) -> str {
+    if w.v is str { w.v } else { "int" }
+}
+
+// More than one level: the place is the whole chain.
+fn nested(o: Outer) -> str {
+    match o.i.v {
+        is str => o.i.v,
+        _ => "int",
+    }
+}
+
+// Null narrowing is the same machinery, so it reaches places too.
+fn not_null(x: N) -> str {
+    if x.v != null { x.v } else { "none" }
+}
+
+// The refined read is an ordinary `str`, usable wherever one is.
+fn used(w: W) -> i64 {
+    match w.v {
+        is str => string::byte_len(w.v),
+        _ => -1,
+    }
+}
+
+fn main() {
+    io::println(matched(W { v: "a" }));
+    io::println(matched(W { v: 1 }));
+    io::println(conditioned(W { v: "b" }));
+    io::println(conditioned(W { v: 2 }));
+    io::println(nested(Outer { i: Inner { v: "c" }, n: 0 }));
+    io::println(nested(Outer { i: Inner { v: 3 }, n: 0 }));
+    io::println(not_null(N { v: "d" }));
+    io::println(not_null(N { v: null }));
+    io::println(to_string(used(W { v: "ee" })));
+    io::println(to_string(used(W { v: 4 })));
+}

@@ -1168,6 +1168,9 @@ impl Checker<'_> {
                 // dissolve: the write invalidates the narrowed fact.
                 self.expr(module, value, Some(want));
                 self.unrefine(name, want);
+                // A write to `w` says nothing about what `w.v` holds any more, so the
+                // refinements hanging off it go with the one on `w` itself.
+                self.unrefine_place_root(name);
             }
             ast::StmtKind::Expr(e) => {
                 self.expr(module, e, None);
@@ -1671,7 +1674,15 @@ impl Checker<'_> {
                 self.check_opacity(module, e.span.clone(), t, name);
                 let label = self.env.solver.t.name(name);
                 let p = narrow::project_field(&mut self.env.solver, t, label);
-                self.projected(e.span.clone(), p, name, t)
+                let projected = self.projected(e.span.clone(), p, name, t);
+                // A refinement of this exact place wins over the projection. `match w.v`
+                // narrows the PLACE `w.v`, not any binding, so without this the arm's own
+                // reads of `w.v` come back at the declared field type and the narrowing
+                // refines nothing it can be used through.
+                match self.place_of(e).and_then(|p| self.lookup(&p)) {
+                    Some(refined) if !self.env.is_error(projected) => refined,
+                    _ => projected,
+                }
             }
 
             ExprKind::Error => self.poison(),
@@ -2735,7 +2746,7 @@ impl Checker<'_> {
         match &cond.kind {
             ExprKind::Is { lhs, .. } => {
                 let Some(name) = self.scrutinee_var(lhs) else { return nothing };
-                let Some(subject) = self.lookup(&name) else { return nothing };
+                let Some(subject) = self.place_subject(lhs) else { return nothing };
                 let Some(tested) = self.result.tested(cond.id) else { return nothing };
                 if self.env.is_error(subject) {
                     return nothing;
@@ -2750,7 +2761,7 @@ impl Checker<'_> {
                     _ => return nothing,
                 };
                 let Some(name) = self.scrutinee_var(subject_expr) else { return nothing };
-                let Some(subject) = self.lookup(&name) else { return nothing };
+                let Some(subject) = self.place_subject(subject_expr) else { return nothing };
                 if self.env.is_error(subject) {
                     return nothing;
                 }
@@ -2828,12 +2839,76 @@ impl Checker<'_> {
     /// The scrutinee's variable name when it is a bare local, so match arms can
     /// re-narrow it in place. A field access or call has no name to rebind.
     fn scrutinee_var(&self, scrutinee: &Expr) -> Option<String> {
-        match &scrutinee.kind {
+        self.place_of(scrutinee)
+    }
+
+    /// A place's type as things stand: its refinement if it has one, and otherwise what
+    /// reading it would produce. The second half is why this is not just `lookup` — a place
+    /// that has never been narrowed has no entry in `locals`, so `w.v` has to be projected
+    /// out of `w` the first time.
+    fn place_subject(&mut self, e: &Expr) -> Option<TyId> {
+        let place = self.place_of(e)?;
+        if let Some(t) = self.lookup(&place) {
+            return Some(t);
+        }
+        match &e.kind {
+            // A bare local is either bound or not a place at all; `lookup` settled it.
+            ExprKind::Path(_) => None,
+            ExprKind::Field { base, name } => {
+                let bt = self.place_subject(base)?;
+                let label = self.env.solver.t.name(name);
+                narrow::project_field(&mut self.env.solver, bt, label).ty()
+            }
+            _ => None,
+        }
+    }
+
+    /// The refinable PLACE an expression denotes: a bare local (`w`), or a chain of field
+    /// reads rooted at one (`w.v`, `w.a.b`). `None` for anything else.
+    ///
+    /// A place is spelled as its source path and used as a key in the same `locals` table
+    /// that holds bindings, so refining one is the shadow-binding that already existed and
+    /// `unrefine` already knows how to dissolve. `w.v` cannot collide with a variable of
+    /// that name because `.` is not in an identifier.
+    ///
+    /// Rooted at a LOCAL, deliberately. The root has to be something assignment can be
+    /// tracked through — `unrefine_place_root` dissolves `w.*` when `w` is written — and a
+    /// call result or a module-level name gives nothing to hang that on. Narrowing a place
+    /// nobody can invalidate is how a refinement outlives the fact it stood for.
+    fn place_of(&self, e: &Expr) -> Option<String> {
+        match &e.kind {
             ExprKind::Path(segs) => match segs.as_slice() {
                 [one] if self.lookup(one).is_some() => Some(one.clone()),
                 _ => None,
             },
+            ExprKind::Field { base, name } => {
+                let root = self.place_of(base)?;
+                Some(format!("{root}.{name}"))
+            }
             _ => None,
+        }
+    }
+
+    /// Dissolve every refinement of a place rooted at `name`: writing `w` says nothing about
+    /// what `w.v` holds any more. The companion to `unrefine`, which handles `w` itself.
+    ///
+    /// Rewritten to the declared type rather than popped, for `unrefine`'s reason: the
+    /// frames they live in are not ours to pop. "Declared" for a place is whatever the
+    /// projection says now, so the entry is simply removed from contention by being set to
+    /// the type the field read would have produced anyway.
+    fn unrefine_place_root(&mut self, name: &str) {
+        let prefix = format!("{name}.");
+        let stale: Vec<String> = self
+            .locals
+            .iter()
+            .flatten()
+            .filter(|(n, _, _, k)| *k == DefKind::Refinement && n.starts_with(&prefix))
+            .map(|(n, ..)| n.clone())
+            .collect();
+        for frame in &mut self.locals {
+            frame.retain(|(n, _, _, k)| {
+                !(*k == DefKind::Refinement && stale.iter().any(|s| s == n))
+            });
         }
     }
 
