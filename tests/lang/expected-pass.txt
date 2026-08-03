@@ -243,6 +243,7 @@ records/derive_to_json.neon
 records/boxed_record_reaching_a_pointer_cycle.neon
 records/declare_construct_access.neon
 records/generic.neon
+records/narrowed_field_read_projects.neon
 records/nested.neon
 records/nullable_field.neon
 records/opaque_cannot_graft_into_owner_module.neon

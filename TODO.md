@@ -304,7 +304,7 @@ built the Neon row.
 
 ---
 
-### 13d. A projected field can carry the vacuous negation `prune` removes everywhere else
+### 13d. A projected field carried the vacuous negation `prune` removes — ~~FIXED 2026-08-03~~
 
 `Solver::prune` drops a negation that subtracts nothing where narrowing produces one, which
 is why a narrowed arm now behaves as the type it narrowed to. Negations are born in *two*
@@ -327,25 +327,27 @@ record type:
         }
     }
 
-**Both halves were written on 2026-08-03 and reverted. Blocked on P1, not on effort.**
+**Both halves landed together, after P1, and the repro above is the test**
+(`records/narrowed_field_read_projects.neon`).
 
-The first half is one line: prune in `Projected::new`. That alone makes the checker accept
-the program and then lowering emits `_4 = _0.f_v;` — the field's declared union repr assigned
-to a `neon_list*` — because a field read is emitted at the field's repr with no projection.
+The first half is one line: prune in `Projected::new`, the second birthplace of a vacuous
+negation. Guarding both birthplaces is what makes `prune` complete without being recursive —
+no cycle guard for `mu` types, and no cost on the types that carry no negation.
 
-The second half fixes that: read at the declared repr and `Op::Cast` to the refined one, the
-same projection `lower_dispatch_switch` applies to a union receiver. Written, and the whole
-suite stayed green with it.
+The second half is lowering. That prune alone makes the checker accept the program, and then
+codegen emits `_3 = _0.f_v;` — the field's declared union repr assigned to a `neon_list*` —
+because a field read was emitted at the *refined* repr while storage keeps the declared one.
+It now reads at the declared repr and `Op::Cast`s to the refined one, the same projection
+`lower_dispatch_switch` applies to a union receiver, unchecked because the checker has
+already proved the variant.
 
-What stopped it is P1. Every program that exercises this needs two overlapping record types,
-so it needs structural records, so it needs `is` against a structural type to work — and that
-is always false today. The two compose into something worse than either: the mistest sends
-the value down the wrong arm, and the new projection then reinterprets it at that arm's repr,
-so `map::len(w.v)` on a `Map` read as a `List` printed `94608184888736`. Without the
-projection the same program is a compile error. Shipping half of this trades a type error for
-memory-unsafe garbage, so neither half is in the tree.
-
-Do P1 first; then both halves land together and the repro above is the test.
+The ordering against P1 was not optional, and shipping this first would have been worse than
+shipping nothing. Every program that exercises 13d needs two overlapping record types, so it
+needs structural records, so it needs `is` against a structural shape to work. While that
+test was a static false, the value took the wrong arm and this projection then reinterpreted
+it at that arm's repr: `map::len(w.v)` on a `Map` read as a `List` printed 94608184888736,
+where the same program without the projection was a compile error. Both halves were written,
+measured against exactly that, and held back until P1 was fixed.
 
 Separately and pre-existing, found while probing this: flow narrowing does not track field
 paths at all, so `match w.v { is List[i64] => list::len(w.v) }` refines nothing and reports

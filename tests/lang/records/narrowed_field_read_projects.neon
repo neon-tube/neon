@@ -1,0 +1,55 @@
+// A field read is emitted at the field's DECLARED repr and projected to whatever the checker
+// refined it to. Narrowing a record narrows what its fields hold; the slot keeps its shape,
+// so reading one has to move between the two.
+//
+// Getting here needs a record negation that SURVIVES `Solver::prune`, which needs two
+// overlapping record types, which needs structural ones -- two nominal records are always
+// disjoint, by tag or by arguments, so a negation between them is vacuous and pruned on the
+// way in. With `Wide` and `Narrow` below the negation is real: in the else-arm `w` is
+// `Wide & !Narrow`, and projecting `v` through it subtracts `Narrow`'s field from `Wide`'s,
+// giving `List[i64] & !Map[str, i64]`. That is pruned in `Projected::new` -- the second
+// place a vacuous negation is born -- so the arm sees `List[i64]`.
+//
+// Then the other half: `v` is STORED at the declared `List[i64] | Map[str, i64]` repr. The
+// read used to be emitted straight at the refined one, producing `_3 = _0.f_v;` -- a union
+// assigned into a slot typed at one variant -- and the C compiler reported it. It now
+// projects with the same `Op::Cast` a dispatch switch applies to a union receiver, unchecked
+// because the checker has already proved which variant it is.
+//
+// This file also depends on `is` against a structural shape being a runtime test rather than
+// a static false (`match/is_against_a_structural_shape.neon`). The two were fixed in that
+// order for a reason: with the projection in place and the test still wrong, the map below
+// took the List arm and was reinterpreted there, printing 94608184888736 instead of 1.
+
+use std::io;
+use std::collections::list;
+use std::collections::map;
+
+type Wide = { v: List[i64] | Map[str, i64], n: i64 }
+type Narrow = { v: Map[str, i64], n: i64 }
+
+fn size(w: Wide) -> i64 {
+    match w {
+        is Narrow => map::len(w.v),
+        // `w.v` is `List[i64]` here, read out of a slot holding the wider union.
+        _ => list::len(w.v),
+    }
+}
+
+// The projected field is an ordinary value: bind it, pass it on, read it again, all at the
+// narrowed repr.
+fn doubled(w: Wide) -> i64 {
+    match w {
+        is Narrow => 0,
+        _ => {
+            let xs = w.v;
+            list::sum(list::map(xs, (x: i64) => (x * 2)))
+        },
+    }
+}
+
+fn main() {
+    io::println(to_string(size({ v: [1, 2, 3], n: 0 })));
+    io::println(to_string(size({ v: map::set(map::new[str, i64](), "k", 1), n: 0 })));
+    io::println(to_string(doubled({ v: [1, 2, 3], n: 0 })));
+}

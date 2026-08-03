@@ -1317,7 +1317,29 @@ impl Lower<'_> {
             ExprKind::Block(b) => self.lower_block(b).unwrap_or_else(|| self.unit(ty)),
             ExprKind::Field { base, name } => {
                 let b = self.lower_expr(base);
-                self.b.emit(Op::Field { base: b, field: name.clone() }, repr, ty)
+                // Storage is at the field's DECLARED repr, but the checker may have refined
+                // this read below it — narrowing a record narrows what its fields hold,
+                // while the slot keeps its shape. So read at the declared repr and project,
+                // the same `Op::Cast` a dispatch switch applies to a union receiver.
+                //
+                // Emitting the read straight at the refined repr instead produced
+                // `_3 = _0.f_v;` — a union assigned into a slot typed at one variant — and
+                // left the C compiler to report it, which is the worst place for a type
+                // error to surface. The cast is unchecked because the checker has already
+                // proved which variant it is, exactly as for `as`'s infallible form.
+                let declared = match self.b.value_repr(b) {
+                    Repr::Record { fields, .. } => {
+                        fields.iter().find(|(n, _)| n == name).map(|(_, r)| r.clone())
+                    }
+                    _ => None,
+                };
+                match declared {
+                    Some(d) if d != repr => {
+                        let raw = self.b.emit(Op::Field { base: b, field: name.clone() }, d, ty);
+                        self.b.emit(Op::Cast(raw), repr, ty)
+                    }
+                    _ => self.b.emit(Op::Field { base: b, field: name.clone() }, repr, ty),
+                }
             }
             ExprKind::Tuple(elems) => {
                 let vs = elems.iter().map(|e| self.lower_expr(e)).collect();
