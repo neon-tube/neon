@@ -454,8 +454,8 @@ impl Processor for Derive {
                 cx.error(
                     arg.span().clone(),
                     format!(
-                        "cannot derive `{name}`: the compiler can write `Display` and \
-                         `ToJson`. Anything else is an ordinary `impl {name} for ..`"
+                        "cannot derive `{name}`: the compiler can write `Display`, `ToJson` and \
+                         `FromJson`. Anything else is an ordinary `impl {name} for ..`"
                     ),
                 );
             }

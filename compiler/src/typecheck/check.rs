@@ -3092,7 +3092,7 @@ impl Checker<'_> {
         match dispatch::resolve(self.env, &name, qualified, &arg_tys, expected) {
             Ok(s) => {
                 self.dispatch_gate(module, &e.span, &s, &arg_tys);
-                if let dispatch::Resolution::Bound { param, protocol } = &s.resolution {
+                if let dispatch::Resolution::Bound { param, protocol, .. } = &s.resolution {
                     let ok = self.bounds.iter().any(|(n, p)| {
                         n == param && self.env.protocol_extends(*p, *protocol)
                     });

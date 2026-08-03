@@ -230,6 +230,7 @@ protocols/generic_impl_head.neon
 protocols/impl_for_primitive.neon
 protocols/impl_missing_method.neon
 protocols/imported_method_reaches_an_outer_scope.neon
+protocols/json_decodes_by_expected_type.neon
 protocols/json_encodes_through_library_impls.neon
 protocols/library_impl_for_a_container.neon
 protocols/local_name_shadows_protocol_method.neon
@@ -240,6 +241,7 @@ protocols/protocol_with_supertrait.neon
 protocols/two_impls_may_not_overlap_unnested.neon
 protocols/union_receiver_dispatches_by_variant.neon
 records/derive_display.neon
+records/derive_from_json.neon
 records/derive_needs_its_fields_displayable.neon
 records/derive_to_json.neon
 records/boxed_record_reaching_a_pointer_cycle.neon

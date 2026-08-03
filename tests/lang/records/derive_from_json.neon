@@ -1,0 +1,73 @@
+// `@derive(FromJson)` writes the decoder, and a record carrying BOTH derives round-trips.
+//
+// The generated body is one record literal:
+//
+//     P { x: try from_json(try std::json::field(j, "x")), .. }
+//
+// which is the whole trick, and a different one from the other two derives. `Display`
+// dispatches on an interpolation hole's value and `ToJson` on `to_json`'s argument; here
+// nothing carrying the type is passed at all. `from_json` dispatches on the type its result
+// is CHECKED against, and a record literal's field slot supplies exactly that -- so each
+// field decodes through whatever impl covers it, and a field whose type has no `FromJson` is
+// a dispatch error naming that type. Return-position dispatch had to work before a decode
+// derive was expressible at all.
+//
+// Two derives on one record is itself the thing to pin. Every generated impl used to carry
+// the RECORD's span, and `lower.rs::impl_def_at` correlates an impl's AST with its `ImplDef`
+// by `(module, span)` taking the first match -- so the second impl's methods were indexed
+// under the first one's protocol (`ToJson$P$from_json`, a key nothing looks up) and its body
+// was silently never lowered. Unreachable while `Display` was the only derivable protocol,
+// because a record could not carry two derives. Each impl now takes its argument's span.
+
+use std::io;
+use std::json;
+
+@derive(json::ToJson)
+@derive(json::FromJson)
+record P { x: i64, y: str }
+
+// A field that is itself a derived record: the nested decode dispatches on the field's type.
+@derive(json::ToJson)
+@derive(json::FromJson)
+record Nested { p: P, flag: bool }
+
+// A field with a library impl rather than a derived one.
+@derive(json::ToJson)
+@derive(json::FromJson)
+record Holder { items: List[i64], name: str }
+
+// Both derives in ONE annotation, which is the other spelling that used to lose the second.
+@derive(json::ToJson, json::FromJson)
+record Pair { a: str, b: bool }
+
+// A named decode, so a failure is a value rather than a trap.
+fn decode_p(j: json::Json) throws json::JsonError -> P { try json::from_json(j) }
+
+fn round_p(p: P) throws json::JsonError -> str {
+    let back: P = try json::from_json(json::to_json(p));
+    json::stringify(json::to_json(back))
+}
+
+fn main() {
+    io::println(try! round_p(P { x: 1, y: "hi" }));
+
+    let n = Nested { p: P { x: 2, y: "in" }, flag: true };
+    let nb: Nested = try! json::from_json(json::to_json(n));
+    io::println(json::stringify(json::to_json(nb)));
+
+    let h = Holder { items: [1, 2, 3], name: "h" };
+    let hb: Holder = try! json::from_json(json::to_json(h));
+    io::println(json::stringify(json::to_json(hb)));
+
+    let pr = Pair { a: "s", b: false };
+    let prb: Pair = try! json::from_json(json::to_json(pr));
+    io::println(json::stringify(json::to_json(prb)));
+
+    // A missing field is an error naming the field, not a null.
+    let missing = try? decode_p(json::object([("x", json::to_json(1))]));
+    io::println(if missing is null { "missing field threw" } else { "no throw" });
+
+    // A field of the wrong shape names both sides.
+    let wrong = try? decode_p(json::object([("x", json::to_json("no")), ("y", json::to_json("y"))]));
+    io::println(if wrong is null { "wrong type threw" } else { "no throw" });
+}

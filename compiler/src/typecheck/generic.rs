@@ -117,6 +117,11 @@ pub fn is_var(t: &Types, ty: TyId) -> bool {
 }
 
 /// The variable name when `ty` is exactly one rigid variable and nothing else.
+pub(super) fn as_var_name(t: &Types, ty: TyId) -> Option<NameId> {
+    as_var(t, ty)
+}
+
+/// The variable name when `ty` is exactly one rigid variable and nothing else.
 fn as_var(t: &Types, ty: TyId) -> Option<NameId> {
     let d = t.data(ty);
     if d.base != 0 || !t.atomset_of(d.atoms).is_empty_set() {

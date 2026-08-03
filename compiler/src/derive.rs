@@ -38,7 +38,7 @@ use crate::lexer::Span;
 /// generated impl rather than a silent wrong answer, which is the same deal a hand-written
 /// impl of the wrong protocol gets.
 pub fn can_derive(path: &[String]) -> bool {
-    matches!(path.last().map(String::as_str), Some("Display") | Some("ToJson"))
+    matches!(path.last().map(String::as_str), Some("Display") | Some("ToJson") | Some("FromJson"))
 }
 
 /// Append a generated impl for every `@derive` in the module, recursing into nested mods.
@@ -57,7 +57,21 @@ fn derive_decls(decls: &mut Vec<Decl>) {
                     }
                     for arg in &ann.args {
                         let Some(path) = arg.name() else { continue };
-                        if let Some(decl) = derive_one(path, r, ann, &d.span) {
+                        // The ARGUMENT's span, not the record's, and it is load-bearing
+                        // rather than a nicety. `lower.rs::impl_def_at` correlates an impl's
+                        // AST with its `ImplDef` by `(module, span)` and takes the first
+                        // match, so two impls derived onto one record from the record's span
+                        // are indistinguishable there: the second one's methods get indexed
+                        // under the FIRST one's protocol -- `ToJson$P$from_json`, a key
+                        // nothing looks up -- and its body is silently never lowered.
+                        //
+                        // Invisible until there were two derivable protocols, because with
+                        // only `Display` a record could not carry two derives. Each argument
+                        // has its own span whether the author wrote `@derive(A) @derive(B)`
+                        // or `@derive(A, B)`, so this distinguishes both spellings, and it
+                        // points a diagnostic about the generated impl at the name that
+                        // asked for it.
+                        if let Some(decl) = derive_one(path, r, ann, arg.span()) {
                             generated.push(decl);
                         }
                     }
@@ -92,6 +106,7 @@ fn derive_one(path: &[String], r: &RecordDecl, ann: &Annotation, span: &Span) ->
     match path.last().map(String::as_str) {
         Some("Display") => Some(display_impl(path, r, ann, span)),
         Some("ToJson") => Some(to_json_impl(path, r, ann, span)),
+        Some("FromJson") => Some(from_json_impl(path, r, ann, span)),
         // `expand` rejected everything else before we got here.
         _ => None,
     }
@@ -279,6 +294,128 @@ fn to_json_impl(protocol: &[String], r: &RecordDecl, ann: &Annotation, span: &Sp
         }),
         span: span.clone(),
     }
+}
+
+/// `impl[T] FromJson for P[T] where T: FromJson`, the mirror of `to_json_impl`:
+///
+/// ```text
+/// fn from_json(j: Json) throws JsonError -> P[T] {
+///     P { x: try from_json(try std::json::field(j, "x")), .. }
+/// }
+/// ```
+///
+/// The record literal is what makes this work without the pass knowing any field's type.
+/// `from_json` dispatches on the type its result is CHECKED against, and a literal's field
+/// slot supplies exactly that — so `x`'s decode picks `x`'s impl, whatever it is, and a
+/// field whose type has no `FromJson` is a dispatch error naming that type.
+///
+/// That is the same trick as the other two derives and a different mechanism: `Display`
+/// dispatches on an interpolation hole's value, `ToJson` on `to_json`'s argument, and this
+/// on nothing that is passed at all. It is the reason return-position dispatch had to work
+/// before a decode derive was expressible.
+///
+/// Every call is a `try`, and the method `throws JsonError`, so a malformed document
+/// propagates the first failure with the field name already in its message.
+fn from_json_impl(protocol: &[String], r: &RecordDecl, ann: &Annotation, span: &Span) -> Decl {
+    let sp = || ann.span.clone();
+    let target = self_type(r, &sp());
+
+    let fields = r
+        .fields
+        .iter()
+        .map(|f| {
+            // `try std::json::field(j, "x")` — the node, or a throw naming the missing key.
+            let name = expr(ExprKind::Str(vec![StrPart::Text(f.name.clone())]), &sp());
+            let node = try_(
+                expr(
+                    ExprKind::Call {
+                        callee: Box::new(expr(ExprKind::Path(json_path("field")), &sp())),
+                        generics: vec![],
+                        args: vec![expr(ExprKind::Path(vec!["j".to_string()]), &sp()), name],
+                    },
+                    &sp(),
+                ),
+                &sp(),
+            );
+            // `try from_json(<node>)`, dispatched by this field's declared type.
+            let decoded = try_(
+                expr(
+                    ExprKind::Call {
+                        callee: Box::new(expr(
+                            ExprKind::Path(vec!["from_json".to_string()]),
+                            &sp(),
+                        )),
+                        generics: vec![],
+                        args: vec![node],
+                    },
+                    &sp(),
+                ),
+                &sp(),
+            );
+            crate::ast::FieldInit { name: f.name.clone(), value: decoded, span: sp() }
+        })
+        .collect();
+
+    let lit = expr(
+        ExprKind::RecordLit { path: Some(vec![r.name.clone()]), fields, spread: None },
+        &sp(),
+    );
+    let body = Block { stmts: vec![], tail: Some(Box::new(lit)), span: sp() };
+
+    let method = FnDecl {
+        name: "from_json".to_string(),
+        generics: vec![],
+        params: vec![Param {
+            name: "j".to_string(),
+            ty: TypeSpec {
+                kind: TypeSpecKind::Named { path: json_path("Json"), args: vec![] },
+                span: sp(),
+            },
+            span: sp(),
+        }],
+        throws: Some(TypeSpec {
+            kind: TypeSpecKind::Named { path: json_path("JsonError"), args: vec![] },
+            span: sp(),
+        }),
+        ret: Some(target.clone()),
+        wheres: vec![],
+        body: Some(body),
+        annotations: vec![],
+    };
+
+    let bound =
+        TypeSpec { kind: TypeSpecKind::Named { path: protocol.to_vec(), args: vec![] }, span: sp() };
+    let wheres = r
+        .generics
+        .iter()
+        .map(|g| WhereClause { param: g.clone(), bound: bound.clone() })
+        .collect();
+
+    Decl {
+        kind: DeclKind::Impl(ImplDecl {
+            orphan: false,
+            protocol: protocol.to_vec(),
+            generics: r.generics.clone(),
+            target,
+            wheres,
+            methods: vec![method],
+            annotations: vec![],
+        }),
+        span: span.clone(),
+    }
+}
+
+/// `try e` — the propagating form, which is the only one a derive wants: a decode that
+/// fails should surface the failure, not soften it to null or abort the process.
+fn try_(e: Expr, span: &Span) -> Expr {
+    expr(
+        ExprKind::Try {
+            form: crate::ast::TryForm::Propagate,
+            body: Box::new(e),
+            catch: None,
+        },
+        span,
+    )
 }
 
 /// A name in `std::json`, spelled absolutely. See `to_json_impl` for why these are not

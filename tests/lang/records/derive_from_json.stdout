@@ -1,0 +1,6 @@
+{"x":1,"y":"hi"}
+{"flag":true,"p":{"x":2,"y":"in"}}
+{"items":[1,2,3],"name":"h"}
+{"a":"s","b":false}
+missing field threw
+wrong type threw

@@ -2054,11 +2054,27 @@ impl Lower<'_> {
                     arms.iter().map(|&(t, id)| (self.repr_of_ty(t), id)).collect();
                 self.lower_dispatch_switch(&arms, &method, args, repr, ty)
             }
-            Resolution::Bound { protocol, .. } => {
-                // In a monomorphic instance the receiver is concrete, so its head picks
-                // the impl the bound stood for.
-                let recv = args.first().copied();
-                let head = recv.and_then(|v| repr_head(self.b.value_repr(v)));
+            Resolution::Bound { protocol, subject_pos, .. } => {
+                // In a monomorphic instance the subject is concrete, so its head picks the
+                // impl the bound stood for. WHERE the subject is comes from the checker:
+                // `subject_pos` names the argument carrying it, and `None` means it is the
+                // return — `fn from_json(j: Json) -> T`, dispatched on the type the call is
+                // checked against, whose repr is `repr` right here.
+                //
+                // Reading `args[0]` regardless is what this used to do, and for a
+                // return-position call that is an unrelated argument: `from_json`'s `Json`
+                // parameter. It found no head and emitted `<todo: bound: abstract
+                // receiver>`, which is the benign half. The other half is that a `Json`
+                // whose variants all had impls would have dispatched on the ARGUMENT and
+                // silently run the wrong one.
+                let recv = match subject_pos {
+                    Some(i) => args.get(*i).copied(),
+                    None => None,
+                };
+                let head = match subject_pos {
+                    Some(_) => recv.and_then(|v| repr_head(self.b.value_repr(v))),
+                    None => repr_head(&repr),
+                };
                 match head {
                     Some(h) => {
                         // Once the head names an impl there is nothing special left about

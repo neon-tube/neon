@@ -21,7 +21,14 @@ pub enum Resolution {
     /// Inside a generic body, where the receiver is a rigid variable. No impl
     /// applies and none ever will, so the call resolves against the bound in scope
     /// and is discharged at each call site instead.
-    Bound { param: String, protocol: ProtocolId },
+    ///
+    /// `subject_pos` is which argument carried the subject, and `None` means the
+    /// subject is the RETURN — `fn from_json(j: Json) -> T`, dispatched on the type the
+    /// call is checked against. Lowering needs it to know where to look for the head:
+    /// reading `args[0]` regardless is how a return-position call came to be discharged
+    /// against its unrelated first argument, which finds the wrong impl whenever that
+    /// argument's type happens to have one.
+    Bound { param: String, protocol: ProtocolId, subject_pos: Option<usize> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -117,10 +124,10 @@ pub fn resolve(
     // A rigid receiver is the other resolution path entirely: the body is checked
     // once with `T` opaque, so the bound answers rather than the impl registry.
     if let Some(param) = rigid_name(env, receiver) {
-        let (ret, throws) = protocol_method_result(env, protocol, method);
+        let (ret, throws) = protocol_method_result(env, protocol, method, &param);
         return Ok(Selection {
             protocol,
-            resolution: Resolution::Bound { param, protocol },
+            resolution: Resolution::Bound { param, protocol, subject_pos: position },
             ret,
             throws,
             receiver_pos: position,
@@ -471,14 +478,39 @@ fn result_of(env: &mut Env, hits: &[Hit], method: &str, protocol: ProtocolId) ->
     (ret, thr)
 }
 
-fn protocol_method_result(env: &mut Env, protocol: ProtocolId, method: &str) -> (TyId, TyId) {
-    match env.protocols()[protocol.0].methods.iter().find(|m| m.name == method) {
-        Some(m) => (m.ret, m.throws),
-        None => {
-            let n = env.solver.t.never();
-            (n, n)
-        }
-    }
+/// The protocol's declared result for `method`, with the protocol's own subject variable
+/// rewritten to the rigid variable the bound is in scope for.
+///
+/// The substitution is the whole of it. `protocol FromJson for T { fn from_json(j: Json) -> T }`
+/// declares its return as the subject `T`, and inside `impl[V] FromJson for Map[str, V]` the
+/// call's result is a `V`, not a `T`. Returning the declaration verbatim made that a
+/// mismatch — "expected `V`, found `T`" — and only ever type-checked in a body whose own
+/// parameter happened to be spelled `T` too, which is why the `List[T]` impl next door
+/// looked fine.
+///
+/// It stays invisible for a protocol whose result does not mention the subject: `ToJson`
+/// returns `Json` either way, which is why the encode side never needed this.
+fn protocol_method_result(
+    env: &mut Env,
+    protocol: ProtocolId,
+    method: &str,
+    param: &str,
+) -> (TyId, TyId) {
+    let found = env.protocols()[protocol.0].methods.iter().find(|m| m.name == method);
+    let Some((ret, throws)) = found.map(|m| (m.ret, m.throws)) else {
+        let n = env.solver.t.never();
+        return (n, n);
+    };
+    let subject = subject_var(env, protocol);
+    let Some(subject_name) = super::generic::as_var_name(&env.solver.t, subject) else {
+        return (ret, throws);
+    };
+    let here = env.solver.t.name(param);
+    let bound = env.solver.t.var(here);
+    let subst = HashMap::from([(subject_name, bound)]);
+    let ret = env.solver.t.substitute(ret, &subst);
+    let throws = env.solver.t.substitute(throws, &subst);
+    (ret, throws)
 }
 
 /// The protocol's subject as a type. `protocol Area for T` binds `T` in every

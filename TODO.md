@@ -10,8 +10,8 @@ fixes are pinned by.
 
 Everything else is of a different kind: one structural gap awaiting infrastructure (§19),
 one language decision (§16), the perf programs, one verification-tooling gap (13c), the
-serialization roadmap (the plan-of-record for finishing dispatch — now down to decode, the
-encoder having landed 2026-08-03), and the deliberately-separate unproven leads and
+serialization roadmap (the plan-of-record for finishing dispatch — closed 2026-08-03; only
+union decode remains), and the deliberately-separate unproven leads and
 environment hazards. Each item still has a repro or a file:line.
 
 ---
@@ -472,13 +472,40 @@ decision, with the reasoning in item 6.
    this single atom" queries declined it. Pinned as
    `match/narrowed_arm_is_the_type_it_narrowed_to.neon`.
 
-   **What is left is decode.** `FromJson` is `fn from_json(j: Json) -> T`, where the subject
-   appears only in the return, so dispatch is on the *expected* type — which
-   `dispatch.rs:105` already implements (`dispatch_position` finds no parameter mentioning
-   the subject, and `expected` becomes the receiver). That path has **no corpus test**, and
-   `Selection.receiver_pos` is `None` down it, so it is the part most likely to have a hole;
-   encode was built first for exactly that reason. Union decode then carries the extra
-   obligation recorded at the end of this section.
+6b. ~~**The JSON decoder.**~~ — **built 2026-08-03**, and with it the roadmap is closed.
+   `FromJson` is `fn from_json(j: Json) throws JsonError -> T`, dispatched on the type the
+   result is CHECKED against, with library impls for the primitives and the recursive cases
+   and `@derive(FromJson)` for records. Pinned as `records/derive_from_json.neon` and
+   `protocols/json_decodes_by_expected_type.neon`.
+
+   Return-position dispatch existed in the checker (`dispatch.rs:105`) and had never been
+   exercised end to end. Three defects had to be fixed, and none could bite `ToJson`, which
+   dispatches on an argument and returns a `Json` that does not mention the subject:
+
+   - **`Resolution::Bound` read the receiver from `args[0]` regardless.** For a
+     return-position call that is an unrelated argument, so it emitted `<todo: bound:
+     abstract receiver>` — and an argument whose type happened to have an impl would have
+     dispatched on it and silently run the wrong one. The variant now carries `subject_pos`,
+     and `None` means the head comes from the return repr.
+   - **`protocol_method_result` returned the protocol's own subject variable.** Inside
+     `impl[V] FromJson for Map[str, V]` the call's type came back as `T`, so it only
+     type-checked in the `List[T]` impl next door, whose parameter happens to be spelled `T`
+     too. It now substitutes the bound parameter.
+   - **Only the first derive on a record was ever lowered.** Every generated impl carried
+     the RECORD's span, and `lower.rs::impl_def_at` correlates an impl's AST with its
+     `ImplDef` by `(module, span)` taking the first match — so the second impl's methods were
+     indexed under the first one's protocol (`ToJson$P$from_json`, a key nothing looks up)
+     and its body was silently never lowered. Unreachable while `Display` was the only
+     derivable protocol. Each impl now takes its argument's span, which distinguishes
+     `@derive(A) @derive(B)` and `@derive(A, B)` alike.
+
+   One deliberate asymmetry with encoding: an `i64` node decodes as an `f64`. JSON has a
+   single number type, so a document written anywhere else spells 1.0 as `1`, and refusing
+   it would fail every round trip through another language on whole numbers. The reverse is
+   not done — that direction loses information rather than recovering it.
+
+   **Still open, and now the only serialization item:** union decode, whose extra obligation
+   is recorded at the end of this section. Nothing else is missing.
 
 **Litmus test for "done": passed for `Display`/`List`, 2026-08-01.**
 `impl[T] Display for List[T] where T: Display` is expressible as an ordinary library impl

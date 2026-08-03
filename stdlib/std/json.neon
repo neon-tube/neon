@@ -17,12 +17,14 @@
 // arrives, `impl[T] ToJson for T where T: Serialize` re-expresses this in terms of a
 // generic protocol without breaking a single caller.
 //
-// What is not here yet: decoding. `FromJson` needs dispatch on the *expected* type rather
-// than on an argument -- the checker already does this, see `dispatch.rs` -- and the union
-// arm-selection obligation recorded in TODO.md. Encode first.
+// Decoding is `FromJson`, and it dispatches on the type the result is checked against
+// rather than on an argument -- `let p: P = try from_json(doc)` picks P's impl. That is the
+// selection serde spells `T::deserialize`, and it needs no turbofish because the checker
+// already carries an expected type to every call.
 
 use std::collections::list;
 use std::collections::map;
+use std::math;
 use std::string;
 
 // A JSON document. Every arm is a type you already have, so `1.5`, `"hi"` and `null` are
@@ -174,5 +176,137 @@ internal mod esc {
     fn hex(v: i64) -> str {
         // Cannot throw: every caller passes a nibble, and there are sixteen digits.
         try! string::char_at("0123456789abcdef", v)
+    }
+}
+
+// ---- decoding ----
+
+// Thrown by every decode. The message names what was expected and what was there, because
+// a decoder that only says "invalid JSON" leaves the caller to bisect the document by hand.
+record JsonError { message: str }
+impl Display for JsonError { fn to_string(v: JsonError) -> str { v.message } }
+impl Error for JsonError { fn message(v: JsonError) -> str { v.message } }
+
+// How a type is read back out of JSON.
+//
+// The subject appears only in the RETURN, so this dispatches on the type the call is
+// checked against rather than on an argument -- `let p: P = try from_json(j)` picks P's
+// impl, and a field slot in a record literal picks that field's. That is the same
+// selection serde spells `T::deserialize`, and it needs no turbofish here because the
+// checker already carries an expected type to every call.
+protocol FromJson for T {
+    fn from_json(j: Json) throws JsonError -> T
+}
+
+// What a document node is, for a diagnostic. Not public: a caller wanting to branch on the
+// shape should match the union, which is the whole reason `Json` is not opaque.
+internal mod what {
+    fn of(j: Json) -> str {
+        match j {
+            is null => "null",
+            is bool => "a boolean",
+            is i64 => "a number",
+            is f64 => "a number",
+            is str => "a string",
+            is List[Json] => "an array",
+            is Map[str, Json] => "an object",
+        }
+    }
+}
+
+impl FromJson for bool {
+    fn from_json(j: Json) throws JsonError -> bool {
+        match j {
+            is bool => j,
+            _ => throw JsonError { message: "expected a boolean, found #{what::of(j)}" },
+        }
+    }
+}
+
+impl FromJson for str {
+    fn from_json(j: Json) throws JsonError -> str {
+        match j {
+            is str => j,
+            _ => throw JsonError { message: "expected a string, found #{what::of(j)}" },
+        }
+    }
+}
+
+impl FromJson for i64 {
+    fn from_json(j: Json) throws JsonError -> i64 {
+        match j {
+            is i64 => j,
+            _ => throw JsonError { message: "expected a number, found #{what::of(j)}" },
+        }
+    }
+}
+
+// An `i64` node decodes as an `f64`, which is the one place decoding is deliberately not the
+// mirror of encoding. JSON has a single number type, so a document written anywhere else
+// spells 1.0 as `1` and the arms this module keeps distinct are a Neon distinction that the
+// wire does not carry. Refusing it would make every round trip through another language fail
+// on whole numbers. The reverse is NOT done -- an `f64` node is not an `i64` -- because that
+// direction loses information rather than recovering it.
+impl FromJson for f64 {
+    fn from_json(j: Json) throws JsonError -> f64 {
+        match j {
+            is f64 => j,
+            is i64 => math::to_f64(j),
+            _ => throw JsonError { message: "expected a number, found #{what::of(j)}" },
+        }
+    }
+}
+
+impl[T] FromJson for List[T] where T: FromJson {
+    fn from_json(j: Json) throws JsonError -> List[T] {
+        match j {
+            is List[Json] => {
+                let out: List[T] = [];
+                for x in j {
+                    // Annotated, because the dispatch subject for `from_json` is the
+                    // expected type and a call argument's slot does not supply one.
+                    let v: T = try from_json(x);
+                    out = list::push(out, v);
+                };
+                out
+            },
+            _ => throw JsonError { message: "expected an array, found #{what::of(j)}" },
+        }
+    }
+}
+
+impl[V] FromJson for Map[str, V] where V: FromJson {
+    fn from_json(j: Json) throws JsonError -> Map[str, V] {
+        match j {
+            is Map[str, Json] => {
+                let out: Map[str, V] = map::new[str, V]();
+                for k in map::keys(j) {
+                    let v: V = try from_json(j[k]);
+                    out = map::set(out, k, v);
+                };
+                out
+            },
+            _ => throw JsonError { message: "expected an object, found #{what::of(j)}" },
+        }
+    }
+}
+
+// One field of an object. This is the shape `@derive(FromJson)` generates against, for the
+// reason `object` is on the encode side: a generated body must not depend on the author
+// having imported `std::collections::map`.
+//
+// A missing field is an error rather than null. A field whose type admits null can say so,
+// and then `null` is what is in the document; conflating "absent" with "present and null"
+// would make the two indistinguishable to a type that cares.
+fn field(j: Json, name: str) throws JsonError -> Json {
+    match j {
+        is Map[str, Json] => {
+            if map::contains(j, name) {
+                j[name]
+            } else {
+                throw JsonError { message: "missing field `#{name}`" }
+            }
+        },
+        _ => throw JsonError { message: "expected an object, found #{what::of(j)}" },
     }
 }

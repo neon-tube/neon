@@ -1,0 +1,63 @@
+// `FromJson` dispatches on the type its result is CHECKED against, not on an argument.
+// `fn from_json(j: Json) -> T` mentions the subject only in the return, so `dispatch.rs`
+// takes the expected type as the subject -- `let n: i64 = try from_json(doc)` picks i64's
+// impl and `let xs: List[i64] = ..` picks the list's. This is the selection serde spells
+// `T::deserialize`, and it needs no turbofish because the checker already carries an
+// expected type to every call.
+//
+// That path existed in the checker and had never been exercised end to end. Two things had
+// to be fixed to get here, both in the `Resolution::Bound` half -- the one taken inside a
+// GENERIC body, where the subject is a rigid variable:
+//
+//   - Lowering read the receiver from `args[0]` regardless. For a return-position call that
+//     is an unrelated argument (`from_json`'s `Json`), so it emitted `<todo: bound: abstract
+//     receiver>`; worse, an argument whose type happened to have an impl would have
+//     dispatched on it and silently run the wrong one. `Resolution::Bound` now carries
+//     `subject_pos`, and `None` means the head comes from the RETURN repr.
+//   - The declared result came back as the protocol's own subject variable, so inside
+//     `impl[V] FromJson for Map[str, V]` the call's type was `T` where a `V` was wanted.
+//     It only type-checked in the `List[T]` impl next door, whose parameter happens to be
+//     spelled `T` too. `protocol_method_result` now substitutes the bound parameter.
+//
+// Neither could bite `ToJson`: it dispatches on an argument, and its return (`Json`) does
+// not mention the subject.
+
+use std::io;
+use std::json;
+use std::collections::map;
+
+fn decode_i64(j: json::Json) throws json::JsonError -> i64 { try json::from_json(j) }
+
+fn main() {
+    // Primitives, chosen by the annotation on the binding.
+    let a: i64 = try! json::from_json(42);
+    let b: str = try! json::from_json("hi");
+    let c: bool = try! json::from_json(true);
+    let d: f64 = try! json::from_json(1.5);
+    io::println("#{a} #{b} #{c} #{d}");
+
+    // An i64 node decodes as an f64. JSON has one number type, so a document written
+    // anywhere else spells 1.0 as `1`; refusing it would fail every round trip through
+    // another language on whole numbers. The reverse is not done -- that loses information.
+    let e: f64 = try! json::from_json(2);
+    io::println(to_string(e));
+
+    // The container impls, including the nested case where the bound is discharged against
+    // `List[str]` and answered by the same impl.
+    let arr: json::Json = [1, 2, 3];
+    let xs: List[i64] = try! json::from_json(arr);
+    io::println(json::stringify(json::to_json(xs)));
+
+    let nested: json::Json = [["a"], ["b", "c"]];
+    let ns: List[List[str]] = try! json::from_json(nested);
+    io::println(json::stringify(json::to_json(ns)));
+
+    let obj = json::object([("k", json::to_json(7)), ("j", json::to_json(8))]);
+    let m: Map[str, i64] = try! json::from_json(obj);
+    io::println(to_string(map::len(m)));
+    io::println(json::stringify(json::to_json(m)));
+
+    // A mismatch throws rather than trapping, and says what it wanted.
+    let bad = try? decode_i64("nope");
+    io::println(if bad is null { "threw" } else { "no throw" });
+}
