@@ -5,6 +5,13 @@
 // instantiations could not be interchanged at runtime. That is a fact about
 // lowering, not about values. A List is an immutable value, so widening the view
 // cannot write a Square into the narrower list, and covariance is sound.
+//
+// SCOPE, because this file is easy to read as more than it proves: it only calls
+// `list::len`, which does not touch the elements. The codegen constraint above is
+// still real and still unhandled -- widening a list does not convert its elements,
+// so READING one through the widened view is a miscompile. TODO.md's P1 has the
+// repro; it cannot be a corpus file, because the corpus has no way to say "the
+// front end accepts this and the backend is wrong about it".
 
 use std::io;
 use std::string;
