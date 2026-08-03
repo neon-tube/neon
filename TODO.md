@@ -565,6 +565,36 @@ the first is a trap rather than a gap:
 So the remaining work here is item 2 and `std::path` itself; nothing blocks writing a `@cfg`
 in the stdlib today.
 
+### 19b. Derives should eventually live in the stdlib
+
+Owner's direction, recorded so the intent behind `derive.rs`'s shape is not lost. Today a
+derive is a Rust unit struct in `DERIVABLE`; the destination is a derive written in Neon, in
+the stdlib, next to the protocol it is for — `Display`'s generator belongs beside `Display`.
+
+The registry added 2026-08-03 is the seam for that rather than the answer to it. `Derivable`
+is already a narrow interface — a name, and record shape in, declarations out — so a stdlib
+mechanism arrives as one more entry in `DERIVABLE` that interprets a generator written in
+Neon, not as a rewrite of how `@derive` is wired.
+
+What is actually missing is a language, and it is not small:
+
+- **Compile-time reflection over a record.** A generator needs the field names and types as
+  values it can walk. Nothing in Neon can see a type's structure today.
+- **A way to produce declarations.** Quoting, or a builder API over `ast`. This is the half
+  that turns annotations into a macro system, which `docs/design/annotations.md` and
+  `expand.rs`'s `Context` deliberately prevent — a processor may keep or omit its node and
+  nothing more. That decision is the one being revisited here, and it should be revisited
+  openly rather than eroded: `@derive` is already the exception, split out into a pass for
+  exactly this reason.
+- **Hygiene.** `to_json_impl` writes `std::json::Json` and `std::json::object` as absolute
+  paths precisely so a generated body does not depend on the author's imports. A generator
+  written in the stdlib needs that property from the language rather than from the good
+  manners of whoever wrote the generator.
+
+Far off, and nothing here blocks anything. The near-term consequence is only that
+`Derivable` should stay a narrow interface: a derive that reached for compiler internals
+beyond "record shape in, decls out" would be the thing that makes this harder later.
+
 ### 18. Model-check the compiler with Kani
 
 The runtime has CBMC models (`runtime/models/`, rules in its README). The compiler is Rust
