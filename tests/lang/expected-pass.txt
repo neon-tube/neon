@@ -166,6 +166,7 @@ match/arm_below_a_binder_is_diagnosed.neon
 match/atom_patterns.neon
 match/guards.neon
 match/impossible_arm_on_a_type_parameter.neon
+match/is_against_a_structural_shape.neon
 match/is_sum_type.neon
 match/literal_patterns.neon
 match/narrowed_arm_is_the_type_it_narrowed_to.neon

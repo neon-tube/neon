@@ -1,0 +1,88 @@
+// `is` against a STRUCTURAL record type asks what the value currently holds, and the
+// answer is generally not static.
+//
+//     type Wide   = { v: i64 | str }
+//     type Narrow = { v: str }
+//
+// A `Wide` is a `Narrow` exactly when its `v` holds a str, which is a tag test at run time.
+// Codegen used to answer it by comparing the two reprs' tag NAMES -- a static comparison,
+// and those names differ -- so `w is Narrow` was false for every `w`, including the ones
+// holding a str. Silently, and in the arm-selecting direction, so the value took the other
+// branch and any narrowing built on it was wrong from there down.
+//
+// The test is now a conjunction over the shape's fields: a field declared at exactly the
+// shape's type asks nothing, one declared as a union compares the tag the injection stamped,
+// and one declared as a record recurses.
+//
+// NOMINAL identity is a different question and keeps its old answer. `is Point` is not "has
+// these fields" -- see `is_sum_type.neon` -- and the unit record is why that distinction has
+// to be explicit here rather than falling out: a named record with no fields has nothing to
+// compare, so a field-wise test would be vacuously true and `is Empty` would match every
+// record in the program.
+//
+// Opacity is unaffected and always was: `s is { code: i64 }` on an opaque record is rejected
+// by the checker (`records/opaque_no_structural_test.neon`), so a structural test against an
+// opaque shape never reaches codegen.
+
+use std::io;
+
+type Wide = { v: i64 | str }
+type Narrow = { v: str }
+
+fn kind(w: Wide) -> str {
+    match w {
+        is Narrow => "narrow",
+        _ => "wide",
+    }
+}
+
+// Two fields, only one of which discriminates. The non-discriminating field is declared at
+// exactly the shape's type and contributes no test.
+type Pair = { a: i64 | str, b: i64 }
+type PairS = { a: str, b: i64 }
+
+fn pair_kind(p: Pair) -> str {
+    match p {
+        is PairS => "str-a",
+        _ => "int-a",
+    }
+}
+
+// A shape naming a field the value does not have is not that shape, statically.
+type Other = { zzz: i64 }
+
+fn has_other(w: Wide) -> bool {
+    match w {
+        is Other => true,
+        _ => false,
+    }
+}
+
+// Nominal identity is untouched: same fields, different name, still not a match. And a unit
+// record matches only itself.
+record P { x: i64 }
+record Q { x: i64 }
+record Empty {}
+record Empty2 {}
+type Nom = P | Q | Empty | Empty2
+
+fn nominal(n: Nom) -> str {
+    match n {
+        is P => "p",
+        is Q => "q",
+        is Empty => "empty",
+        is Empty2 => "empty2",
+    }
+}
+
+fn main() {
+    io::println(kind({ v: "x" }));
+    io::println(kind({ v: 1 }));
+    io::println(pair_kind({ a: "s", b: 1 }));
+    io::println(pair_kind({ a: 2, b: 1 }));
+    io::println(to_string(has_other({ v: "x" })));
+    io::println(nominal(P { x: 1 }));
+    io::println(nominal(Q { x: 1 }));
+    io::println(nominal(Empty {}));
+    io::println(nominal(Empty2 {}));
+}

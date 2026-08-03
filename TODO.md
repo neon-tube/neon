@@ -16,9 +16,11 @@ environment hazards. Each item still has a repro or a file:line.
 
 ---
 
-## P1 — `is` against a structural record type is always false
+## P1 — `is` against a structural record type is always false — ~~FIXED 2026-08-03~~
 
-Found 2026-08-03 while building 13d. This is a **silently wrong answer**, not a decline:
+Found and fixed the same day, while building 13d. Kept here as the write-up rather than
+deleted, because 13d below is the work it was blocking and reads against it. It was a
+**silently wrong answer**, not a decline:
 
     type Wide   = { v: i64 | str }
     type Narrow = { v: str }
@@ -44,20 +46,25 @@ The corpus does not catch it because the only structural `is` tests are opacity 
 (`records/opaque_no_structural_test.neon`), where answering false is the DESIRED outcome —
 so the tests that touch this path assert the behaviour that is wrong everywhere else.
 
-What it needs: on a concrete subject, compare field-wise against the tested shape — the
-union tag for a field whose declared repr is a union, and recursively for a nested record —
-rather than falling back to a name comparison that structural types cannot participate in.
-Opacity must keep its current answer, which is the constraint that makes this more than a
-one-liner: `opaque_no_structural_test.neon` and `opaque_no_any_laundering.neon` are the
-tests that must not move.
+**The fix** (`backend/c.rs::record_shape_test`): on a concrete record subject, a conjunction
+over the tested shape's fields — nothing for a field already declared at the shape's type, a
+tag comparison for one declared as a union, recursion for one declared as a record. A shape
+naming a field the value lacks is a static no. Undecidable shapes (a nullable field, a
+non-record target) fall back to the old static answer rather than to `false`, so it only ever
+answers where it can answer correctly. Pinned as `match/is_against_a_structural_shape.neon`.
 
-**This blocks 13d below, and it is why 13d is not built.** 13d's whole premise is a record
-negation that survives pruning, which requires two overlapping record types, which requires
-structural records — so every program that exercises 13d also depends on this test being
-right. Worse, the two compose badly: with 13d's projection in place, a mistested value takes
-the wrong arm and is then *reinterpreted at that arm's repr*, turning a wrong branch into a
-`Map` read as a `List`. A compile error became memory-unsafe garbage. Both halves of 13d
-were written, measured against that, and reverted.
+Two things it must NOT do, both of which it got wrong first and the corpus caught:
+
+- **Nominal identity is a different question.** The structural test applies only when the
+  TARGET is structural. `is Point` is not "has these fields" (`is_sum_type.neon`), and the
+  unit record is what makes the distinction load-bearing rather than tidy: a named record
+  with no fields has nothing to compare, so a field-wise test is vacuously true and `is
+  Empty` matched every record in the program (`records/unit_record.neon`).
+- **Opacity was never actually a constraint**, though it looked like one. `s is { code: i64 }`
+  on an opaque record is rejected by the CHECKER —
+  `records/opaque_no_structural_test.neon` is a `compile-fail` — so a structural test against
+  an opaque shape never reaches codegen and answering the reachable ones honestly cannot
+  launder anything.
 
 ---
 

@@ -1558,6 +1558,24 @@ fn op_rhs(types: &TypeTable, f: &Func, result: Option<Value>, op: &Op) -> String
                     "false".into()
                 }
             }
+            // A concrete RECORD tested against a record shape is a runtime question
+            // wherever a field is declared wider than the shape asks for. `names_variant`
+            // compares the two reprs' tag names, which is a *static* answer — and for
+            //
+            //     type Wide = { v: i64 | str }    type Narrow = { v: str }
+            //
+            // those names differ, so `w is Narrow` was false for every `w`, including the
+            // ones holding a str. Silently, and in the arm-selecting direction: the value
+            // took the other branch.
+            //
+            // Opacity does not constrain this. `s is { code: i64 }` on an opaque record is
+            // rejected by the CHECKER (`records/opaque_no_structural_test.neon` is a
+            // compile-fail), so a structural test against an opaque shape never reaches
+            // codegen, and answering the reachable ones honestly cannot launder anything.
+            rec @ Repr::Record { .. } => match tested.as_ref() {
+                Some(t) => record_shape_test(types, &var(*value), rec, t),
+                None => names_variant(types, rec, variant, None).to_string(),
+            },
             // A value of one concrete type is that variant only if it *is* that type —
             // `r is Green` where `r` is a `Red` is false, not vacuously true.
             other => names_variant(types, other, variant, tested.as_ref()).to_string(),
@@ -1820,6 +1838,71 @@ fn prim_operand(f: &Func, v: Value) -> String {
 /// The `variant` fallback is for the tests the checker records no type for — a record
 /// pattern under an error. It compares head names, which is what this did for everything
 /// before, and is sound only because a union's arms are distinct *nominal* types.
+/// Whether the record at `expr`, declared as `src`, currently holds a value of the record
+/// shape `target` — as a C expression, because the answer generally is not static.
+///
+/// A record matches a narrower shape when every field the shape names is present and
+/// currently holds a value of the shape's field type. A field declared at exactly the
+/// shape's type contributes nothing; one declared as a union contributes a tag test; one
+/// declared as a record recurses. That conjunction is the whole test.
+///
+/// Undecidable cases fall back to the static comparison rather than to `false`, so this only
+/// ever answers where it can answer correctly:
+///
+/// - a `target` that is not a record at all (a tuple, an arrow) — not this function's shape
+/// - a field whose declared repr is neither identical, a union containing the target's, nor
+///   a record to recurse into — a nullable, say, where the honest test is a null check this
+///   does not yet write
+///
+/// Both keep today's behaviour, which is wrong in the same direction as before but no more
+/// so. Widening the decidable set is a matter of adding arms here.
+fn record_shape_test(types: &TypeTable, expr: &str, src: &Repr, target: &Repr) -> String {
+    let src = types.resolve(src);
+    let target = types.resolve(target);
+    let (Repr::Record { fields: sf, .. }, Repr::Record { name: tn, fields: tf }) = (src, target)
+    else {
+        return names_variant(types, src, "", Some(target)).to_string();
+    };
+    // Only a STRUCTURAL target is a shape question. A named one is a nominal identity
+    // question and stays with `names_variant`, which is the rule that keeps
+    // `match s { is Point => .. }` from matching an unrelated record with the same fields —
+    // and, for a unit record, from matching everything: with no fields to test, the
+    // conjunction below is vacuously true, so `is Empty` answered yes for every record in
+    // the program. `records/unit_record.neon` and `is_sum_type.neon` are that rule.
+    if tn.is_some() {
+        return names_variant(types, src, "", Some(target)).to_string();
+    }
+    let mut tests: Vec<String> = Vec::new();
+    for (name, want) in tf {
+        // A shape naming a field the value does not have is not that shape. This is a
+        // static "no" rather than an undecidable case.
+        let Some((_, have)) = sf.iter().find(|(n, _)| n == name) else {
+            return "false".to_string();
+        };
+        let access = format!("{expr}.{}", field_name(name));
+        let have = types.resolve(have);
+        let want = types.resolve(want);
+        if have == want {
+            continue;
+        }
+        match have {
+            // The field is a union and the shape wants one of its variants: compare the tag
+            // the injection stamped. A shape wanting something the union cannot hold is a
+            // static "no".
+            Repr::Union(variants) => match variants.iter().position(|v| types.resolve(v) == want) {
+                Some(i) => tests.push(format!("({access}.tag == {i})")),
+                None => return "false".to_string(),
+            },
+            Repr::Record { .. } => tests.push(record_shape_test(types, &access, have, want)),
+            _ => return names_variant(types, src, "", Some(target)).to_string(),
+        }
+    }
+    if tests.is_empty() {
+        return "true".to_string();
+    }
+    tests.join(" && ")
+}
+
 fn names_variant(types: &TypeTable, r: &Repr, variant: &str, tested: Option<&Repr>) -> bool {
     if let Some(t) = tested {
         return match (variant_tag(types, r), variant_tag(types, t)) {
