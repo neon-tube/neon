@@ -451,11 +451,15 @@ impl Processor for Derive {
             };
             if !crate::derive::can_derive(path) {
                 let name = path.join("::");
+                // Read off the registry rather than spelled here. A hardcoded list in a
+                // diagnostic is a third place the set of derivable protocols lives, and the
+                // one nothing would fail if someone forgot to update.
+                let known = crate::derive::derivable_names().join("`, `");
                 cx.error(
                     arg.span().clone(),
                     format!(
-                        "cannot derive `{name}`: the compiler can write `Display`, `ToJson` and \
-                         `FromJson`. Anything else is an ordinary `impl {name} for ..`"
+                        "cannot derive `{name}`: the compiler can write `{known}`. \
+                         Anything else is an ordinary `impl {name} for ..`"
                     ),
                 );
             }

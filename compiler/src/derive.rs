@@ -1,4 +1,4 @@
-//! `@derive(Display)` — generating an impl a user could have written by hand.
+//! `@derive(P)` — generating an impl a user could have written by hand.
 //!
 //! This is the one place in the compiler that *adds* declarations, and it is a separate
 //! pass rather than an annotation processor for that reason. `expand`'s `Context`
@@ -16,6 +16,12 @@
 //!
 //! It runs BEFORE `number_exprs_from`, so everything built here carries `ExprId::UNSET` and
 //! is numbered with the rest of the module. Nothing here has to know about expression ids.
+//!
+//! # Adding one
+//!
+//! Write a unit struct, implement [`Derivable`] on it, and add it to [`DERIVABLE`]. That is
+//! the whole list of edits, and it is one place because everything else — whether a name is
+//! derivable, which generator runs, and the set a diagnostic names — reads the registry.
 
 use crate::ast::{
     Annotation, Block, Decl, DeclKind, Elem, Expr, ExprId, ExprKind, FnDecl, ImplDecl, Module,
@@ -23,22 +29,58 @@ use crate::ast::{
 };
 use crate::lexer::Span;
 
-/// The protocols `@derive` knows how to write. A name outside this list is rejected by
-/// `expand`, so the pass below never meets one.
+/// One protocol the compiler knows how to write an impl for.
+///
+/// The same shape as `expand.rs`'s `Processor`, and for the same reason: a derive is a rule,
+/// not an object, so it is a unit struct with a method rather than data. Adding one is
+/// writing the generator and putting it in [`DERIVABLE`] — there is no second list to
+/// update and no way for two lists to disagree.
+///
+/// That mattered. `can_derive` and the generator used to be separate `match`es over the same
+/// names, with a doc comment asking whoever added a derive to keep them in step, and
+/// `expand.rs` spelled the set a third time in prose inside a diagnostic. Three lists, one
+/// fact. `ToJson` shipped with all three edited by hand; the next one would not have been.
+trait Derivable {
+    /// The protocol name this writes an impl for — the LAST segment of what the author
+    /// wrote, for the reason [`can_derive`] gives.
+    fn protocol(&self) -> &'static str;
+
+    /// Write the impl. `protocol` is the author's whole path, carried verbatim into the
+    /// generated decl; `span` is the annotation argument's, which is what keeps two derives
+    /// on one record distinguishable (see `derive_decls`).
+    fn write(&self, protocol: &[String], r: &RecordDecl, ann: &Annotation, span: &Span) -> Decl;
+}
+
+/// The registry. A protocol not here is not derivable, and that is the whole definition —
+/// `can_derive`, the dispatch in `derive_one` and the diagnostic's list of names all read
+/// it rather than restating it.
+const DERIVABLE: &[&dyn Derivable] = &[&Display, &ToJson, &FromJson];
+
+fn lookup(name: &str) -> Option<&'static dyn Derivable> {
+    DERIVABLE.iter().copied().find(|d| d.protocol() == name)
+}
+
+/// Every derivable protocol's name, for a diagnostic that has to list them. Generated from
+/// the registry so a new derive cannot ship with a message that omits it.
+pub fn derivable_names() -> Vec<&'static str> {
+    DERIVABLE.iter().map(|d| d.protocol()).collect()
+}
+
+/// Whether `@derive(path)` names something this pass can write.
 ///
 /// Matched on the **last segment**, and the generated impl carries the whole path the author
-/// wrote. So `@derive(Display)` and a future `@derive(std::fmt::Display)` both land here, and
-/// which protocol the impl is actually *for* is settled where every other protocol name is
-/// settled — by resolution, on the generated impl. This pass runs before the checker and
-/// resolves nothing; pretending otherwise would mean a second name resolver that agreed with
-/// the real one only by luck.
+/// wrote. So `@derive(Display)` and `@derive(std::fmt::Display)` both land here, and which
+/// protocol the impl is actually *for* is settled where every other protocol name is settled
+/// — by resolution, on the generated impl. This pass runs before the checker and resolves
+/// nothing; pretending otherwise would mean a second name resolver that agreed with the real
+/// one only by luck.
 ///
 /// The cost is that `@derive(mine::Display)`, naming some other protocol that happens to end
 /// in `Display`, gets a body written for the wrong protocol. That is a type error against the
 /// generated impl rather than a silent wrong answer, which is the same deal a hand-written
 /// impl of the wrong protocol gets.
 pub fn can_derive(path: &[String]) -> bool {
-    matches!(path.last().map(String::as_str), Some("Display") | Some("ToJson") | Some("FromJson"))
+    path.last().is_some_and(|n| lookup(n).is_some())
 }
 
 /// Append a generated impl for every `@derive` in the module, recursing into nested mods.
@@ -84,9 +126,8 @@ fn derive_decls(decls: &mut Vec<Decl>) {
     decls.extend(generated);
 }
 
-/// Dispatch on the last segment, for the reason `can_derive` gives, and hand the whole path
-/// to the generator so the impl is written for the protocol the author named rather than for
-/// the compiler's idea of where it lives.
+/// Hand the whole path to the generator so the impl is written for the protocol the author
+/// named rather than for the compiler's idea of where it lives.
 ///
 /// The path is carried VERBATIM. A bare `@derive(ToJson)` in a module that never imported
 /// `ToJson` is "unknown protocol `ToJson`", which is exactly what a hand-written
@@ -103,13 +144,9 @@ fn derive_decls(decls: &mut Vec<Decl>) {
 /// `Display` needs none of them only because it is in the prelude, which is a fact about the
 /// prelude and not a privilege of the derive.
 fn derive_one(path: &[String], r: &RecordDecl, ann: &Annotation, span: &Span) -> Option<Decl> {
-    match path.last().map(String::as_str) {
-        Some("Display") => Some(display_impl(path, r, ann, span)),
-        Some("ToJson") => Some(to_json_impl(path, r, ann, span)),
-        Some("FromJson") => Some(from_json_impl(path, r, ann, span)),
-        // `expand` rejected everything else before we got here.
-        _ => None,
-    }
+    // `expand` rejected anything not in the registry before we got here.
+    let d = lookup(path.last()?)?;
+    Some(d.write(path, r, ann, span))
 }
 
 /// `impl[T] Display for P[T] where T: Display { fn to_string(v: P[T]) -> str { .. } }`
@@ -123,6 +160,18 @@ fn derive_one(path: &[String], r: &RecordDecl, ann: &Annotation, span: &Span) ->
 /// A generic record derives a bounded impl, `where T: Display` per parameter. That is not
 /// decoration: without it the body cannot call `to_string` on a field of type `T` at all,
 /// because inside the impl `T` is rigid and only a bound can answer for it.
+struct Display;
+
+impl Derivable for Display {
+    fn protocol(&self) -> &'static str {
+        "Display"
+    }
+
+    fn write(&self, protocol: &[String], r: &RecordDecl, ann: &Annotation, span: &Span) -> Decl {
+        display_impl(protocol, r, ann, span)
+    }
+}
+
 fn display_impl(protocol: &[String], r: &RecordDecl, ann: &Annotation, span: &Span) -> Decl {
     let sp = || ann.span.clone();
     let target = self_type(r, &sp());
@@ -224,6 +273,18 @@ fn named(name: &str, args: Vec<TypeSpec>, span: &Span) -> TypeSpec {
 /// pass's own scaffolding, and a generated body that only compiled when the author happened
 /// to `use std::json` would break on someone else's file. Absolute paths resolve with no
 /// import, so `@derive(ToJson)` works in a module that imports nothing.
+struct ToJson;
+
+impl Derivable for ToJson {
+    fn protocol(&self) -> &'static str {
+        "ToJson"
+    }
+
+    fn write(&self, protocol: &[String], r: &RecordDecl, ann: &Annotation, span: &Span) -> Decl {
+        to_json_impl(protocol, r, ann, span)
+    }
+}
+
 fn to_json_impl(protocol: &[String], r: &RecordDecl, ann: &Annotation, span: &Span) -> Decl {
     let sp = || ann.span.clone();
     let target = self_type(r, &sp());
@@ -316,6 +377,18 @@ fn to_json_impl(protocol: &[String], r: &RecordDecl, ann: &Annotation, span: &Sp
 ///
 /// Every call is a `try`, and the method `throws JsonError`, so a malformed document
 /// propagates the first failure with the field name already in its message.
+struct FromJson;
+
+impl Derivable for FromJson {
+    fn protocol(&self) -> &'static str {
+        "FromJson"
+    }
+
+    fn write(&self, protocol: &[String], r: &RecordDecl, ann: &Annotation, span: &Span) -> Decl {
+        from_json_impl(protocol, r, ann, span)
+    }
+}
+
 fn from_json_impl(protocol: &[String], r: &RecordDecl, ann: &Annotation, span: &Span) -> Decl {
     let sp = || ann.span.clone();
     let target = self_type(r, &sp());
