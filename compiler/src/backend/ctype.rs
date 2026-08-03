@@ -7,7 +7,8 @@
 use crate::ir::repr::Repr;
 use crate::ir::ssa::Program;
 use crate::typecheck::types::TyId;
-use std::collections::{HashMap, HashSet};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write;
 
 /// The names of the lifted lambdas in a program — functions that already take the
@@ -19,6 +20,16 @@ pub fn lambda_names(program: &Program) -> HashSet<String> {
 
 /// Names the aggregate structs a program needs and emits their C definitions.
 pub struct TypeTable {
+    /// Element-wise list conversions the program needs, keyed by shim name.
+    ///
+    /// Collected DURING emission rather than by a pre-pass, which is what makes this
+    /// tractable at all: a coercion is not an `Op` — it happens inside `coerce_expr` at
+    /// every flow site — so there is nothing to scan for the way `nres_drop_*` scans for
+    /// `neon_resource_new`. Emission is the enumeration, so the shims are written after the
+    /// function bodies that asked for them and forward-declared above.
+    list_convs: RefCell<BTreeMap<String, (Repr, Repr)>>,
+    /// The same, for `Map`, keyed by shim name and holding `(src, tgt)` map reprs.
+    map_convs: RefCell<BTreeMap<String, (Repr, Repr)>>,
     /// Every recursive type, paired with its unfolding. A back-edge names a type without
     /// describing it, so laying one out or refcounting it means resolving through here.
     recursive: HashMap<TyId, Repr>,
@@ -65,6 +76,39 @@ fn ice(r: &Repr, what: &str) -> ! {
 }
 
 impl TypeTable {
+    /// Record that the program needs an element-wise `List[src] -> List[tgt]` conversion.
+    /// Idempotent, and callable through `&self` because it happens mid-emission.
+    pub fn need_list_conv(&self, name: &str, src: &Repr, tgt: &Repr) {
+        self.list_convs
+            .borrow_mut()
+            .insert(name.to_string(), (src.clone(), tgt.clone()));
+    }
+
+    /// Record that the program needs an entry-wise `Map` conversion.
+    pub fn need_map_conv(&self, name: &str, src: &Repr, tgt: &Repr) {
+        self.map_convs.borrow_mut().insert(name.to_string(), (src.clone(), tgt.clone()));
+    }
+
+    /// Every map conversion requested so far, as `(shim name, src map, tgt map)`.
+    pub fn map_convs(&self) -> Vec<(String, Repr, Repr)> {
+        self.map_convs
+            .borrow()
+            .iter()
+            .map(|(n, (s, t))| (n.clone(), s.clone(), t.clone()))
+            .collect()
+    }
+
+    /// Every list conversion requested so far, as `(shim name, src elem, tgt elem)`.
+    /// Snapshotted rather than borrowed, because emitting one can request another: a
+    /// `List[List[i64]]` widening converts its elements with a second shim.
+    pub fn list_convs(&self) -> Vec<(String, Repr, Repr)> {
+        self.list_convs
+            .borrow()
+            .iter()
+            .map(|(n, (s, t))| (n.clone(), s.clone(), t.clone()))
+            .collect()
+    }
+
     /// Collect every record and tuple repr reachable in the program.
     pub fn build(program: &Program) -> TypeTable {
         let mut t = TypeTable {
@@ -88,6 +132,8 @@ impl TypeTable {
                 .collect(),
             key_witness_names: HashMap::new(),
             key_witness_defs: Vec::new(),
+            list_convs: RefCell::new(BTreeMap::new()),
+            map_convs: RefCell::new(BTreeMap::new()),
         };
         for f in &program.funcs {
             t.register(&f.ret);

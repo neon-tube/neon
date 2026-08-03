@@ -72,10 +72,15 @@ fn emit_with(program: &Program, tests: Option<&[crate::ir::lower::TestEntry]>) -
     emit_resource_drops(&mut out, &types, program);
     emit_map_updaters(&mut out, &types, program);
 
+    // Function bodies go to their own buffer: emitting one is what REQUESTS a list
+    // conversion shim, and the shims have to be declared above the bodies that call them.
+    let mut body = String::new();
     for f in &program.funcs {
-        emit_fn(&mut out, &types, f, program.inlined.contains(&f.name));
-        out.push('\n');
+        emit_fn(&mut body, &types, f, program.inlined.contains(&f.name));
+        body.push('\n');
     }
+    emit_list_convs(&mut out, &types);
+    out.push_str(&body);
 
     match tests {
         Some(tests) => emit_test_entry(&mut out, tests),
@@ -450,6 +455,137 @@ fn cleanup_shape(f: &Func, cleanup: Value) -> Option<(Repr, Repr, Repr)> {
 fn resource_drop_name(types: &TypeTable, t: &Repr, e: &Repr) -> String {
     format!("nres_drop_{}", types.witness_ref(t).trim_start_matches('&'))
         + &format!("_{}", types.witness_ref(e).trim_start_matches('&'))
+}
+
+/// The element-wise conversion shim for `List[src] -> List[tgt]`. One per element-repr pair,
+/// since that is all the body depends on.
+fn list_conv_name(types: &TypeTable, src: &Repr, tgt: &Repr) -> String {
+    format!("nlconv_{}", types.witness_ref(src).trim_start_matches('&'))
+        + &format!("_{}", types.witness_ref(tgt).trim_start_matches('&'))
+}
+
+/// Emit one shim per list conversion the program asked for, and forward-declare them all.
+///
+/// Runs AFTER the function bodies are emitted, because emitting a body is what requests a
+/// conversion. Bodies go to their own buffer so the declarations can still be written above
+/// them, and the loop runs to a fixpoint: converting a `List[List[i64]]` coerces its
+/// elements, which requests a second shim while the first is being written.
+///
+/// The element is retained before it is pushed. `neon_list_at` borrows, the source list
+/// still owns what it holds, and `neon_list_push` moves the caller's value in -- so without
+/// the retain the source's release at the end frees elements the new list is holding.
+fn emit_list_convs(out: &mut String, types: &TypeTable) {
+    let mut done: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut protos: Vec<String> = Vec::new();
+    let mut bodies = String::new();
+    loop {
+        let maps: Vec<(String, Repr, Repr)> =
+            types.map_convs().into_iter().filter(|(n, _, _)| !done.contains(n)).collect();
+        for (name, sm, tm) in maps {
+            done.insert(name.clone());
+            protos.push(format!("static neon_map* {name}(neon_map*);"));
+            emit_map_conv(&mut bodies, types, &name, &sm, &tm);
+        }
+        let pending: Vec<(String, Repr, Repr)> =
+            types.list_convs().into_iter().filter(|(n, _, _)| !done.contains(n)).collect();
+        if pending.is_empty() && types.map_convs().iter().all(|(n, _, _)| done.contains(n)) {
+            break;
+        }
+        for (name, se, te) in pending {
+            done.insert(name.clone());
+            protos.push(format!("static neon_list* {name}(neon_list*);"));
+            let sc = types.c_type(&se);
+            let tc = types.c_type(&te);
+            let w = types.witness_ref(&te);
+            let _ = writeln!(bodies, "static neon_list* {name}(neon_list* in) {{");
+            // `in->len` rather than `neon_list_len`, which consumes its argument.
+            let _ = writeln!(bodies, "    int64_t n = (int64_t)in->len;");
+            let _ = writeln!(bodies, "    neon_list* out = neon_list_new_with_capacity({w}, n);");
+            let _ = writeln!(bodies, "    for (int64_t i = 0; i < n; i++) {{");
+            let _ = writeln!(bodies, "        {sc} e = *({sc}*)neon_list_at(in, i);");
+            let mut parts = Vec::new();
+            rc_parts(types, "neon_retain", &se, "e", &mut parts);
+            if !parts.is_empty() {
+                let _ = writeln!(bodies, "        {};", parts.join(", "));
+            }
+            let conv = coerce_expr(types, "e", &se, &te);
+            let _ = writeln!(bodies, "        {tc} t = {conv};");
+            let _ = writeln!(bodies, "        out = neon_list_push(out, &t);");
+            let _ = writeln!(bodies, "    }}");
+            let _ = writeln!(bodies, "    neon_release((neon_header*)in);");
+            let _ = writeln!(bodies, "    return out;");
+            let _ = writeln!(bodies, "}}");
+        }
+    }
+    if done.is_empty() {
+        return;
+    }
+    protos.sort();
+    for p in &protos {
+        let _ = writeln!(out, "{p}");
+    }
+    out.push('\n');
+    out.push_str(&bodies);
+    out.push('\n');
+}
+
+/// The entry-wise conversion shim for one `Map` widening.
+fn map_conv_name(types: &TypeTable, src: &Repr, tgt: &Repr) -> String {
+    let part = |r: &Repr| match r {
+        Repr::Map(k, v) => format!(
+            "{}_{}",
+            types.key_witness_ref(k).trim_start_matches('&'),
+            types.witness_ref(v).trim_start_matches('&')
+        ),
+        other => ice_repr(other, "a map conversion whose side is not a map"),
+    };
+    format!("nmconv_{}__{}", part(src), part(tgt))
+}
+
+/// Emit one shim per map conversion, alongside the list ones and to the same fixpoint.
+///
+/// `neon_map_keys` and `neon_map_values` each CONSUME the map, so one retain up front pays
+/// for both calls and leaves `in` fully consumed — which is what the caller expects, since a
+/// coercion takes ownership of what it converts.
+fn emit_map_conv(bodies: &mut String, types: &TypeTable, name: &str, src: &Repr, tgt: &Repr) {
+    let (sk, sv) = match src {
+        Repr::Map(k, v) => ((**k).clone(), (**v).clone()),
+        other => ice_repr(other, "a map conversion whose source is not a map"),
+    };
+    let (tk, tv) = match tgt {
+        Repr::Map(k, v) => ((**k).clone(), (**v).clone()),
+        other => ice_repr(other, "a map conversion whose target is not a map"),
+    };
+    let (skc, svc) = (types.c_type(&sk), types.c_type(&sv));
+    let (tkc, tvc) = (types.c_type(&tk), types.c_type(&tv));
+    let _ = writeln!(bodies, "static neon_map* {name}(neon_map* in) {{");
+    let _ = writeln!(bodies, "    neon_retain((neon_header*)in);");
+    let _ = writeln!(bodies, "    neon_list* ks = neon_map_keys(in, {});", types.witness_ref(&sk));
+    let _ = writeln!(bodies, "    neon_list* vs = neon_map_values(in, {});", types.witness_ref(&sv));
+    let _ = writeln!(
+        bodies,
+        "    neon_map* out = neon_map_new({}, {});",
+        types.key_witness_ref(&tk),
+        types.witness_ref(&tv)
+    );
+    let _ = writeln!(bodies, "    int64_t n = (int64_t)ks->len;");
+    let _ = writeln!(bodies, "    for (int64_t i = 0; i < n; i++) {{");
+    let _ = writeln!(bodies, "        {skc} k = *({skc}*)neon_list_at(ks, i);");
+    let _ = writeln!(bodies, "        {svc} v = *({svc}*)neon_list_at(vs, i);");
+    let mut parts = Vec::new();
+    rc_parts(types, "neon_retain", &sk, "k", &mut parts);
+    rc_parts(types, "neon_retain", &sv, "v", &mut parts);
+    if !parts.is_empty() {
+        let _ = writeln!(bodies, "        {};", parts.join(", "));
+    }
+    let _ = writeln!(bodies, "        {tkc} k2 = {};", coerce_expr(types, "k", &sk, &tk));
+    let _ = writeln!(bodies, "        {tvc} v2 = {};", coerce_expr(types, "v", &sv, &tv));
+    let _ = writeln!(bodies, "        out = neon_map_set(out, &k2, &v2);");
+    let _ = writeln!(bodies, "    }}");
+    let _ = writeln!(bodies, "    neon_release((neon_header*)ks);");
+    let _ = writeln!(bodies, "    neon_release((neon_header*)vs);");
+    let _ = writeln!(bodies, "    return out;");
+    let _ = writeln!(bodies, "}}");
 }
 
 /// The updater shim for a `map::update` over values of repr `v`. One per value repr, since
@@ -2145,6 +2281,34 @@ fn coerce_expr(types: &TypeTable, expr: &str, src: &Repr, target: &Repr) -> Stri
             })
             .collect();
         return format!("({}){{{}}}", types.c_type(target), inits.join(", "));
+    }
+    // Covariance on a CONTAINER is not free the way it is on a record. `List[i64]` and
+    // `List[i64 | str]` are both `neon_list*`, so the arm below would call them
+    // representationally identical and pass the pointer through -- and the elements are
+    // stored inline, `int64_t` slots against union structs, so the reader takes each one at
+    // the wrong width. That was a silent miscompile for `plain(xs)` with `xs: List[i64]`
+    // against a `List[i64 | str]` parameter.
+    //
+    // Widening a list therefore means building a new one, element by element. The shim is
+    // generated per element-repr pair and requested here, mid-emission, because a coercion
+    // is not an `Op` and there is nothing to scan for ahead of time.
+    if let (Repr::List(se), Repr::List(te)) = (src, target) {
+        let (se, te) = (types.resolve(se).clone(), types.resolve(te).clone());
+        if se != te {
+            let name = list_conv_name(types, &se, &te);
+            types.need_list_conv(&name, &se, &te);
+            return format!("{name}({expr})");
+        }
+    }
+    // A `Map` is the same story as a `List` above: same `neon_map*`, different slot widths,
+    // so widening either half means rebuilding the table entry by entry.
+    if let (Repr::Map(sk, sv), Repr::Map(tk, tv)) = (src, target) {
+        let same = types.resolve(sk) == types.resolve(tk) && types.resolve(sv) == types.resolve(tv);
+        if !same {
+            let name = map_conv_name(types, src, target);
+            types.need_map_conv(&name, src, target);
+            return format!("{name}({expr})");
+        }
     }
     // Reprs that share a C representation (a nullable pointer and its pointer, a nullable
     // string and a string) need no conversion.

@@ -1,0 +1,92 @@
+// Widening a list CONVERTS it, element by element, rather than passing the pointer through.
+//
+// `List[i64] <: List[i64 | str]` by covariance -- `list_generics_are_covariant.neon` has the
+// argument for why that is sound -- but the two do not share a representation. A `List[i64]`
+// stores `int64_t` slots and a `List[i64 | str]` stores union structs, both behind a
+// `neon_list*`. `coerce_expr` used to call them representationally identical and hand the
+// pointer over, and the callee then read i64s as unions: `plain(xs)` below printed nothing,
+// it trapped with "reached unreachable code" on a tag taken from the middle of an integer.
+//
+// Records and tuples never had this problem, because those aggregates are rebuilt field by
+// field at the coercion. A list holds its elements inline in a runtime container, so
+// widening one means allocating a new container at the target's witness and coercing every
+// element into it. `nlconv_*` is that shim, one per element-repr pair.
+//
+// A LITERAL argument hides the bug, which is why this file uses variables: the checker
+// builds `[7, 8]` at whatever element type is expected of it, so `plain([7, 8])` was always
+// fine and only a list that already existed at the narrower type went wrong.
+//
+// The source list survives, and so do its elements: `neon_list_at` borrows, the source still
+// owns what it holds, and `neon_list_push` moves the caller's value in -- so each element is
+// retained on the way across. `xs` is used again after every conversion below, and the file
+// runs clean under `--sanitize address`.
+
+use std::io;
+use std::collections::list;
+use std::collections::map;
+
+record R { s: str }
+
+fn describe(u: List[i64 | str]) -> str {
+    let e = u[0];
+    match e {
+        is i64 => "int #{e}",
+        is str => "str #{e}",
+    }
+}
+
+// A counted element type, so the retain is load-bearing rather than incidental.
+fn first_len(u: List[List[str] | i64]) -> i64 {
+    let e = u[0];
+    match e {
+        is List[str] => list::len(e),
+        is i64 => -1,
+    }
+}
+
+fn name_of(u: List[R | i64]) -> str {
+    let e = u[0];
+    match e {
+        is R => e.s,
+        is i64 => "int",
+    }
+}
+
+// A `Map` is the same story: same `neon_map*`, different slot widths, so widening either
+// half rebuilds the table entry by entry. `neon_map_keys` and `neon_map_values` each consume
+// the map, so the shim retains once up front to pay for both.
+fn value_of(m: Map[str, i64 | str]) -> str {
+    let e = m["k"];
+    match e {
+        is i64 => "mint #{e}",
+        is str => "mstr #{e}",
+    }
+}
+
+fn main() {
+    let xs = [7, 8];
+    io::println(describe(xs));
+    // Converted twice from the same source, which only works if the first conversion did
+    // not consume the elements it borrowed.
+    io::println(describe(xs));
+    io::println(to_string(list::len(xs)));
+
+    let ss = ["hello", "world"];
+    io::println(describe(ss));
+    io::println(to_string(list::len(ss)));
+
+    let nested = [["x", "y"], ["z"]];
+    io::println(to_string(first_len(nested)));
+
+    let recs = [R { s: "rec" }];
+    io::println(name_of(recs));
+    io::println(name_of(recs));
+
+    let mi = map::set(map::new[str, i64](), "k", 7);
+    io::println(value_of(mi));
+    io::println(value_of(mi));
+    io::println(to_string(map::len(mi)));
+
+    let ms = map::set(map::new[str, str](), "k", "v");
+    io::println(value_of(ms));
+}

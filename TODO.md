@@ -2,8 +2,9 @@
 
 Everything known-broken or undecided as of 2026-07-22, distilled from six middle-end
 audits, a compiler-wide collapsing-key sweep, the CBMC models and a fuzzing run — and
-then burned down. The P0 section was empty from that sweep until 2026-08-03, when the
-narrowing and serialization work turned up the P1 below; resolved items are removed, not struck through, and
+then burned down. The narrowing and serialization work of 2026-08-03 turned up four more
+wrong-answer defects; all four are fixed and corpus-pinned, so the P0/P1 sections are
+empty again. resolved items are removed, not struck through, and
 their write-ups live in the design docs they produced (`docs/design/identity.md`,
 `docs/design/opacity.md`, `docs/design/checked-casts.md`) and in the corpus files the
 fixes are pinned by.
@@ -65,59 +66,6 @@ Two things it must NOT do, both of which it got wrong first and the corpus caugh
   `records/opaque_no_structural_test.neon` is a `compile-fail` — so a structural test against
   an opaque shape never reaches codegen and answering the reachable ones honestly cannot
   launder anything.
-
----
-
-## P1 — widening a container does not convert its elements
-
-Found 2026-08-03. A **silent miscompile in ordinary code**, with no dispatch, no narrowing
-and no generics involved beyond the container itself:
-
-    fn plain(u: List[i64 | str]) -> str {
-        let e = u[0];
-        match e { is i64 => "int #{e}", is str => "str #{e}" }
-    }
-
-    let xs = [7, 8];
-    plain(xs)               // "reached unreachable code"
-
-`List[i64] <: List[i64 | str]` by covariance, which the type system means and
-`collections/list_generics_are_covariant.neon` documents. The representations differ though:
-a `List[i64]` stores `int64_t` slots, a `List[i64 | str]` stores union structs. Both are
-`neon_list*` in C, so `coerce_expr` falls to its "same C type, needs no conversion" arm and
-passes the pointer through. The callee reads i64s as unions.
-
-Records and tuples are fine — `coerce_expr` rebuilds those aggregates field-by-field,
-coercing each. A `List` or `Map` holds its elements inline in a runtime container, so
-widening one means allocating a new container and converting every element, and nothing
-emits that.
-
-**The corpus gives false confidence here**, and cannot be made to say so.
-`list_generics_are_covariant.neon` passes only because it calls `list::len`, which never
-touches an element; its header now says so. A corpus file for the miscompile has nowhere to
-live: `corpus_check` verifies only the FRONT END, so the program above checks clean and the
-ratchet demands it be listed as passing — and listing it puts it in `backend_run`, where it
-fails. The repro therefore lives here, which is what this section is for.
-
-That gap is worth its own note: the corpus cannot currently express "front end accepts this,
-and the backend is wrong about it", which is exactly the shape of every miscompile.
-
-Two ways out, and the second is an owner's call rather than an implementation:
-
-1. **Emit the conversion.** A generated shim per `(src elem, target elem)` pair that
-   allocates at the target witness and coerces element-wise, in the spirit of `nres_drop_*`
-   and `nmap_upd_*`. Those are collected by scanning for one specific `Op`; a coercion is not
-   an op, it happens inside `coerce_expr` at every flow site, so this needs a pre-pass that
-   enumerates coercion sites and their repr pairs. That is the real work, and it is a project
-   rather than a patch. Inline emission is not an option: statement expressions are a GNU
-   extension and MSVC is a supported target.
-2. **Make container arguments invariant when the reprs differ** — a compile error instead of
-   a miscompile. Cheap and sound, and it takes back something the language deliberately
-   granted: `count(circles)` in the existing corpus test stops compiling. Whoever picks this
-   is changing the language, not fixing a bug.
-
-Until one lands, a widened container is only safe if nothing reads an element through it,
-which is not a property anyone can be asked to track.
 
 ---
 

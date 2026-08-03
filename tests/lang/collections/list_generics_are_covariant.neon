@@ -7,11 +7,10 @@
 // cannot write a Square into the narrower list, and covariance is sound.
 //
 // SCOPE, because this file is easy to read as more than it proves: it only calls
-// `list::len`, which does not touch the elements. The codegen constraint above is
-// still real and still unhandled -- widening a list does not convert its elements,
-// so READING one through the widened view is a miscompile. TODO.md's P1 has the
-// repro; it cannot be a corpus file, because the corpus has no way to say "the
-// front end accepts this and the backend is wrong about it".
+// `list::len`, which does not touch the elements, so it says nothing about the
+// representation change. That the elements are CONVERTED on the way across --
+// which is what makes the covariance above hold at run time and not only in the
+// type system -- is `covariant_list_converts_its_elements.neon`.
 
 use std::io;
 use std::string;
