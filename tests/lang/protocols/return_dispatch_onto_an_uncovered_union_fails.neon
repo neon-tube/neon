@@ -1,0 +1,26 @@
+//@ compile-fail
+//@ error-contains: is dispatched on the type it RETURNS
+//@ error-contains: nothing in hand whose tag could choose one
+
+// The companion to `return_dispatch_onto_a_union_needs_one_impl.neon`: the same shape with
+// NO impl covering the whole union, so there is nothing that can answer.
+//
+// `std::json` has `FromJson` for `i64` and for `str` separately. Asking for an `i64 | str`
+// therefore needs a different impl per variant, chosen at run time -- and the subject is the
+// return, so there is no value in hand whose tag could choose. A switch is not merely
+// unhelpful here, it is unlowerable.
+//
+// This compiled before, and segfaulted: the switch was emitted against `args[0]`, which for
+// `from_json` is the document, so a `true` fell past the `i64` test into an untested `str`
+// arm and `neon_str_retain` ran on a bool payload. A compile error is the whole improvement.
+
+use std::io;
+use std::json;
+
+fn dec(j: json::Json) throws json::JsonError -> i64 | str {
+    try json::from_json(j)
+}
+
+fn main() {
+    io::println(json::stringify(json::to_json(try! dec(1))));
+}

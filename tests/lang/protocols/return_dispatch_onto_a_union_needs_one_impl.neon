@@ -1,0 +1,53 @@
+// Decoding INTO a union, which is the last thing the serialization roadmap wanted and the
+// one place a return-position dispatch cannot be answered by the dispatcher.
+//
+// A switch picks an arm by reading the receiver's runtime tag. When the subject is the
+// RETURN there is no receiver -- nothing exists yet whose tag could be read -- so there is
+// nothing to switch on and the call has to be refused. It used to be lowered anyway, against
+// `args[0]`: for `from_json(j: Json) -> T` that is the DOCUMENT, so the generated code
+// compared the document's tag against the subject's variants, rebuilt an argument out of the
+// projected payload, and gave the last arm no test at all. `dec(true)` on an `i64 | str` read
+// a bool payload as a `neon_str` and segfaulted, silently, with no output.
+//
+// The escape hatch below is the answer, and the diagnostic names it: ONE impl for the whole
+// union, which inspects what it was given and decides. That is where the knowledge of how to
+// tell the variants apart actually lives -- only the protocol knows which documents each impl
+// accepts, so "these two arms cannot both match" is a fact about JSON and not about dispatch.
+//
+// Selecting it needs one rule beyond ordinary specificity: `most_specific` prefers the
+// NARROWER heads, which is right when there is a value to test (`impl P for i64` should beat
+// `impl P for i64 | str` for an i64 argument) and impossible when there is not. In return
+// position an impl covering the whole subject is preferred instead, because it is the only
+// one that can answer at all. Without that, this file's impl was discarded in favour of the
+// two that need a tag nobody has.
+
+use std::io;
+use std::json;
+
+impl json::FromJson for i64 | str {
+    fn from_json(j: json::Json) throws json::JsonError -> i64 | str {
+        match j {
+            is i64 => j,
+            is str => j,
+            _ => throw json::JsonError { message: "expected a number or a string" },
+        }
+    }
+}
+
+fn dec(j: json::Json) throws json::JsonError -> i64 | str {
+    try json::from_json(j)
+}
+
+fn main() {
+    // Both arms, from the same call site, chosen by the document rather than by arm order.
+    io::println(json::stringify(json::to_json(try! dec(1))));
+    io::println(json::stringify(json::to_json(try! dec("s"))));
+
+    // A document that is neither throws, rather than being reinterpreted as the last arm.
+    let bad = try? dec(true);
+    io::println(if bad is null { "neither arm threw" } else { "no throw" });
+
+    // The narrower impls still answer when the subject is one of them.
+    let n: i64 = try! json::from_json(7);
+    io::println(json::stringify(json::to_json(n)));
+}

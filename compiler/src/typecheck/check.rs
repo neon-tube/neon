@@ -3374,6 +3374,10 @@ impl Checker<'_> {
                 TypeErrorKind::NoImpl { protocol, method, uncovered }
             }
             DispatchError::NoReceiver(n) => TypeErrorKind::NoReceiver(n),
+            DispatchError::NoSubjectToSwitch { protocol, method, subject } => {
+                let subject = self.show(subject);
+                TypeErrorKind::NoSubjectToSwitch { protocol, method, subject }
+            }
         };
         self.error(span, kind);
     }

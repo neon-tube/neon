@@ -184,6 +184,9 @@ pub enum TypeErrorKind {
     /// A value-position name nothing declares. Distinct from `Unknown`, which is a
     /// TYPE nothing declares — `unknown type println` is not a sentence.
     UnknownName(String),
+    /// A return-position dispatch onto a union that needs a different impl per variant.
+    NoSubjectToSwitch { protocol: String, method: String, subject: String },
+
     /// An orphan that does not fill a gap. `overlap` is the values already covered
     /// — the intersection itself, which is what the representation is for.
     OrphanOverlaps { protocol: String, overlap: String },
@@ -479,6 +482,17 @@ impl fmt::Display for TypeError {
                 "`orphan impl {n}` may only appear in the root application: a library \
                  carrying one imposes its choice on every program that depends on it"
             ),
+            TypeErrorKind::NoSubjectToSwitch { protocol, method, subject } => write!(
+                f,
+                "`{method}` is dispatched on the type it RETURNS, and `{subject}` needs a \
+                 different impl of `{protocol}` per variant -- so there is nothing in hand \
+                 whose tag could choose one. A dispatch on an argument can switch because \
+                 the value is already there; a dispatch on the return has no value yet. \
+                 Either ask for one variant, or write an `impl {protocol} for {subject}` \
+                 that inspects what it was given and decides -- which is where the knowledge \
+                 of how to tell the variants apart actually lives"
+            ),
+
             TypeErrorKind::OrphanOverlaps { protocol, overlap } => write!(
                 f,
                 "this orphan impl of `{protocol}` does not fill a gap: `{overlap}` is \

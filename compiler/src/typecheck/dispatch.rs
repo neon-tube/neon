@@ -56,6 +56,9 @@ pub enum DispatchError {
     NoImpl { protocol: String, method: String, uncovered: TyId },
     /// `fn make() -> T` — nothing to dispatch on without an expected type.
     NoReceiver(String),
+    /// The subject is the return and it is a union needing a different impl per variant.
+    /// There is no value in hand whose tag could choose one.
+    NoSubjectToSwitch { protocol: String, method: String, subject: TyId },
 }
 
 /// Resolve `method` called with `args`.
@@ -261,11 +264,53 @@ fn applicable(
         return Err(DispatchError::NoImpl { protocol: name, method: method.to_string(), uncovered });
     }
 
-    let hits = most_specific(env, hits);
+    // Specificity, except in return position, where an impl covering the WHOLE subject is
+    // the only thing that can answer.
+    //
+    // `most_specific` prefers the narrower heads, which is right when there is a value to
+    // test: `impl P for i64` beside `impl P for i64 | str` should win for an i64 argument.
+    // With the subject in the return there is nothing to test, so preferring the narrow ones
+    // leaves a switch that cannot be lowered — and drops the one impl that could have
+    // answered. `impl FromJson for i64 | str`, written precisely to decide the arm itself,
+    // was discarded in favour of the two impls that need a tag nobody has.
+    let covering = if receiver_pos.is_none() {
+        hits.iter().position(|h| env.solver.is_subtype(receiver, h.head))
+    } else {
+        None
+    };
+    let hits = match covering {
+        Some(i) => {
+            let mut hits = hits;
+            vec![hits.swap_remove(i)]
+        }
+        None => most_specific(env, hits),
+    };
 
     let (ret, throws) = result_of(env, &hits, method, protocol);
     let resolution = match hits.as_slice() {
         [h] if env.solver.is_subtype(receiver, h.head) => Resolution::Direct(h.id),
+        _ if receiver_pos.is_none() => {
+            // A switch tests the receiver's runtime tag to pick an arm. When the subject is
+            // the RETURN there is no receiver — nothing exists yet whose tag could be read —
+            // so there is no way to choose, and this has to be refused rather than lowered.
+            //
+            // Lowering it switched on `args[0]` instead, which for `from_json(j: Json) -> T`
+            // is the document: it compared the document's tag against the SUBJECT's variants,
+            // rebuilt an argument from the projected payload, and gave the last arm no test at
+            // all — so `dec(true)` on an `i64 | str` read a bool payload as a `neon_str` and
+            // segfaulted. Same shape as the `Bound` path's `args[0]` assumption, in the other
+            // resolution.
+            //
+            // Choosing an arm from the *document* is a real thing to want and it is not this
+            // layer's to do: only the protocol knows what shapes each impl accepts, so the
+            // check that two arms cannot both match is a fact about JSON, not about dispatch.
+            // Write an impl for the union that inspects the value and decides.
+            return Err(DispatchError::NoSubjectToSwitch {
+                protocol: name,
+                method: method.to_string(),
+                subject: receiver,
+            });
+        }
         _ => {
             let mut arms: Vec<(TyId, ImplId)> = hits
                 .iter()

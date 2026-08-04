@@ -556,10 +556,33 @@ so the impl is not applicable and the diagnostic names the uncovered type); and 
 concrete `impl P for List[i64]` sitting under a generic `impl[T] P for List[T]` would lose
 to the generic one there. Both want the same fix — arms carrying their own substitution.
 
-Union *decode* has one extra obligation the encode side doesn't: choosing an arm. Use the
-emptiness checker (`solver.is_empty`, already the basis of `dispatch.rs:220`) to require the
-arms' JSON projections be pairwise disjoint, and reject as a compile error when they overlap
-("union not unambiguously decodable, add a tag") rather than silently picking arm order.
+~~Union *decode* has one extra obligation the encode side doesn't: choosing an arm.~~ —
+**settled 2026-08-04, and not the way this entry proposed.**
+
+The plan was for the compiler to require the arms' JSON projections be pairwise disjoint and
+reject overlap. That cannot live in dispatch: only the protocol knows which documents each
+impl accepts, so "these two arms cannot both match" is a fact about JSON, and a general
+mechanism would have to invent semantics it cannot verify.
+
+What was actually wrong was worse than arm ordering. A `Resolution::Switch` picks an arm by
+reading the RECEIVER's runtime tag, and a return-position dispatch has no receiver — so
+lowering switched on `args[0]`, which for `from_json(j: Json) -> T` is the document. It
+compared the document's tag against the subject's variants, rebuilt an argument from the
+projected payload, and gave the last arm no test at all: `dec(true)` on an `i64 | str` read a
+bool payload as a `neon_str` and **segfaulted silently**. Same shape as the `Bound` path's
+`args[0]` assumption fixed the day before, in the other resolution.
+
+So the answer is that dispatch REFUSES, with a diagnostic naming the escape hatch: one impl
+for the whole union, which inspects what it was given and decides. Selecting it needs one
+rule beyond ordinary specificity — `most_specific` prefers the narrower heads, which is right
+when there is a value to test and impossible when there is not, so in return position an impl
+covering the whole subject wins instead. Pinned both ways, as
+`protocols/return_dispatch_onto_a_union_needs_one_impl.neon` and
+`protocols/return_dispatch_onto_an_uncovered_union_fails.neon`.
+
+A `@derive(FromJson)` for unions could still generate that covering impl, and the
+disjointness check belongs *there* — in the derive, where the format is known — rather than
+in dispatch. Nothing needs it yet.
 
 ---
 
