@@ -1,4 +1,4 @@
-// Lexical path manipulation. POSIX separators, no filesystem.
+// Lexical path manipulation. Platform-aware separators, no filesystem.
 //
 // ---- A path is a `str`, not a `Path` ----
 //
@@ -30,12 +30,27 @@
 // symlinks the normalised result may name a different file than the original. Where that
 // matters you want a real `realpath`, which needs a syscall and is not this module.
 //
-// ---- POSIX only ----
+// ---- Platform rules ----
 //
-// The separator is `/`, and only `/`. A backslash is an ordinary filename byte -- it is
-// legal in a POSIX filename -- so `a\b` is one component, not two. There is no drive-letter
-// handling and no UNC handling. This module is wrong for Windows paths and does not pretend
-// otherwise; a Windows implementation is a different set of rules, not a tweak to these.
+// The separator, what counts as a root, and how a path splits are the platform's business
+// and live in the `posix` and `win` rule sets below. Everything else here is derived from
+// them through `components` and `raw::render`, so the shared logic is genuinely shared
+// rather than duplicated per platform.
+//
+// BOTH rule sets are compiled on every platform and both are tested on every platform; only
+// which one the module uses is a `@cfg` question. That is deliberate: a `@cfg`-guarded branch
+// is dropped before the checker runs, so rules written behind `@cfg(windows)` would never be
+// type-checked anywhere but Windows and would ship compiled by nobody. Choosing is the one
+// job `@cfg` can do without hiding code from the checker, and the four delegators in `plat`
+// are all it does. `neon check --cfg windows` covers those.
+//
+// What the Windows rules DO cover: `\` and `/` both separate, `C:\` and `\\server` are
+// roots, and a drive-relative `C:x` or `\x` is correctly not absolute. What they do not:
+// case-insensitive comparison, `\\?\` extended-length prefixes, and reserved device names
+// (`CON`, `NUL`). Those are real and unimplemented rather than overlooked.
+//
+// Bytes, not characters: everything is byte-oriented like `std::string`, which is fine
+// because the bytes with meaning are ASCII and UTF-8 never produces them as continuations.
 //
 // Bytes, not characters: everything is byte-oriented like `std::string`, which is fine
 // because the only byte with meaning is `/` and UTF-8 never produces it as a continuation.
@@ -43,12 +58,130 @@
 use std::string;
 use std::collections::list;
 
+// ---- platform rules ----
+
+// Both rule sets are compiled on EVERY platform, and both are tested on every platform.
+// Only which one the module uses is a `@cfg` question.
+//
+// That split is the whole design, and it is not stylistic. A `@cfg`-guarded branch is
+// dropped BEFORE the checker runs, so a rule set written behind `@cfg` is never type-checked
+// anywhere except the platform it is for -- which for this repo means the Windows rules would
+// ship having been compiled by nobody. Keeping the rules always-compiled means Linux CI type
+// checks them and `path_windows_rules.neon` runs them, and `@cfg` is left with the one job it
+// can do safely: choosing.
+//
+// `neon check --cfg windows` additionally checks the delegators below, which ARE `@cfg`-ed
+// because there is nothing else they could be.
+
+mod posix {
+    fn sep() -> str {
+        "/"
+    }
+
+    // The absolute prefix, or `null` when the path is relative. A leading `~` is a shell
+    // convention, not a path one.
+    fn root_of(p: str) -> str | null {
+        if string::starts_with(p, "/") { "/" } else { null }
+    }
+
+    fn split_parts(p: str) -> List[str] {
+        string::split(p, "/")
+    }
+
+    fn is_root(part: str) -> bool {
+        part == "/"
+    }
+}
+
+mod win {
+    fn sep() -> str {
+        "\\"
+    }
+
+    // `C:\x` is absolute and so is `\\server\share`. Deliberately NOT absolute: a bare
+    // `\x`, which is relative to the current drive, and `C:x`, which is relative to that
+    // drive's own working directory. Both name different files depending on state this
+    // module cannot see, and calling them absolute is how a join silently escapes its base.
+    fn root_of(p: str) -> str | null {
+        if string::starts_with(p, "\\\\") or string::starts_with(p, "//") {
+            try! string::slice(p, 0, 2)
+        } else if string::byte_len(p) >= 3 and is_drive_letter(try! string::slice(p, 0, 1)) {
+            let rest = try! string::slice(p, 1, 3);
+            if rest == ":\\" or rest == ":/" { try! string::slice(p, 0, 3) } else { null }
+        } else {
+            null
+        }
+    }
+
+    // Both separators, because every Windows API accepts `/` and real paths mix them.
+    fn split_parts(p: str) -> List[str] {
+        let out: List[str] = [];
+        for chunk in string::split(p, "\\") {
+            for part in string::split(chunk, "/") {
+                out = list::push(out, part);
+            };
+        };
+        out
+    }
+
+    // A root component is a drive (`C:\`) or the UNC prefix, never a plain name.
+    fn is_root(part: str) -> bool {
+        part == "\\\\" or part == "//" or string::byte_len(part) == 3 and is_drive_letter(try! string::slice(part, 0, 1))
+    }
+
+    fn is_drive_letter(c: str) -> bool {
+        let up = string::to_upper(c);
+        up >= "A" and up <= "Z" and string::byte_len(up) == 1
+    }
+}
+
 // ---- the shape of a path ----
 
-// Absolute iff it starts at the root. Nothing else makes a path absolute here: a leading
-// `~` is a shell convention, not a path one.
+// Absolute iff it starts at a root. Which prefixes count is the platform's business; see the
+// rule sets above.
+@cfg(windows)
 fn is_absolute(p: str) -> bool {
-    string::starts_with(p, "/")
+    !win::root_of(p) is null
+}
+
+@cfg(not(windows))
+fn is_absolute(p: str) -> bool {
+    !posix::root_of(p) is null
+}
+
+// The rest of the platform surface, selected the same way. Four one-line delegators rather
+// than a `@cfg` around the whole module: the logic below is shared, and only these four
+// facts differ.
+@cfg(windows)
+internal mod plat {
+    fn sep() -> str {
+        win::sep()
+    }
+    fn root_of(p: str) -> str | null {
+        win::root_of(p)
+    }
+    fn split_parts(p: str) -> List[str] {
+        win::split_parts(p)
+    }
+    fn is_root(part: str) -> bool {
+        win::is_root(part)
+    }
+}
+
+@cfg(not(windows))
+internal mod plat {
+    fn sep() -> str {
+        posix::sep()
+    }
+    fn root_of(p: str) -> str | null {
+        posix::root_of(p)
+    }
+    fn split_parts(p: str) -> List[str] {
+        posix::split_parts(p)
+    }
+    fn is_root(part: str) -> bool {
+        posix::is_root(part)
+    }
 }
 
 fn is_relative(p: str) -> bool {
@@ -73,10 +206,18 @@ fn is_relative(p: str) -> bool {
 // which is the honest answer: neither names anything.
 fn components(p: str) -> List[str] {
     let out: List[str] = [];
-    if is_absolute(p) {
-        out = list::push(out, "/");
+    let root = plat::root_of(p);
+    let rest = if root is null {
+        p
+    } else {
+        let r = root as str;
+        // In range: `root_of` returned a prefix of `p`.
+        try! string::slice(p, string::byte_len(r), string::byte_len(p))
     };
-    for part in string::split(p, "/") {
+    if !root is null {
+        out = list::push(out, root as str);
+    };
+    for part in plat::split_parts(rest) {
         if !string::is_empty(part) and part != "." {
             out = list::push(out, part);
         };
@@ -90,10 +231,10 @@ internal mod raw {
     fn render(parts: List[str]) -> str {
         if list::is_empty(parts) {
             ""
-        } else if parts[0] == "/" {
-            string::concat("/", string::join(drop_first(parts), "/"))
+        } else if plat::is_root(parts[0]) {
+            string::concat(parts[0], string::join(drop_first(parts), plat::sep()))
         } else {
-            string::join(parts, "/")
+            string::join(parts, plat::sep())
         }
     }
 
@@ -122,7 +263,8 @@ internal mod raw {
     // means, because for `join` it means the root and for nothing else does.
     fn trim_seps(s: str) -> str {
         let out = s;
-        while string::ends_with(out, "/") {
+        while string::ends_with(out, plat::sep()) or string::ends_with(out, "/") {
+            out = string::trim_end_of(out, plat::sep());
             out = string::trim_end_of(out, "/");
         };
         out
@@ -174,9 +316,9 @@ fn join(a: str, b: str) -> str {
         let base = raw::trim_seps(a);
         if string::is_empty(base) {
             // `a` was nothing but separators: that is the root.
-            string::concat("/", b)
+            string::concat(plat::sep(), b)
         } else {
-            string::concat(string::concat(base, "/"), b)
+            string::concat(string::concat(base, plat::sep()), b)
         }
     }
 }
@@ -252,7 +394,7 @@ fn extension(p: str) -> str | null {
         if at is null {
             null
         } else {
-            try? string::slice(s, (at as i64) + 1, string::byte_len(s))
+            try? string::slice(s, at as i64 + 1, string::byte_len(s))
         }
     }
 }
@@ -307,13 +449,13 @@ fn normalize(p: str) -> str {
                 if !abs {
                     out = list::push(out, "..");
                 };
-            } else if (top as str) == ".." {
+            } else if top as str == ".." {
                 // Only reachable when relative: leading `..`s stack.
                 out = list::push(out, "..");
             } else {
                 out = raw::drop_last(out);
             };
-        } else if part != "/" {
+        } else if !plat::is_root(part) {
             out = list::push(out, part);
         };
     };

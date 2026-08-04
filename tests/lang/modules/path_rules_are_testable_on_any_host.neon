@@ -1,0 +1,52 @@
+// `std::path`'s platform rule sets, exercised on whatever host runs this — including the
+// Windows ones, from Linux.
+//
+// That is the point of the arrangement, not a convenience. A `@cfg`-guarded branch is
+// dropped BEFORE the checker runs, so rules written behind `@cfg(windows)` would never be
+// type-checked on any machine in this project's CI, let alone run: they would ship compiled
+// by nobody. So `posix` and `win` are ordinary modules, compiled everywhere, and `@cfg`
+// picks between them in four one-line delegators (`plat`) and in `is_absolute`. Choosing is
+// the one job `@cfg` can do without hiding code from the checker.
+//
+// `neon check --cfg windows` covers the delegators, which cannot be written any other way.
+
+use std::io;
+use std::path;
+use std::collections::list;
+
+fn shown(v: str | null) -> str {
+    v orelse "<none>"
+}
+
+fn main() {
+    // ---- POSIX rules ----
+    io::println(shown(path::posix::root_of("/a/b")));
+    io::println(shown(path::posix::root_of("a/b")));
+    io::println(to_string(path::posix::is_root("/")));
+    io::println(to_string(path::posix::is_root("a")));
+
+    // ---- Windows rules, from here ----
+    // A drive is a root, with either separator.
+    io::println(shown(path::win::root_of("C:\\a\\b")));
+    io::println(shown(path::win::root_of("C:/a/b")));
+    // UNC.
+    io::println(shown(path::win::root_of("\\\\server\\share")));
+
+    // Deliberately NOT absolute: `\x` is relative to the current drive and `C:x` to that
+    // drive's own working directory. Both depend on state the module cannot see, and
+    // calling them absolute is how a join silently escapes its base.
+    io::println(shown(path::win::root_of("\\x")));
+    io::println(shown(path::win::root_of("C:x")));
+    io::println(shown(path::win::root_of("a\\b")));
+
+    // Both separators split, because every Windows API accepts `/` and real paths mix them.
+    io::println(to_string(path::win::split_parts("a\\b/c")));
+    io::println(to_string(list::len(path::win::split_parts("a\\b/c"))));
+
+    // A root component is a drive or the UNC prefix, never a plain name.
+    io::println(to_string(path::win::is_root("C:\\")));
+    io::println(to_string(path::win::is_root("\\\\")));
+    io::println(to_string(path::win::is_root("a")));
+    io::println(path::win::sep());
+    io::println(path::posix::sep());
+}

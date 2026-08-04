@@ -181,6 +181,7 @@ match/record_pattern_binds_fields.neon
 match/sum_type_destructure.neon
 modules/cannot_squat_a_library_ancestor_path.neon
 modules/imports_do_not_cross_unit_boundaries.neon
+modules/path_rules_are_testable_on_any_host.neon
 modules/prelude_names_can_be_shadowed.neon
 operators/and_or_precedence.neon
 operators/bitwise.neon

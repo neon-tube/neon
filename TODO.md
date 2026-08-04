@@ -588,33 +588,36 @@ in dispatch. Nothing needs it yet.
 
 ## Later — not now
 
-### 17. `std::path` is POSIX-only, and `@cfg` is the mechanism that would fix it
+### 17. `std::path` and `@cfg` — ~~mostly done 2026-08-04~~; the target/host split remains
 
-`std::path`'s own header says it is wrong for Windows paths and does not pretend
-otherwise. `@cfg` is what it wants — `all`/`any`/`not` all parse, a malformed condition is
-an error rather than a silent drop, and the pass reaches methods and nested mods
-(`compiler/src/expand.rs`, tests in `expand/tests.rs`). Two things stand in the way, and
-the first is a trap rather than a gap:
+`std::path` is no longer POSIX-only. The separator, what counts as a root, and how a path
+splits live in `posix` and `win` rule sets, and everything else is derived from them through
+`components`/`render`. `neon check --cfg windows` type-checks the Windows delegators, and
+`modules/path_rules_are_testable_on_any_host.neon` RUNS both rule sets on whatever host CI
+uses.
 
-1. ~~**The driver expands the user's module only.**~~ — **stale, and it was already fixed
-   when this entry was written.** `stdlib::parse_from` runs `expand` on every stdlib module
-   (`compiler/src/stdlib.rs:58`), at that one assembly point so the cli and the test
-   harnesses cannot disagree; it landed in `bbe55cd`. A stdlib `@cfg` is therefore honoured,
-   a typo'd stdlib annotation is a broken toolchain rather than a silent no-op, and — since
-   `expand` also calls the derive pass (`expand.rs:165`) — a `@derive` written in the stdlib
-   is expanded too. Verified 2026-08-03 by putting a `@derive(Display)` on a stdlib record
-   and calling `to_string` on it from a user program.
+The arrangement is the interesting part, and it is what item 1 of this entry was really
+about. Both rule sets are ordinary modules compiled everywhere; only the four delegators in
+`plat` are `@cfg`-ed. Putting the rules themselves behind `@cfg` would have dropped them
+before the checker on every other platform — so the Windows half would have shipped compiled
+by nobody, which is the same silent-wrong-program failure this entry opened with, relocated
+rather than fixed. Choosing is the one job `@cfg` can do without hiding code.
 
-2. **The keys are the HOST, not the target.** `Config::with([std::env::consts::OS,
-   std::env::consts::ARCH])` is where the *compiler* is running. That is harmless while
-   there is no cross-compilation, and stops being harmless the moment there is: a program
-   built on Linux for Windows would take every `@cfg(linux)` branch. The Windows runtime
-   work makes this live rather than hypothetical — the runtime already cross-compiles under
-   mingw-w64 — so whoever adds `--target` owns this line too, and the two must agree or
-   `@cfg` becomes a second, quieter source of truth about the platform.
+`--cfg KEY` on `neon check` is what makes even the delegators checkable, and
+`Config::for_host` is now the single place the host's keys are derived (three sites derived
+them independently before).
 
-So the remaining work here is item 2 and `std::path` itself; nothing blocks writing a `@cfg`
-in the stdlib today.
+**Still open, and it is item 2 unchanged: the keys are the HOST, not the target.** `--cfg`
+ADDS keys rather than describing a machine to build for, so with `--cfg windows` on Linux
+both keys are live: a `@cfg(windows)`/`@cfg(not(windows))` pair selects correctly, and a
+`@cfg(linux)`/`@cfg(windows)` pair would keep both. Whoever adds `--target` owns making these
+agree and should make it the only way to set them.
+
+**Also still open, and smaller than it looks:** the Windows rules cover `\` and `/` as
+separators, `C:\` and `\\server` as roots, and correctly refuse to call a drive-relative
+`C:x` or `\x` absolute. They do not cover case-insensitive comparison, `\\?\`
+extended-length prefixes, or reserved device names (`CON`, `NUL`). Each is a rule to add to
+one module with a test beside it, not a redesign.
 
 ### 19b. Derives should eventually live in the stdlib
 
