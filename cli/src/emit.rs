@@ -106,14 +106,27 @@ fn link(c_source: &str, out: &Path, cfg: &BuildConfig) -> Result<()> {
             }
         }
     }
+    // `-l` libraries go AFTER the archive, for the same reason the archive goes after the
+    // object: a traditional linker walks its inputs left to right and takes from a library
+    // only what resolves a symbol it has already seen. `-lm` sat in the front-loaded flags,
+    // so by the time `libneon_rt.a(math.c)` was pulled in and asked for `sqrt`, libm had
+    // already been read and discarded. It went unnoticed for as long as nothing pulled
+    // `math.c` out of the archive; a stdlib impl that calls `math::to_f64` is lowered into
+    // every program, and every program stopped linking on a toolchain that does not quietly
+    // add libm for you.
+    //
+    // The same applies to `--allocator`'s `-ljemalloc` and to any `-l` a caller puts in
+    // `cflags`, so the split is by shape rather than by name.
+    let (flags, libs) = split_link_libs(cfg.cc_args(variant));
     let mut cmd = Command::new(&cfg.cc);
-    cmd.args(cfg.cc_args(variant))
+    cmd.args(flags)
         .arg("-o")
         .arg(out)
         .arg(&c_file)
         // After the object that references it: a static archive only contributes the
         // members that resolve symbols already seen.
         .arg(&archive.path)
+        .args(libs)
         .arg("-I")
         .arg(sysroot.include());
     let status = cmd
@@ -123,4 +136,71 @@ fn link(c_source: &str, out: &Path, cfg: &BuildConfig) -> Result<()> {
         bail!("the C compiler failed on {}", c_file.display());
     }
     Ok(())
+}
+
+/// Split `cc` arguments into everything-else and the `-l` libraries, preserving order
+/// within each group.
+///
+/// Both spellings move: `-lm` as one token, and `-l m` as the pair `normalize_cflags`
+/// produces for a value-taking flag. A bare trailing `-l` with nothing after it is passed
+/// through as a flag rather than swallowing the end of the list — `cc` will complain about
+/// it, which is the right outcome and a better message than anything here would give.
+fn split_link_libs(args: Vec<String>) -> (Vec<String>, Vec<String>) {
+    let (mut flags, mut libs) = (Vec::new(), Vec::new());
+    let mut it = args.into_iter().peekable();
+    while let Some(a) = it.next() {
+        if a == "-l" {
+            match it.next() {
+                Some(name) => {
+                    libs.push(a);
+                    libs.push(name);
+                }
+                None => flags.push(a),
+            }
+        } else if a.starts_with("-l") {
+            libs.push(a);
+        } else {
+            flags.push(a);
+        }
+    }
+    (flags, libs)
+}
+
+#[cfg(test)]
+mod link_order_tests {
+    use super::split_link_libs;
+
+    fn v(xs: &[&str]) -> Vec<String> {
+        xs.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn libraries_move_and_the_rest_keeps_its_order() {
+        let (flags, libs) = split_link_libs(v(&["-O2", "-lm", "-fsanitize=address", "-ljemalloc"]));
+        assert_eq!(flags, v(&["-O2", "-fsanitize=address"]));
+        assert_eq!(libs, v(&["-lm", "-ljemalloc"]));
+    }
+
+    #[test]
+    fn the_separated_spelling_moves_as_a_pair() {
+        let (flags, libs) = split_link_libs(v(&["-l", "m", "-O2"]));
+        assert_eq!(flags, v(&["-O2"]));
+        assert_eq!(libs, v(&["-l", "m"]));
+    }
+
+    #[test]
+    fn a_dangling_l_is_left_for_cc_to_reject() {
+        let (flags, libs) = split_link_libs(v(&["-O2", "-l"]));
+        assert_eq!(flags, v(&["-O2", "-l"]));
+        assert!(libs.is_empty());
+    }
+
+    /// `-L` is a search PATH, not a library: it must stay in front, where it can inform the
+    /// lookup of the `-l`s that now follow the archive.
+    #[test]
+    fn a_search_path_is_not_a_library() {
+        let (flags, libs) = split_link_libs(v(&["-L/opt/lib", "-lm"]));
+        assert_eq!(flags, v(&["-L/opt/lib"]));
+        assert_eq!(libs, v(&["-lm"]));
+    }
 }
