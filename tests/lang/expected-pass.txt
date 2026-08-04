@@ -209,6 +209,7 @@ operators/structural_equality.neon
 operators/structural_ordering.neon
 operators/unequatable_is_rejected.neon
 operators/union_field_equality.neon
+operators/union_of_records_compares_by_tag.neon
 operators/union_vs_union_equality.neon
 operators/unordered_shapes_are_rejected.neon
 operators/unordered_union_is_rejected.neon

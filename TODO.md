@@ -705,23 +705,22 @@ worth knowing before deciding this list is noise.
   non-termination if such a type is constructible.
 - **L7.** `normalize_union([Nullable(Str), Null])` disagrees with `repr_of(str|null|null)`.
   Blocked in the front end today; the repr-level defect is real.
-- **L8.** `is_equatable` rejects a union of two records. **Confirmed 2026-08-04, and it is a
-  contradiction rather than a gap.** `docs/decisions.md` — "Comparison is structural, and
-  ordering is total within a type" — promises `==` works on *every* type, "unions by tag and
-  then payload", with no impl required and none possible. The implementation refuses, and its
-  own diagnostic admits why: "a union whose arms are two different records, which the
-  comparison does not yet route by tag".
+- ~~**L8.**~~ **Confirmed and fixed 2026-08-04.** A contradiction rather than a gap:
+  `docs/decisions.md` promises `==` works on every type, "unions by tag and then payload",
+  with no impl required and none possible, and `is_equatable` refused a union of two records
+  — its own diagnostic admitting the comparison "does not yet route by tag".
 
-      record A { a: i64 }
-      record B { b: str }
-      fn eq(x: A | B, y: A | B) -> bool { x == y }    // rejected
+  The backend had always routed it. `eq_expr`'s `Repr::Union` arm compares the tags and then
+  the payload the tag selects, written for exactly this case. Only the checker refused:
+  `is_equatable` asked `record_fields` for a *single* record atom and gave up on `None`.
 
-  So the spec is ahead of the backend, and the fix is to route union equality by tag rather
-  than to soften the doc: equality does not vary, which is the whole reason it is a primitive
-  and not a protocol. The lead's own caution still stands — the second BDD path carries a
-  negative, so the obvious relaxation of `is_equatable` is not sufficient on its own.
-
----
+  The lead's caution — "the obvious relaxation is not sufficient, the second BDD path carries
+  a negative" — was right about the shape and wrong about the consequence. `A | B` comes back
+  as the paths `A` and `B ∧ ¬A`, and a negative only REMOVES inhabitants, so every value on a
+  path inhabits that path's positive atoms: judge the positives and the negatives need no
+  discharging at all. A path with no positive atom (`¬B` alone, every record except B, an
+  unbounded shape) is still declined. Pinned as
+  `operators/union_of_records_compares_by_tag.neon`.
 
 ## Environment hazards
 

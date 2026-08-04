@@ -99,14 +99,65 @@ fn equatable_rec(env: &Env, ty: TyId, seen: &mut Vec<TyId>) -> bool {
                 Some(elem) => equatable_rec(env, elem, seen),
                 None => false,
             },
+            // One record atom: its fields.
             _ => match record_fields(env, ty) {
                 Some(fields) => fields.iter().all(|&(_, ft)| equatable_rec(env, ft, seen)),
-                None => false,
+                // Several: a UNION of records, which the backend has always been able to
+                // compare -- `eq_expr`'s `Repr::Union` arm tests the tags and then the
+                // payload the tag selects, written for exactly this. Only the checker
+                // refused, so `x == y` on an `A | B` was rejected while `decisions.md`
+                // promises equality works on every type, "unions by tag and then payload",
+                // with no impl required and none possible.
+                //
+                // A path's NEGATIVES are ignored, and that is sound rather than sloppy:
+                // `A | B` comes back as the paths `A` and `B ∧ ¬A`, and a negative only
+                // removes inhabitants. Every value on a path is an inhabitant of all of the
+                // path's positive atoms, so if those atoms' fields are equatable the values
+                // are. This is the "second BDD path carries a negative" that lead L8 warned
+                // the obvious relaxation would trip on; it does not have to be discharged,
+                // only not required to be absent.
+                //
+                // A path with NO positive atom is `¬B` alone — every record except B, whose
+                // shape is unbounded — and is declined.
+                None => union_of_records_equatable(env, ty, seen),
             },
         }
     };
     seen.pop();
     ok
+}
+
+/// Every path of `ty`'s record component, each judged by its positive atoms' fields.
+///
+/// Reserved `#`-prefixed slots are walked like any other field, which is what carries the
+/// container cases through: a `List`'s element and a `Map`'s key and value live in `#0`/`#1`,
+/// so a union containing one is judged by the same recursion rather than by a special case
+/// that only the single-atom path above knows about.
+fn union_of_records_equatable(env: &Env, ty: TyId, seen: &mut Vec<TyId>) -> bool {
+    let t = &env.solver.t;
+    let paths = t.rec_bdd.paths(t.data(ty).records);
+    if paths.is_empty() {
+        return false;
+    }
+    let fields: Vec<TyId> = paths
+        .iter()
+        .map(|(pos, _)| {
+            if pos.is_empty() {
+                return None;
+            }
+            let mut fs = Vec::new();
+            for &i in pos {
+                fs.extend(t.rec_atoms[i as usize].fields.iter().map(|&(_, ft)| ft));
+            }
+            Some(fs)
+        })
+        .collect::<Option<Vec<_>>>()
+        .map(|v| v.into_iter().flatten().collect())
+        .unwrap_or_default();
+    if fields.is_empty() && paths.iter().any(|(pos, _)| pos.is_empty()) {
+        return false;
+    }
+    fields.into_iter().all(|ft| equatable_rec(env, ft, seen))
 }
 
 fn ordered_rec(env: &Env, ty: TyId, bound: &HashSet<String>, seen: &mut Vec<TyId>) -> bool {

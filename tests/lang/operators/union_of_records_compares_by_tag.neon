@@ -1,0 +1,58 @@
+// `==` on a union of records, which `docs/decisions.md` has always promised: equality is
+// structural on EVERY type -- "unions by tag and then payload" -- with no impl required and
+// none possible, because equality does not vary the way formatting does.
+//
+// The backend has always been able to do it. `eq_expr`'s `Repr::Union` arm compares the tags
+// and then the payload the tag selects, and its comment says it was written for exactly this
+// (a `memcmp` fallback was wrong here, since a union's payload is a C union and the bytes
+// past the live variant are never written). Only the CHECKER refused: `is_equatable` asked
+// `record_fields` for a single record atom, got `None` for a union, and gave up. So the spec
+// was ahead of the implementation and the diagnostic admitted it -- "does not yet route by
+// tag".
+//
+// Recorded as unproven lead L8, whose caution was that "the obvious relaxation is not
+// sufficient -- the second BDD path carries a negative". True, and it does not have to be
+// discharged: `A | B` comes back as the paths `A` and `B ∧ ¬A`, and a negative only REMOVES
+// inhabitants, so every value on a path is an inhabitant of that path's positive atoms. Judge
+// the positives and the negatives take care of themselves. A path with no positive atom --
+// `¬B` alone, every record except B, an unbounded shape -- is still declined.
+
+use std::io;
+use std::collections::list;
+
+record A { a: i64 }
+record B { b: str }
+type U = A | B
+
+// Three arms, so more than one path carries a negative.
+record C { c: bool }
+type V = A | B | C
+
+// A union nested inside a container, compared elementwise.
+record Wrap { items: List[U] }
+
+fn main() {
+    let x: U = A { a: 1 };
+    let y: U = A { a: 1 };
+    let z: U = A { a: 2 };
+    let w: U = B { b: "s" };
+
+    io::println(to_string(x == y));
+    io::println(to_string(x == z));
+    io::println(to_string(x == w));
+    io::println(to_string(w == w));
+
+    let p: V = C { c: true };
+    let q: V = C { c: true };
+    let r: V = B { b: "s" };
+    io::println(to_string(p == q));
+    io::println(to_string(p == r));
+
+    // Through a list, which compares elementwise and so needs the element to be equatable.
+    io::println(to_string([x, w] == [y, w]));
+    io::println(to_string([x, w] == [w, x]));
+
+    // And inside a record field.
+    io::println(to_string(Wrap { items: [x] } == Wrap { items: [y] }));
+    io::println(to_string(list::len([x, w])));
+}
