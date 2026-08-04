@@ -1254,7 +1254,7 @@ impl Env {
                         span: d.span.clone(),
                         is_marker: p.is_marker,
                     });
-                    if p.is_marker && !Self::is_known_marker(&p.name) {
+                    if p.is_marker && !Self::is_known_marker(module, &p.name) {
                         self.error(d.span.clone(), TypeErrorKind::UnknownMarker(p.name.clone()));
                     }
                 }
@@ -1891,10 +1891,13 @@ impl Env {
     /// variable before it asks: with no variables, there is no bound to consult, and a
     /// marker on a concrete type is a question about structure alone.
     fn satisfies_marker(&mut self, ty: TyId, protocol: ProtocolId) -> bool {
-        match self.protocols[protocol.0].name.as_str() {
-            "Ord" => super::ordered::is_ordered(self, ty, &std::collections::HashSet::new()),
-            _ => false,
+        // By identity, for `is_known_marker`'s reason: a bound on some other module's
+        // `Ord` is not a bound on this rule.
+        let p = &self.protocols[protocol.0];
+        if !Self::is_known_marker(&p.module, &p.name) {
+            return false;
         }
+        super::ordered::is_ordered(self, ty, &std::collections::HashSet::new())
     }
 
     /// Where an `opaque` record was declared, for a type *written* as `path` in `module`.
@@ -1979,8 +1982,16 @@ impl Env {
     }
 
     /// Whether the compiler has a rule for a marker of this name.
-    pub fn is_known_marker(name: &str) -> bool {
-        matches!(name, "Ord")
+    pub fn is_known_marker(module: &[String], name: &str) -> bool {
+        // The PRELUDE's `Ord`, not anything spelled `Ord`. A marker is satisfied by a rule
+        // the compiler owns, so which marker a bound names has to be settled by identity —
+        // the same lesson as `docs/design/identity.md`, one declaration kind over.
+        //
+        // Matching the bare name let `mod mine { marker Ord }` through, where
+        // `mod mine { marker Frobnicable }` is correctly rejected as having no rule. The
+        // user's marker then meant whatever `Ord` means, in a module that never asked for
+        // it. Recorded as lead L1; confirmed 2026-08-04.
+        module == [Self::PRELUDE] && name == "Ord"
     }
 
     /// If a bare `name` was imported as a protocol method — `use M::P::method` — the

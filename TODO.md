@@ -666,11 +666,25 @@ Owner's call on timing; recorded so it is not lost.
 Marked as such because nobody built a repro. Worth a pass, not worth asserting.
 (L4 — qualified-path impls never matching — graduated: confirmed real and fixed with the
 identity change. L5 — duplicate `TyId`s reaching the backend — graduated 2026-08-03:
-confirmed with a repro and fixed, see below.)
+confirmed with a repro and fixed, see below. L1 and L8 — graduated 2026-08-04, when the list
+was finally worked through; L2 did not reproduce; L3, L6 and L7 are still unprobed and the
+notes below say what each would take.)
 
-- **L1.** `env.rs::satisfies_marker` matches the bare protocol name `"Ord"`, so a user
-  `marker Ord` in any module may inherit the built-in rule.
-- **L2.** `ordered.rs:90/165` match bare `"List"`/`"Map"`.
+**Three of the four leads anyone has investigated turned out to be real defects.** That is
+worth knowing before deciding this list is noise.
+
+- ~~**L1.**~~ **Confirmed and fixed 2026-08-04.** Real, and the declaration check had it too:
+  `is_known_marker` matched the bare name, so `mod mine { marker Ord }` was accepted where
+  `marker Frobnicable` beside it is correctly rejected as having no rule — and
+  `satisfies_marker` then answered the user's marker from the built-in structural rule. Both
+  now test identity against the prelude's reserved module path. Pinned as
+  `protocols/a_user_marker_named_ord_is_not_the_marker.neon`. Same shape as the impl-body and
+  derive-span collisions: a key two declarations can produce.
+- **L2.** `ordered.rs:90/165` match bare `"List"`/`"Map"`. **No repro, 2026-08-04.** A user
+  `record Map { a: i64 }` in its own module is correctly treated as an ordinary ordered
+  record — `smaller(mine::Map { a: 1 }, mine::Map { a: 2 })` compiles and answers `true`. One
+  shape only, so this is "not reproduced" rather than "disproved"; the bare-name match is
+  still there to be read, and a shape where it misfires may exist.
 - **L3.** `repr.rs::variant_rank` collapses five variants into one sort rank used as a
   canonical layout ordering.
 - ~~**L5.**~~ **Confirmed and fixed 2026-08-03.** The lead named the hazard —
@@ -691,9 +705,21 @@ confirmed with a repro and fixed, see below.)
   non-termination if such a type is constructible.
 - **L7.** `normalize_union([Nullable(Str), Null])` disagrees with `repr_of(str|null|null)`.
   Blocked in the front end today; the repr-level defect is real.
-- **L8.** `is_equatable` rejects a union of two records. The obvious relaxation is *not*
-  sufficient — the second BDD path carries a negative — and whether the backend's tag-routed
-  comparison would be correct is unverified.
+- **L8.** `is_equatable` rejects a union of two records. **Confirmed 2026-08-04, and it is a
+  contradiction rather than a gap.** `docs/decisions.md` — "Comparison is structural, and
+  ordering is total within a type" — promises `==` works on *every* type, "unions by tag and
+  then payload", with no impl required and none possible. The implementation refuses, and its
+  own diagnostic admits why: "a union whose arms are two different records, which the
+  comparison does not yet route by tag".
+
+      record A { a: i64 }
+      record B { b: str }
+      fn eq(x: A | B, y: A | B) -> bool { x == y }    // rejected
+
+  So the spec is ahead of the backend, and the fix is to route union equality by tag rather
+  than to soften the doc: equality does not vary, which is the whole reason it is a primitive
+  and not a protocol. The lead's own caution still stands — the second BDD path carries a
+  negative, so the obvious relaxation of `is_equatable` is not sufficient on its own.
 
 ---
 

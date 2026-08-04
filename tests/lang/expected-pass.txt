@@ -219,6 +219,7 @@ paths/normalize.neon
 paths/parent_and_file_name.neon
 paths/starts_with.neon
 protocols/a_marker_cannot_be_implemented.neon
+protocols/a_user_marker_named_ord_is_not_the_marker.neon
 protocols/a_variable_union_receiver_is_not_rigid.neon
 protocols/ambiguity_resolved_by_qualification.neon
 protocols/ambiguous_call.neon

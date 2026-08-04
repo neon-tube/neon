@@ -1,0 +1,28 @@
+//@ compile-fail
+//@ error-contains: no rule for marker `Ord`
+
+// A marker is satisfied by a rule the compiler owns, so which marker a bound names has to be
+// settled by IDENTITY rather than by spelling.
+//
+// `is_known_marker` matched the bare name, so `marker Ord` declared in any module was
+// accepted -- while `marker Frobnicable` next to it is correctly rejected as having no rule.
+// The user's marker then silently meant whatever the prelude's `Ord` means, in a module that
+// never asked for it, and `satisfies_marker` answered it from the built-in structural rule.
+//
+// This is `docs/design/identity.md`'s lesson one declaration kind over, and it is the same
+// shape as the bare-name matches that produced the impl-body and derive collisions: a key
+// that two different declarations can produce.
+//
+// Recorded as unproven lead L1 and confirmed 2026-08-04. The prelude has a reserved module
+// path of its own (`Env::PRELUDE`) that no source can write, which is exactly what makes the
+// identity test possible.
+
+use std::io;
+
+internal mod mine {
+    marker Ord
+}
+
+fn main() {
+    io::println("this must not compile");
+}
