@@ -59,6 +59,30 @@ impl Config {
     pub fn with(keys: impl IntoIterator<Item = String>) -> Self {
         Config { keys: keys.into_iter().collect() }
     }
+
+    /// The keys for a build on this machine, plus any `extra` the caller adds.
+    ///
+    /// The one place the host's OS and arch become `@cfg` keys. Three call sites derived
+    /// them independently before — the driver, `neon check`, and the stdlib's own parse —
+    /// which is three chances to disagree about what platform a compilation is for.
+    ///
+    /// `extra` exists because a `@cfg`-guarded branch is dropped BEFORE the checker runs, so
+    /// on any machine the branch for another platform is not merely unbuilt, it is never
+    /// type-checked. Writing platform-specific stdlib code without a way to select the other
+    /// platform's keys means shipping code nothing has ever compiled — which is the silent
+    /// failure §17 was about, moved rather than fixed. `neon check --cfg windows` is how the
+    /// other branch gets checked.
+    ///
+    /// Still the HOST, not a target: `--cfg` adds keys, it does not describe a machine to
+    /// build for. Whoever adds `--target` owns making these agree, and should make it the
+    /// only way to set them (see TODO §17).
+    pub fn for_host(extra: impl IntoIterator<Item = String>) -> Self {
+        let mut keys: HashSet<String> = HashSet::new();
+        keys.insert(std::env::consts::OS.to_string());
+        keys.insert(std::env::consts::ARCH.to_string());
+        keys.extend(extra);
+        Config { keys }
+    }
 }
 
 /// The node an annotation sits on, borrowed for the processor to inspect. A method is a

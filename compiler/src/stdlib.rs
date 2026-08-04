@@ -37,6 +37,19 @@ pub fn parse_from(
     sources: &[(String, String)],
     base: u32,
 ) -> Result<(Vec<(Vec<String>, Module)>, u32), String> {
+    parse_from_with(sources, base, &crate::expand::Config::for_host([]))
+}
+
+/// As `parse_from`, against an explicit `@cfg` configuration.
+///
+/// The stdlib has to expand under the SAME keys as the program that uses it, or a
+/// `neon check --cfg windows` would check the user's Windows branch against a POSIX stdlib
+/// and report differences that are artefacts of the mismatch.
+pub fn parse_from_with(
+    sources: &[(String, String)],
+    base: u32,
+    config: &crate::expand::Config,
+) -> Result<(Vec<(Vec<String>, Module)>, u32), String> {
     let mut out = Vec::with_capacity(sources.len());
     let mut next = base;
     // The stdlib goes through `expand` like any user module — here, at the one
@@ -44,10 +57,6 @@ pub fn parse_from(
     // stdlib `@cfg` therefore works, and a typo'd stdlib annotation is a broken
     // toolchain rather than a silent no-op. Processors only keep or omit; the
     // annotations stay on the AST for the `@runtime`/`@pure` readers that consult it.
-    let config = crate::expand::Config::with([
-        std::env::consts::OS.to_string(),
-        std::env::consts::ARCH.to_string(),
-    ]);
     for (rel, src) in sources {
         let tokens = lexer::lex(src).map_err(|e| format!("stdlib `{rel}` did not lex: {e:?}"))?;
         let (module, errors) = parser::parse(&tokens, src.len());
@@ -55,7 +64,7 @@ pub fn parse_from(
             return Err(format!("stdlib `{rel}` did not parse: {errors:?}"));
         }
         let module = module.ok_or_else(|| format!("stdlib `{rel}` produced no module"))?;
-        let (mut module, _meta, expand_errors) = crate::expand::expand(module, &config);
+        let (mut module, _meta, expand_errors) = crate::expand::expand(module, config);
         if !expand_errors.is_empty() {
             let shown: Vec<String> = expand_errors.iter().map(|e| e.message.clone()).collect();
             return Err(format!("stdlib `{rel}` did not expand: {}", shown.join("; ")));

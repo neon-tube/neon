@@ -7,7 +7,7 @@ use neon_compiler::{lexer, parser};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-pub fn run(file: &OsString, lib: bool) -> Result<()> {
+pub fn run(file: &OsString, lib: bool, cfg: &[String]) -> Result<()> {
     let path = PathBuf::from(file);
     let src = source::read(&path)?;
     let mut r = Renderer::for_stderr(&path, &src);
@@ -34,10 +34,7 @@ pub fn run(file: &OsString, lib: bool) -> Result<()> {
     // Annotation expansion: `@cfg` drops code the target does not want, `@doc` is pulled
     // aside, `@native` is validated, and an unknown `@name` is an error. Seed `@cfg` with
     // the host's OS and arch (host == target until cross-compilation exists).
-    let config = neon_compiler::expand::Config::with([
-        std::env::consts::OS.to_string(),
-        std::env::consts::ARCH.to_string(),
-    ]);
+    let config = neon_compiler::expand::Config::for_host(cfg.iter().cloned());
     let (module, _meta, expand_errors) = neon_compiler::expand::expand(module, &config);
     if !expand_errors.is_empty() {
         for e in &expand_errors {

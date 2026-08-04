@@ -76,10 +76,7 @@ pub fn check(path: &Path, lib: bool) -> Result<Checked> {
     }
     let module = module.expect("no errors means a module");
 
-    let config = neon_compiler::expand::Config::with([
-        std::env::consts::OS.to_string(),
-        std::env::consts::ARCH.to_string(),
-    ]);
+    let config = neon_compiler::expand::Config::for_host([]);
     let (module, _meta, expand_errors) = neon_compiler::expand::expand(module, &config);
     if !expand_errors.is_empty() {
         for e in &expand_errors {
@@ -93,7 +90,7 @@ pub fn check(path: &Path, lib: bool) -> Result<Checked> {
     // checked and lowered like any other code.
     let std_sources = crate::stdlib::sources()?;
     let (std_modules, next_id) =
-        neon_compiler::stdlib::parse_from(&std_sources, 0).map_err(|e| eyre!("{e}"))?;
+        neon_compiler::stdlib::parse_from_with(&std_sources, 0, &config).map_err(|e| eyre!("{e}"))?;
     let mut module = module;
     neon_compiler::ast::number_exprs_from(&mut module, next_id);
 

@@ -113,6 +113,14 @@ enum Command {
         /// carrying one imposes its choice on every dependent.
         #[arg(long)]
         lib: bool,
+        /// An extra `@cfg` key, on top of the host's OS and arch. Repeatable.
+        ///
+        /// A `@cfg`-guarded branch is dropped before the checker runs, so the branch for
+        /// another platform is never type-checked on this one. This is how it gets
+        /// checked: `neon check --cfg windows` compiles the Windows half. It ADDS keys
+        /// rather than describing a target -- nothing here cross-compiles.
+        #[arg(long = "cfg", value_name = "KEY")]
+        cfg: Vec<String>,
     },
     /// Format a source file. Prints the result to stdout by default.
     Fmt {
@@ -186,7 +194,7 @@ fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Lex { file, spans } => cmd::lex::run(&file, spans),
         Command::Parse { file } => cmd::parse::run(&file),
-        Command::Check { file, lib } => cmd::check::run(&file, lib),
+        Command::Check { file, lib, cfg } => cmd::check::run(&file, lib, &cfg),
         Command::Fmt { file, write, check } => cmd::fmt::run(&file, write, check),
         Command::Ir { file, stage } => cmd::ir::run(&file, stage.into()),
         Command::Init { name } => cmd::init::run(name),
