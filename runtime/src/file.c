@@ -246,13 +246,18 @@ int64_t neon_io_size(neon_str path) {
 neon_str neon_io_read_dir(neon_str path, int64_t* err) {
     char* p = neon_cstr(path);
     *err = 0;
-    char* buf = NULL;
-    size_t len = 0;
-    size_t cap = 0;
 #ifdef _WIN32
     (void)p;
     *err = -(int64_t)ENOSYS;
+    free(p);
+    neon_str_release(path);
+    return neon_str_new("", 0);
 #else
+    // The buffer lives inside this branch, not above the `#ifdef`: on Windows it would be
+    // unused, and the runtime builds with `-Werror`.
+    char* buf = NULL;
+    size_t len = 0;
+    size_t cap = 0;
     DIR* d = opendir(p);
     if (d == NULL) {
         *err = -(int64_t)errno;
@@ -272,13 +277,13 @@ neon_str neon_io_read_dir(neon_str path, int64_t* err) {
         }
         closedir(d);
     }
-#endif
     free(p);
     neon_str_release(path);
     // Drop the trailing NUL so the split does not produce an empty last entry.
     neon_str out = neon_str_new(buf == NULL ? "" : buf, len == 0 ? 0 : len - 1);
     free(buf);
     return out;
+#endif
 }
 
 bool neon_io_exists(neon_str path) {
