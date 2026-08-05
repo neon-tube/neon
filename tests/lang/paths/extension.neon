@@ -15,27 +15,27 @@ use std::io;
 use std::path;
 
 fn show(p: str) {
-    io::println("#{p} -> stem=#{path::stem(p) orelse "<null>"} ext=#{path::extension(p) orelse "<null>"} md=#{path::with_extension(p, "md") orelse "<null>"} bare=#{path::with_extension(p, "") orelse "<null>"}");
+    io::println("#{p} -> stem=#{path::stem(path::of(p)) orelse "<null>"} ext=#{path::extension(path::of(p)) orelse "<null>"} md=#{path::with_extension(path::of(p), "md") orelse path::of("<null>")} bare=#{path::with_extension(path::of(p), "") orelse path::of("<null>")}");
 }
 
 fn main() {
     show("a.txt");
     show("/x/y/a.txt");
-    show("a.tar.gz");     // the LAST dot wins: stem a.tar, ext gz
-    show("README");       // no dot: the name is its own stem
-    show(".bashrc");      // leading dot: part of the name
-    show(".");            // no components at all
-    show("..");           // a component, but not a name
-    show("a.");           // trailing dot: no extension, and no empty one either
+    show("a.tar.gz");  // the LAST dot wins: stem a.tar, ext gz
+    show("README");  // no dot: the name is its own stem
+    show(".bashrc");  // leading dot: part of the name
+    show(".");  // no components at all
+    show("..");  // a component, but not a name
+    show("a.");  // trailing dot: no extension, and no empty one either
     show("a..b");
     show("/");
     show("");
-    show("a/b.txt/");     // trailing separator ignored
-    show("x/..");         // last component is not a name
+    show("a/b.txt/");  // trailing separator ignored
+    show("x/..");  // last component is not a name
     show("/x/.config");
 
     // with_extension replaces rather than appends, and keeps the directory.
-    io::println(path::with_extension("/x/y/a.tar.gz", "bz2") orelse "<null>");
+    io::println(to_string(path::with_extension(path::of("/x/y/a.tar.gz"), "bz2") orelse path::of("<null>")));
     // The opt-out for callers who genuinely do not care that it did nothing.
-    io::println(path::with_extension("/", "md") orelse "/");
+    io::println(to_string(path::with_extension(path::of("/"), "md") orelse path::of("/")));
 }

@@ -16,16 +16,16 @@ use std::io;
 use std::path;
 
 fn show(p: str) {
-    io::println("#{p} -> #{path::normalize(p)}");
+    io::println("#{p} -> #{path::normalize(path::of(p))}");
 }
 
 fn main() {
-    show("");             // the one place this module invents a component
+    show("");  // the one place this module invents a component
     show(".");
     show("./.");
     show("/");
     show("//");
-    show("///");          // a path that is only separators is the root
+    show("///");  // a path that is only separators is the root
     show("a/b");
     show("a//b");
     show("a/b/");
@@ -36,8 +36,8 @@ fn main() {
     // `..` popping.
     show("a/../b");
     show("/a/../b");
-    show("a/b/../..");    // pops to nothing -> "."
-    show("/a/b/../..");   // pops to nothing -> "/"
+    show("a/b/../..");  // pops to nothing -> "."
+    show("/a/b/../..");  // pops to nothing -> "/"
 
     // `..` above the root: clamped, because that is what POSIX means.
     show("/..");
@@ -54,11 +54,11 @@ fn main() {
     show("../a/../b");
 
     // Normalising is idempotent on everything above.
-    io::println("#{path::normalize(path::normalize("/a/../../b//c/.")) == path::normalize("/a/../../b//c/.")}");
+    io::println("#{path::normalize(path::normalize(path::of("/a/../../b//c/."))) == path::normalize(path::of("/a/../../b//c/."))}");
 
     // What normalize does NOT do: it is lexical, so it cannot save a `..` from
     // escaping a base. The check is a component-wise prefix test on the result.
-    let base = "/srv/data";
-    let want = path::normalize(path::join(base, "../../etc/passwd"));
+    let base = path::of("/srv/data");
+    let want = path::normalize(path::join(base, path::of("../../etc/passwd")));
     io::println("#{want} inside=#{path::starts_with(want, base)}");
 }

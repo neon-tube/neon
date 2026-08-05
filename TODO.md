@@ -588,7 +588,7 @@ in dispatch. Nothing needs it yet.
 
 ## Later — not now
 
-### 17. `std::path` and `@cfg` — ~~mostly done 2026-08-04~~; the target/host split remains
+### 17. `std::path`/`std::fs` and `@cfg` — ~~redesigned 2026-08-05~~; the target/host split remains
 
 `std::path` is no longer POSIX-only. The separator, what counts as a root, and how a path
 splits live in `posix` and `win` rule sets, and everything else is derived from them through
@@ -606,6 +606,18 @@ rather than fixed. Choosing is the one job `@cfg` can do without hiding code.
 `--cfg KEY` on `neon check` is what makes even the delegators checkable, and
 `Config::for_host` is now the single place the host's keys are derived (three sites derived
 them independently before).
+
+**`std::path` and `std::fs` were redesigned around `Path` on 2026-08-05.** A path is an
+opaque `Path` rather than a `str`, `of`/`to_str` are the only doors, and `std::fs` takes
+`Path` everywhere. That reversed a documented decision, and `path.neon`'s header records
+which parts of the old argument held: the load-bearing one — "`fs` takes `str`, so a `Path`
+means a cast at every call site" — was only true while the two modules were changed
+separately. Every corpus golden is byte-identical, so the API moved and the semantics did
+not. Pinned by `paths/a_path_is_not_a_string.neon`.
+
+New syscall surface (`Dir`, `metadata`, `mkdir`, `read_dir`, `rename`, `copy`) is
+deliberately NOT part of that change: each needs a C native, a Windows implementation and
+runtime tests, and it is its own piece with its own CI story.
 
 **Still open, and it is item 2 unchanged: the keys are the HOST, not the target.** `--cfg`
 ADDS keys rather than describing a machine to build for, so with `--cfg windows` on Linux

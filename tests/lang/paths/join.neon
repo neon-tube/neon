@@ -1,4 +1,4 @@
-// `path::join(a, b)` resolves `b` against `a`.
+// `path::join(path::of(a), path::of(b))` resolves `b` against `a`.
 //
 // The rule worth knowing: an absolute `b` REPLACES `a` entirely. That mirrors passing
 // an absolute argument to a command, where the working directory stops mattering — and
@@ -11,27 +11,27 @@ use std::io;
 use std::path;
 
 fn show(a: str, b: str) {
-    io::println("#{a} + #{b} = #{path::join(a, b)}");
+    io::println("#{a} + #{b} = #{path::join(path::of(a), path::of(b))}");
 }
 
 fn main() {
     show("a", "b");
-    show("a/", "b");        // no doubled separator
+    show("a/", "b");  // no doubled separator
     show("a///", "b");
     show("/a", "b");
-    show("/", "b");         // the root is a base like any other
-    show("///", "b");       // ...even written as several separators
+    show("/", "b");  // the root is a base like any other
+    show("///", "b");  // ...even written as several separators
     show("a", "b/c");
-    show("a", "");          // empty tail: `a`, NOT `a/`
-    show("", "b");          // empty base
+    show("a", "");  // empty tail: `a`, NOT `a/`
+    show("", "b");  // empty base
     show("", "");
-    show("/etc", "/tmp/x"); // absolute tail wins outright
+    show("/etc", "/tmp/x");  // absolute tail wins outright
     show("a", "/tmp/x");
-    show("a", "..");        // `..` is not resolved here; that is `normalize`
+    show("a", "..");  // `..` is not resolved here; that is `normalize`
     show("a", ".");
 
     // The escape hatch the absolute-replaces rule requires.
     let arg = "/etc/passwd";
-    let safe = if path::is_absolute(arg) { "REFUSED" } else { path::join("/srv", arg) };
-    io::println(safe);
+    let safe = if path::is_absolute(path::of(arg)) { path::of("REFUSED") } else { path::join(path::of("/srv"), path::of(arg)) };
+    io::println(to_string(safe));
 }

@@ -19,11 +19,12 @@
 // actually needs is up there.
 
 use std::io;
+use std::path;
 use std::string;
 use std::fs;
 use std::collections::list;
 
-fn write_via_handle(p: str, doc: fs::IoList) throws fs::IoError -> null {
+fn write_via_handle(p: path::Path, doc: fs::IoList) throws fs::IoError -> null {
     let f = try fs::create(p);
     try fs::write_all(f, doc);
     try fs::write_all(f, ["more", ["and", "more"]]);
@@ -32,7 +33,7 @@ fn write_via_handle(p: str, doc: fs::IoList) throws fs::IoError -> null {
 }
 
 fn main() {
-    let p = "/tmp/neon-iolist.txt";
+    let p = path::of("/tmp/neon-iolist.txt");
     let head: fs::IoList = "HEAD:";
     let body: fs::IoList = ["a", "b", "c"];
     let doc: fs::IoList = [head, body, "\n", ["nested", ["deep"]]];
@@ -53,6 +54,6 @@ fn main() {
 
     try fs::remove(p) catch (e) { io::println("rm failed") };
     io::println("#{fs::exists(p)}");
-    let missing = try fs::read("/tmp/definitely-not-here-9271") catch (e) { message(e) };
+    let missing = try fs::read(path::of("/tmp/definitely-not-here-9271")) catch (e) { message(e) };
     io::println(missing);
 }

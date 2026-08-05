@@ -1,0 +1,24 @@
+//@ compile-fail
+//@ error-contains: expected `std::path::Path`, found `str`
+
+// What the type is for. A `str` is not a `Path`, so the ways a path gets corrupted by being
+// treated as text stop being expressible: `concat` where `join` was meant, `to_upper` on a
+// case-sensitive path, a prefix check done on bytes instead of components.
+//
+// `path::of` is the only door in and `path::to_str` the only door out, so leaving the API is
+// a visible act rather than what happens by default. `Path` is opaque rather than a newtype
+// for exactly that reason -- a newtype would let any `str` be cast to a `Path` and back,
+// which is the boundary being drawn.
+//
+// This was a deliberate reversal: `std::path` argued against having the type at all, and its
+// header now records which parts of that argument held and which did not.
+
+use std::io;
+use std::path;
+use std::string;
+
+fn main() {
+    // The classic bug, now unwritable: concatenation instead of `join`.
+    let joined = string::concat("/srv", "data");
+    io::println(to_string(path::is_absolute(joined)));
+}

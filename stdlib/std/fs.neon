@@ -13,11 +13,16 @@
 // `read_bytes` the same bytes typed as `Bytes`. Both are the same representation --
 // `str` in this language is already unvalidated bytes.
 //
-// A path is a `str`. A `Path` type would buy separator handling and normalisation, which
-// nothing here needs yet.
+// A path is a `std::path::Path`, not a `str`. That type owns separator handling and the
+// platform rules, so this module never parses one: it converts at the syscall boundary with
+// `path::to_str` and does nothing else with the text. The two modules changed together,
+// which is what made it worth doing -- a `Path` that `fs` did not accept would have meant a
+// conversion at every call site, which is the objection `std::path`'s header used to raise
+// against having the type at all.
 
 use std::string;
 use std::resource;
+use std::path;
 
 // Thrown by everything here that can fail. Its `message` names the operation, the path and
 // the `strerror` text, so a caller has nothing to reassemble. A `File` does not remember
@@ -74,7 +79,16 @@ internal mod raw {
     }
 }
 
-@native("neon_io_exists") fn exists(path: str) -> bool
+internal mod probe {
+    @native("neon_io_exists") fn exists(path: str) -> bool
+}
+
+// Whether anything is there. Not a permission or a type check, and racy by nature: the
+// answer describes the moment it was asked, so code that acts on it should open and handle
+// the failure instead.
+fn exists(p: path::Path) -> bool {
+    probe::exists(path::to_str(p))
+}
 
 fn fail(code: i64, what: str, path: str) throws IoError -> null {
     throw IoError { message: "#{what} `#{path}`: #{raw::strerror(code)}" };
@@ -82,26 +96,26 @@ fn fail(code: i64, what: str, path: str) throws IoError -> null {
 
 // ---- handles ----
 
-fn open(path: str) throws IoError -> File {
-    let fd = raw::open(path, 0);
+fn open(p: path::Path) throws IoError -> File {
+    let fd = raw::open(path::to_str(p), 0);
     if fd < 0 {
-        try fail(fd, "cannot open", path);
+        try fail(fd, "cannot open", path::to_str(p));
     };
     raw::guard(fd)
 }
 
-fn create(path: str) throws IoError -> File {
-    let fd = raw::open(path, 1);
+fn create(p: path::Path) throws IoError -> File {
+    let fd = raw::open(path::to_str(p), 1);
     if fd < 0 {
-        try fail(fd, "cannot create", path);
+        try fail(fd, "cannot create", path::to_str(p));
     };
     raw::guard(fd)
 }
 
-fn open_append(path: str) throws IoError -> File {
-    let fd = raw::open(path, 2);
+fn open_append(p: path::Path) throws IoError -> File {
+    let fd = raw::open(path::to_str(p), 2);
     if fd < 0 {
-        try fail(fd, "cannot open", path);
+        try fail(fd, "cannot open", path::to_str(p));
     };
     raw::guard(fd)
 }
@@ -160,7 +174,7 @@ fn flatten(data: IoList) -> List[str] {
 // was given plus whatever its subtree contributed.
 fn collect(data: IoList, acc: List[str]) -> List[str] {
     if data is Bytes {
-        std::collections::list::push(acc, (data as Bytes) as str)
+        std::collections::list::push(acc, data as Bytes as str)
     } else if data is str {
         std::collections::list::push(acc, data as str)
     } else {
@@ -182,35 +196,35 @@ fn collect(data: IoList, acc: List[str]) -> List[str] {
 // so the descriptor closes when `f` dies -- including when `read_all` throws straight past
 // the end of this function. Catching, closing and rethrowing here would be dead weight;
 // ARC already does it. The same holds for every helper below that opens a handle.
-fn read(path: str) throws IoError -> str {
-    let f = try open(path);
+fn read(p: path::Path) throws IoError -> str {
+    let f = try open(p);
     try read_all(f)
 }
 
-fn read_bytes(path: str) throws IoError -> Bytes {
-    (try read(path)) as Bytes
+fn read_bytes(p: path::Path) throws IoError -> Bytes {
+    (try read(p)) as Bytes
 }
 
-fn read_lines(path: str) throws IoError -> List[str] {
-    string::lines(try read(path))
+fn read_lines(p: path::Path) throws IoError -> List[str] {
+    string::lines(try read(p))
 }
 
-fn write(path: str, data: IoList) throws IoError -> null {
-    let f = try create(path);
+fn write(p: path::Path, data: IoList) throws IoError -> null {
+    let f = try create(p);
     try write_all(f, data);
     null
 }
 
-fn append(path: str, data: IoList) throws IoError -> null {
-    let f = try open_append(path);
+fn append(p: path::Path, data: IoList) throws IoError -> null {
+    let f = try open_append(p);
     try write_all(f, data);
     null
 }
 
-fn remove(path: str) throws IoError -> null {
-    let code = raw::remove(path);
+fn remove(p: path::Path) throws IoError -> null {
+    let code = raw::remove(path::to_str(p));
     if code < 0 {
-        try fail(code, "cannot remove", path);
+        try fail(code, "cannot remove", path::to_str(p));
     };
     null
 }

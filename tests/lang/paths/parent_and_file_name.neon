@@ -12,13 +12,13 @@ use std::io;
 use std::path;
 
 fn show(p: str) {
-    io::println("#{p} -> parent=#{path::parent(p) orelse "<null>"} name=#{path::file_name(p) orelse "<null>"}");
+    io::println("#{p} -> parent=#{path::parent(path::of(p)) orelse path::of("<null>")} name=#{path::file_name(path::of(p)) orelse "<null>"}");
 }
 
 fn walk(p: str, n: i64) -> i64 {
     io::println("at #{p}");
-    let up = path::parent(p);
-    if up is null { n } else { walk(up as str, n + 1) }
+    let up = path::parent(path::of(p));
+    if up is null { n } else { walk(path::to_str(up as path::Path), n + 1) }
 }
 
 fn main() {
@@ -26,22 +26,22 @@ fn main() {
     show(".");
     show("/");
     show("///");
-    show("a");            // a lone relative name has no parent
+    show("a");  // a lone relative name has no parent
     show("a/b");
-    show("/a");           // ...but an absolute one does: the root
+    show("/a");  // ...but an absolute one does: the root
     show("/a/b");
     show("/a/b/c.txt");
-    show("a/b/");         // trailing separator is not a component
+    show("a/b/");  // trailing separator is not a component
     show("a//b");
-    show("a/./b");        // nor is `.`
-    show("..");           // `..` is a component, but not a name
+    show("a/./b");  // nor is `.`
+    show("..");  // `..` is a component, but not a name
     show("a/..");
     show("../..");
     show("/..");
-    show(".hidden");      // a leading dot is part of the name
+    show(".hidden");  // a leading dot is part of the name
 
     // The documented way to get cwd-relative behaviour out of a null parent.
-    io::println(path::parent("a") orelse ".");
+    io::println(to_string(path::parent(path::of("a")) orelse path::of(".")));
 
     // Walking upwards terminates, because the root reports no parent rather than
     // reporting itself. That is the property the null is for.

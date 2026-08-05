@@ -12,7 +12,7 @@ use std::path;
 use std::string;
 
 fn show(p: str, prefix: str) {
-    io::println("#{p} <- #{prefix} = #{path::starts_with(p, prefix)}");
+    io::println("#{p} <- #{prefix} = #{path::starts_with(path::of(p), path::of(prefix))}");
 }
 
 fn main() {
@@ -22,9 +22,9 @@ fn main() {
     io::println("bytes say #{string::starts_with("/foobar", "/foo")}");
 
     show("a/b/c", "a/b");
-    show("a/b/c", "a/b/c");     // a path starts with itself
-    show("a/b", "a/b/c");       // a longer prefix cannot match
-    show("a/b/c", "");          // everything starts with nothing
+    show("a/b/c", "a/b/c");  // a path starts with itself
+    show("a/b", "a/b/c");  // a longer prefix cannot match
+    show("a/b/c", "");  // everything starts with nothing
     show("", "");
     show("", "a");
 
@@ -42,11 +42,11 @@ fn main() {
 
     // Compared as written: `..` is not resolved.
     show("/a/../b", "/b");
-    show(path::normalize("/a/../b"), "/b");
+    show(path::to_str(path::normalize(path::of("/a/../b"))), "/b");
 
     // The containment check, spelled out: normalise both, then compare.
-    let base = path::normalize("/srv/data/");
-    io::println("#{path::starts_with(path::normalize(path::join(base, "sub/file")), base)}");
-    io::println("#{path::starts_with(path::normalize(path::join(base, "../other")), base)}");
-    io::println("#{path::starts_with(path::normalize(path::join(base, "/etc/shadow")), base)}");
+    let base = path::normalize(path::of("/srv/data/"));
+    io::println("#{path::starts_with(path::normalize(path::join(base, path::of("sub/file"))), base)}");
+    io::println("#{path::starts_with(path::normalize(path::join(base, path::of("../other"))), base)}");
+    io::println("#{path::starts_with(path::normalize(path::join(base, path::of("/etc/shadow"))), base)}");
 }

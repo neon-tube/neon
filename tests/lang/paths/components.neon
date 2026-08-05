@@ -14,25 +14,25 @@ use std::path;
 use std::string;
 
 fn show(p: str) {
-    io::println("[#{string::join(path::components(p), "|")}] abs=#{path::is_absolute(p)}");
+    io::println("[#{string::join(path::components(path::of(p)), "|")}] abs=#{path::is_absolute(path::of(p))}");
 }
 
 fn main() {
-    show("");             // nothing names nothing
-    show(".");            // a `.`-only path has no components either
-    show("/");            // just the root
-    show("///");          // repeated separators collapse to the same root
+    show("");  // nothing names nothing
+    show(".");  // a `.`-only path has no components either
+    show("/");  // just the root
+    show("///");  // repeated separators collapse to the same root
     show("a");
     show("a/b/c");
     show("/a/b/c");
-    show("a//b");         // repeated separator in the middle
-    show("a/b/");         // trailing separator
+    show("a//b");  // repeated separator in the middle
+    show("a/b/");  // trailing separator
     show("a/b///");
-    show("./a/./b");      // `.` dropped wherever it appears
-    show("..");           // `..` kept
+    show("./a/./b");  // `.` dropped wherever it appears
+    show("..");  // `..` kept
     show("../a");
-    show("/a/../b");      // still not resolved
+    show("/a/../b");  // still not resolved
     show("/..");
-    show("a\\b");         // a backslash is an ordinary byte: one component, not two
-    show(" ");            // a space is a perfectly good file name
+    show("a\\b");  // a backslash is an ordinary byte: one component, not two
+    show(" ");  // a space is a perfectly good file name
 }

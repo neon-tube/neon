@@ -1,26 +1,29 @@
 // Lexical path manipulation. Platform-aware separators, no filesystem.
 //
-// ---- A path is a `str`, not a `Path` ----
+// ---- A path is a `Path` ----
 //
-// `std::fs` already says "a path is a `str`", and this module does not change that. A
-// `newtype Path = str` costs nothing at run time and was considered; it is not worth it
-// here, for three reasons.
+// It was a `str` until 2026-08-05, and the argument for that is worth keeping rather than
+// deleting, because two thirds of it were right and the reversal turns on the third.
 //
-// A newtype earns its keep when the wrapped representation supports operations that are
-// *wrong* for the new type -- `Bytes` exists because `to_upper` on a PNG is nonsense. A
-// path is not like that. It is text, and every `std::string` operation on it is meaningful:
-// `contains`, `starts_with`, `replace`, `split`, interpolation into a message. Wrapping it
-// would make the useful operations the ones you have to cast away from.
+// The argument was: (1) every `std::string` operation on a path is meaningful, so wrapping
+// it makes the useful operations the ones you cast away from; (2) the real bugs are wrong
+// VALUES -- an unnormalised `..`, a joined absolute silently replacing its base, a prefix
+// check done on bytes instead of components -- and a nominal wrapper catches none of them;
+// (3) `std::fs` takes `str`, so a `Path` this module could not force on `fs` would mean a
+// cast at every call site, which is friction bought with nothing.
 //
-// It would also not buy the safety it looks like it buys. The bugs in path code are wrong
-// *values* -- an unnormalised `..`, a joined absolute path silently replacing its base, a
-// prefix check done on bytes instead of components -- and a nominal wrapper catches none of
-// them. What catches them is the behaviour specified below, which is available to a plain
-// `str` just as well.
+// (3) was the load-bearing one, and it is now false: `std::fs` takes `Path`. The two modules
+// changed together, which is the only way this was ever going to be worth doing.
 //
-// Finally, `std::fs` takes `str`. A `Path` type this module could not force on `fs` would
-// mean an `as str` at every single call site, which is friction bought with nothing. If
-// `fs` ever grows a `Path` of its own, it belongs there, not here.
+// (1) does not survive contact. `to_upper` breaks a case-sensitive path, `replace` corrupts
+// separators, and `concat` where `join` was meant is the oldest path bug there is. The list
+// in (2) even names one of them -- "a prefix check done on bytes instead of components" is a
+// string operation being wrong for a path, offered as evidence that a type would not help.
+//
+// (2) still stands, and is worth keeping in view: the type does not fix `..`. What it buys
+// is a single door. `of` is the only way in, so normalisation and (later) validation have
+// somewhere to live; `join` is the only way to combine two paths; and `to_str` makes leaving
+// the API a visible act rather than the default.
 //
 // ---- No syscalls ----
 //
@@ -137,18 +140,6 @@ mod win {
 
 // ---- the shape of a path ----
 
-// Absolute iff it starts at a root. Which prefixes count is the platform's business; see the
-// rule sets above.
-@cfg(windows)
-fn is_absolute(p: str) -> bool {
-    !win::root_of(p) is null
-}
-
-@cfg(not(windows))
-fn is_absolute(p: str) -> bool {
-    !posix::root_of(p) is null
-}
-
 // The rest of the platform surface, selected the same way. Four one-line delegators rather
 // than a `@cfg` around the whole module: the logic below is shared, and only these four
 // facts differ.
@@ -184,7 +175,57 @@ internal mod plat {
     }
 }
 
-fn is_relative(p: str) -> bool {
+// ---- Path ----
+
+// A path is its own type, opaque, wrapping the text.
+//
+// This REVERSES the argument that stood here before, and the reversal has a reason rather
+// than a preference. That argument had three parts, and the load-bearing one was that
+// `std::fs` takes `str`, so a `Path` would mean an `as str` at every call site -- friction
+// bought with nothing. `std::fs` takes `Path` now, so that cost is gone.
+//
+// The first part -- "every `std::string` operation on a path is meaningful" -- does not
+// survive contact either. `to_upper` breaks a case-sensitive path, `replace` corrupts
+// separators, and `concat` where `join` was meant is the classic path bug. This module's own
+// header already listed "a prefix check done on bytes instead of components" as a defect
+// worth designing against; that IS a string operation being wrong for a path.
+//
+// The second part still stands and is worth keeping in view: the real bugs are wrong VALUES
+// -- an unnormalised `..`, a joined absolute silently replacing its base -- and a wrapper
+// catches none of them by itself. What it does buy is a single door. `of` is the only way in,
+// so normalisation has somewhere to live, and `join` is the only way to combine two paths.
+//
+// Opaque rather than `newtype`: a newtype would let any `str` be cast to a `Path` and back,
+// which is the boundary being drawn. `of` is deliberately still total -- a path comes from
+// user input and the environment, and refusing to build one is not this module's call.
+opaque record Path { s: str }
+
+// The only constructor. Total: any text names something on some platform, and validating
+// here would reject paths the OS accepts.
+fn of(s: str) -> Path {
+    Path { s: s }
+}
+
+// The text back. The escape hatch is deliberate and named: code that has to hand a path to
+// something outside this API -- a C interface, a log line, a protocol -- should be visible.
+fn to_str(p: Path) -> str {
+    p.s
+}
+
+// So a path interpolates like anything else: `"reading #{p}"`.
+impl Display for Path {
+    fn to_string(v: Path) -> str {
+        v.s
+    }
+}
+
+// Absolute iff it starts at a root. Which prefixes count is the platform's business; see the
+// rule sets above.
+fn is_absolute(p: Path) -> bool {
+    !plat::root_of(p.s) is null
+}
+
+fn is_relative(p: Path) -> bool {
     !is_absolute(p)
 }
 
@@ -204,8 +245,9 @@ fn is_relative(p: str) -> bool {
 //
 // The empty string has no components. `components("")` and `components(".")` are both `[]`,
 // which is the honest answer: neither names anything.
-fn components(p: str) -> List[str] {
+fn components(p: Path) -> List[str] {
     let out: List[str] = [];
+    let p = p.s;
     let root = plat::root_of(p);
     let rest = if root is null {
         p
@@ -305,20 +347,20 @@ internal mod raw {
 // Separators are neither doubled nor required: `join("a/", "b")` and `join("a", "b")` are
 // both `a/b`. An empty operand contributes nothing, so `join("a", "")` is `a` and not
 // `a/` -- joining nothing on should not change what the path names.
-fn join(a: str, b: str) -> str {
+fn join(a: Path, b: Path) -> Path {
     if is_absolute(b) {
         b
-    } else if string::is_empty(b) {
+    } else if string::is_empty(b.s) {
         a
-    } else if string::is_empty(a) {
+    } else if string::is_empty(a.s) {
         b
     } else {
-        let base = raw::trim_seps(a);
+        let base = raw::trim_seps(a.s);
         if string::is_empty(base) {
             // `a` was nothing but separators: that is the root.
-            string::concat(plat::sep(), b)
+            of(string::concat(plat::sep(), b.s))
         } else {
-            string::concat(string::concat(base, plat::sep()), b)
+            of(string::concat(string::concat(base, plat::sep()), b.s))
         }
     }
 }
@@ -335,12 +377,12 @@ fn join(a: str, b: str) -> str {
 // Trailing separators and `.` do not count as components, so `parent("a/b/")` is `a` and
 // `parent("a/./b")` is `a`. `..` does count, since it is not resolved: `parent("a/..")` is
 // `a`, not `null`.
-fn parent(p: str) -> str | null {
+fn parent(p: Path) -> Path | null {
     let parts = components(p);
     if list::len(parts) <= 1 {
         null
     } else {
-        raw::render(raw::drop_last(parts))
+        of(raw::render(raw::drop_last(parts)))
     }
 }
 
@@ -350,7 +392,7 @@ fn parent(p: str) -> str | null {
 // component is `".."` -- `a/..` names a directory, but not by name, and answering `".."`
 // would hand back something no caller can use as a filename. Trailing separators are
 // ignored, so `file_name("a/b/")` is `b`.
-fn file_name(p: str) -> str | null {
+fn file_name(p: Path) -> str | null {
     let last = list::last(components(p));
     if last is null {
         null
@@ -367,7 +409,7 @@ fn file_name(p: str) -> str | null {
 // The file name without its extension, or `null` wherever `file_name` is `null`. A name
 // with no extension is its own stem: `stem("README")` is `README`, and `stem(".bashrc")` is
 // `.bashrc`.
-fn stem(p: str) -> str | null {
+fn stem(p: Path) -> str | null {
     let name = file_name(p);
     if name is null {
         null
@@ -384,7 +426,7 @@ fn stem(p: str) -> str | null {
 
 // The extension without its dot, or `null` when there is none. Never `""`: see
 // `raw::dot_at` for why `a.` has no extension.
-fn extension(p: str) -> str | null {
+fn extension(p: Path) -> str | null {
     let name = file_name(p);
     if name is null {
         null
@@ -407,14 +449,14 @@ fn extension(p: str) -> str | null {
 // The alternative was returning `p` unchanged, which silently reports success for an
 // operation that did not happen; a caller that genuinely does not care can write
 // `with_extension(p, e) orelse p` and say so.
-fn with_extension(p: str, ext: str) -> str | null {
+fn with_extension(p: Path, ext: str) -> Path | null {
     let base = stem(p);
     if base is null {
         null
     } else {
         let b = base as str;
         let name = if string::is_empty(ext) { b } else { "#{b}.#{ext}" };
-        raw::render(list::push(raw::drop_last(components(p)), name))
+        of(raw::render(list::push(raw::drop_last(components(p)), name)))
     }
 }
 
@@ -437,7 +479,7 @@ fn with_extension(p: str, ext: str) -> str | null {
 // `normalize(".")` and `normalize("")` are all `"."`. This is the one place the module
 // invents a component, and it does so because `normalize`'s whole job is to hand back a
 // string that can be used as a path -- and `""` cannot be.
-fn normalize(p: str) -> str {
+fn normalize(p: Path) -> Path {
     let abs = is_absolute(p);
     let out: List[str] = [];
     for part in components(p) {
@@ -460,11 +502,13 @@ fn normalize(p: str) -> str {
         };
     };
     if abs {
-        string::concat("/", string::join(out, "/"))
+        // The root the path actually had, not a hardcoded `/`: on Windows it is the drive.
+        let root = plat::root_of(p.s) orelse plat::sep();
+        of(string::concat(root, string::join(out, plat::sep())))
     } else if list::is_empty(out) {
-        "."
+        of(".")
     } else {
-        string::join(out, "/")
+        of(string::join(out, plat::sep()))
     }
 }
 
@@ -478,7 +522,7 @@ fn normalize(p: str) -> str {
 // they may not be in the same form. The empty prefix is a prefix of everything, since it
 // has no components to fail to match. An absolute prefix only matches an absolute path,
 // because `"/"` is a component that only absolute paths have.
-fn starts_with(p: str, prefix: str) -> bool {
+fn starts_with(p: Path, prefix: Path) -> bool {
     let a = components(p);
     let b = components(prefix);
     if list::len(b) > list::len(a) {
