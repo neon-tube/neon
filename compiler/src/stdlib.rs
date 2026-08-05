@@ -28,7 +28,17 @@ pub fn module_path(rel: &str) -> Vec<String> {
 /// A stdlib file that does not lex or parse is a broken toolchain, not a user error,
 /// so it is an `Err` naming the file rather than a diagnostic.
 pub fn parse(sources: &[(String, String)]) -> Result<Vec<(Vec<String>, Module)>, String> {
-    parse_from(sources, 0).map(|(m, _)| m)
+    parse_with(sources, &crate::expand::Config::for_host([]))
+}
+
+/// As `parse`, against an explicit `@cfg` configuration. `neon check --cfg windows` needs
+/// this: expanding the stdlib under the host's keys while the program expands under the
+/// caller's would check the program's Windows branch against a POSIX stdlib.
+pub fn parse_with(
+    sources: &[(String, String)],
+    config: &crate::expand::Config,
+) -> Result<Vec<(Vec<String>, Module)>, String> {
+    parse_from_with(sources, 0, config).map(|(m, _)| m)
 }
 
 /// Parse the stdlib, numbering expressions from `base` so ids stay unique across the whole

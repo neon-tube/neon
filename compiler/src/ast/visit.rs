@@ -132,6 +132,8 @@ pub fn walk_pattern<'a, V: Visitor<'a>>(v: &mut V, p: &'a Pattern) {
 
 pub fn walk_expr<'a, V: Visitor<'a>>(v: &mut V, e: &'a Expr) {
     match &e.kind {
+        ExprKind::Todo(_) => {}
+
         ExprKind::Str(parts) => {
             for p in parts {
                 if let StrPart::Interp(e) = p {

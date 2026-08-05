@@ -119,6 +119,8 @@ impl Numberer {
         e.id = ExprId(self.next);
         self.next += 1;
         match &mut e.kind {
+        ExprKind::Todo(_) => {}
+
             ExprKind::Str(parts) => {
                 for p in parts {
                     if let StrPart::Interp(e) = p {

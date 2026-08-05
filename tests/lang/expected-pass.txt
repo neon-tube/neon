@@ -125,6 +125,7 @@ errors/main_throws_clause_is_fixed.neon
 errors/main_throws_error_restated_fails.neon
 errors/throw_and_catch.neon
 errors/throw_from_catch.neon
+errors/todo_is_a_compile_error.neon
 errors/try_assert_panics.neon
 errors/try_catch_carries_the_expected_type.neon
 errors/try_in_non_throws_fn_fails.neon

@@ -25,4 +25,13 @@ int64_t neon_io_remove(neon_str path);                  // consumes path; 0 or -
 bool neon_io_exists(neon_str path);                     // consumes path
 neon_str neon_io_strerror(int64_t code);                // pure: a code, not hidden state
 
+// Directories and metadata. POSIX-backed; the Windows builds return `-ENOSYS`, and
+// `std::fs` refuses to call them there with a `TODO(..)` compile error.
+int64_t neon_io_mkdir(neon_str path);                   // consumes path; 0 or -errno
+int64_t neon_io_rename(neon_str from, neon_str to);     // consumes both; 0 or -errno
+int64_t neon_io_is_dir(neon_str path);                  // 1 dir, 0 not, or -errno
+int64_t neon_io_size(neon_str path);                    // bytes, or -errno
+// Entry NAMES, NUL-separated, without `.` and `..`. *err: 0 or -errno.
+neon_str neon_io_read_dir(neon_str path, int64_t* err);
+
 #endif

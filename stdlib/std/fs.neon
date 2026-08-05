@@ -64,6 +64,12 @@ internal mod raw {
     @native("neon_io_writev") fn writev(fd: i64, parts: List[str]) -> i64
     @native("neon_io_remove") fn remove(path: str) -> i64
     @native("neon_io_strerror") fn strerror(code: i64) -> str
+    @native("neon_io_mkdir") fn mkdir(path: str) -> i64
+    @native("neon_io_rename") fn rename(from: str, to: str) -> i64
+    @native("neon_io_is_dir") fn is_dir(path: str) -> i64
+    @native("neon_io_size") fn size(path: str) -> i64
+    // The names, NUL-separated, and the status: the tuple's tail is a C out-parameter.
+    @native("neon_io_read_dir") fn read_dir(path: str) -> (str, i64)
 
     // The cleanup a handle carries: closing is the resource's job, so a forgotten close
     // -- or one skipped by a `throw` -- still happens, and its error is available to
@@ -226,5 +232,100 @@ fn remove(p: path::Path) throws IoError -> null {
     if code < 0 {
         try fail(code, "cannot remove", path::to_str(p));
     };
+    null
+}
+
+// ---- directories and metadata ----
+//
+// POSIX only, and the Windows halves are `TODO(..)` rather than silence. A `TODO` is a
+// COMPILE error naming what is missing, so a Windows build of a program that calls these
+// stops with "TODO: fs::mkdir on Windows" pointing at the hole -- instead of linking against
+// a runtime stub that returns `ENOSYS` at run time, or worse, doing something almost right.
+//
+// The C side still compiles and links on Windows (the `runtime-windows` job builds it) and
+// returns `-ENOSYS` there. That is belt and braces: the Neon guard is what a user meets, and
+// the errno is what would happen if the guard were ever removed.
+
+@cfg(not(windows))
+fn mkdir(p: path::Path) throws IoError -> null {
+    let code = raw::mkdir(path::to_str(p));
+    if code < 0 {
+        try fail(code, "cannot create directory", path::to_str(p));
+    };
+    null
+}
+
+@cfg(windows)
+fn mkdir(p: path::Path) throws IoError -> null {
+    TODO("fs::mkdir on Windows: CreateDirectoryW, and the errno mapping that goes with it")
+}
+
+@cfg(not(windows))
+fn rename(from: path::Path, to: path::Path) throws IoError -> null {
+    let code = raw::rename(path::to_str(from), path::to_str(to));
+    if code < 0 {
+        try fail(code, "cannot rename", path::to_str(from));
+    };
+    null
+}
+
+@cfg(windows)
+fn rename(from: path::Path, to: path::Path) throws IoError -> null {
+    TODO("fs::rename on Windows: MoveFileExW, which unlike POSIX rename will not replace an existing file without MOVEFILE_REPLACE_EXISTING")
+}
+
+// Whether the path names a directory. `false` for a file AND for something that is not
+// there: this answers a question about a kind, and "no such path" is not a failure to
+// report differently from "not a directory".
+@cfg(not(windows))
+fn is_dir(p: path::Path) -> bool {
+    raw::is_dir(path::to_str(p)) == 1
+}
+
+@cfg(windows)
+fn is_dir(p: path::Path) -> bool {
+    TODO("fs::is_dir on Windows: GetFileAttributesW and FILE_ATTRIBUTE_DIRECTORY")
+}
+
+// The size in bytes.
+@cfg(not(windows))
+fn size(p: path::Path) throws IoError -> i64 {
+    let n = raw::size(path::to_str(p));
+    if n < 0 {
+        try fail(n, "cannot stat", path::to_str(p));
+    };
+    n
+}
+
+@cfg(windows)
+fn size(p: path::Path) throws IoError -> i64 {
+    TODO("fs::size on Windows: GetFileAttributesExW")
+}
+
+// The entries of a directory, as NAMES rather than paths. Joining them onto the directory
+// is the caller's choice and `std::path::join`'s job.
+//
+// Order is whatever the filesystem gives back, which is not sorted and not stable across
+// runs. Sort if you need determinism.
+@cfg(not(windows))
+fn read_dir(p: path::Path) throws IoError -> List[str] {
+    let (names, code) = raw::read_dir(path::to_str(p));
+    if code < 0 {
+        try fail(code, "cannot read directory", path::to_str(p));
+    };
+    if string::is_empty(names) { [] } else { string::split(names, "\0") }
+}
+
+@cfg(windows)
+fn read_dir(p: path::Path) throws IoError -> List[str] {
+    TODO("fs::read_dir on Windows: FindFirstFileW/FindNextFileW, and the wildcard the path needs appending")
+}
+
+// Copy by reading and writing, so it needs no syscall of its own and works wherever `read`
+// and `write` do. It is NOT atomic and does not preserve permissions or timestamps -- a
+// copy that did would be a different function with a different name.
+fn copy(from: path::Path, to: path::Path) throws IoError -> null {
+    let data = try read_bytes(from);
+    try write(to, data as str);
     null
 }

@@ -83,6 +83,9 @@ pub enum Token {
     Test,
     Bench,
     Assert,
+    /// `TODO("why")` — an unwritten implementation, and a compile error at the
+    /// point it is missing. Capitalised because it is meant to be seen.
+    Todo,
     AssertEq,
     AssertNe,
     AssertThrows,
@@ -205,6 +208,7 @@ impl Token {
             "test" => Token::Test,
             "bench" => Token::Bench,
             "assert" => Token::Assert,
+            "TODO" => Token::Todo,
             "assert_eq" => Token::AssertEq,
             "assert_ne" => Token::AssertNe,
             "assert_throws" => Token::AssertThrows,
@@ -267,6 +271,7 @@ impl fmt::Display for Token {
             Token::Test => "test",
             Token::Bench => "bench",
             Token::Assert => "assert",
+            Token::Todo => "TODO",
             Token::AssertEq => "assert_eq",
             Token::AssertNe => "assert_ne",
             Token::AssertThrows => "assert_throws",

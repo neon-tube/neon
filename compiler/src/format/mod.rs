@@ -1320,6 +1320,11 @@ impl<'a> Fmt<'a> {
                 });
                 self.ty(ty, TP_ANY);
             }
+            ExprKind::Todo(msg) => {
+                self.push("TODO(\"");
+                self.push(msg);
+                self.push("\")");
+            }
             ExprKind::Assert { kind, args } => {
                 self.push(match kind {
                     AssertKind::Assert => "assert",

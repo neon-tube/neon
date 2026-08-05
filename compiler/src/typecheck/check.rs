@@ -1665,6 +1665,18 @@ impl Checker<'_> {
                 self.env.solver.t.tuple(vec![])
             }
 
+            // `TODO("why")` is a compile error at the point the implementation is missing.
+            //
+            // Typed `never`, which is the half that matters for using it. A hole stands
+            // wherever a value is wanted -- a function body, one arm of a match, an argument
+            // -- and `never` is below every type, so the surrounding code still checks and
+            // this is the ONLY error reported. Typing it `()` would bury the message under a
+            // second complaint about the type the hole should have produced.
+            ExprKind::Todo(msg) => {
+                self.error(e.span.clone(), TypeErrorKind::Todo(msg.clone()));
+                self.env.solver.t.never()
+            }
+
             ExprKind::Call { callee, generics, args } => {
                 self.call(module, e, callee, generics, args, expected)
             }

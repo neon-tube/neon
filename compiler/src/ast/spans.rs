@@ -215,6 +215,8 @@ fn pattern(p: &mut Pattern) {
 fn expr(e: &mut Expr) {
     e.span = ZERO;
     match &mut e.kind {
+        ExprKind::Todo(_) => {}
+
         ExprKind::Str(parts) => {
             for p in parts {
                 if let StrPart::Interp(e) = p {

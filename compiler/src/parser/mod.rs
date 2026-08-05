@@ -1343,6 +1343,19 @@ where
     .map(|(kind, args)| ExprKind::Assert { kind, args })
     .boxed();
 
+    // `TODO("why")`. Only a string literal: the message is for a person reading a compile
+    // error, so there is nothing to evaluate and nothing that could depend on runtime state.
+    let todo_expr = just(Token::Todo)
+        .ignore_then(
+            select! { Token::StrText(s) => s }
+                .or_not()
+                .map(|s| s.unwrap_or_default())
+                .delimited_by(just(Token::StrStart), just(Token::StrEnd))
+                .delimited_by(just(Token::LParen), just(Token::RParen)),
+        )
+        .map(ExprKind::Todo)
+        .boxed();
+
     let block_expr = block.clone().map(ExprKind::Block).boxed();
     let path_expr = path().map(ExprKind::Path).boxed();
 
@@ -1355,6 +1368,7 @@ where
         throw_expr,
         try_expr,
         assert_expr,
+        todo_expr,
         // `(x) => e` before a parenthesised expression, since both start `(`.
         lambda,
         paren,

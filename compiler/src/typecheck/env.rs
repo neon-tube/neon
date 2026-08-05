@@ -184,6 +184,9 @@ pub enum TypeErrorKind {
     /// A value-position name nothing declares. Distinct from `Unknown`, which is a
     /// TYPE nothing declares — `unknown type println` is not a sentence.
     UnknownName(String),
+    /// `TODO("why")` — an implementation that was never written.
+    Todo(String),
+
     /// A return-position dispatch onto a union that needs a different impl per variant.
     NoSubjectToSwitch { protocol: String, method: String, subject: String },
 
@@ -482,6 +485,11 @@ impl fmt::Display for TypeError {
                 "`orphan impl {n}` may only appear in the root application: a library \
                  carrying one imposes its choice on every program that depends on it"
             ),
+            TypeErrorKind::Todo(msg) if msg.is_empty() => {
+                write!(f, "TODO: this is not implemented")
+            }
+            TypeErrorKind::Todo(msg) => write!(f, "TODO: {msg}"),
+
             TypeErrorKind::NoSubjectToSwitch { protocol, method, subject } => write!(
                 f,
                 "`{method}` is dispatched on the type it RETURNS, and `{subject}` needs a \

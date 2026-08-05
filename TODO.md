@@ -615,9 +615,21 @@ means a cast at every call site" — was only true while the two modules were ch
 separately. Every corpus golden is byte-identical, so the API moved and the semantics did
 not. Pinned by `paths/a_path_is_not_a_string.neon`.
 
-New syscall surface (`Dir`, `metadata`, `mkdir`, `read_dir`, `rename`, `copy`) is
-deliberately NOT part of that change: each needs a C native, a Windows implementation and
-runtime tests, and it is its own piece with its own CI story.
+**The syscall surface landed 2026-08-05**: `mkdir`, `rename`, `is_dir`, `size`, `read_dir`
+and `copy`. POSIX bodies; the Windows halves are `TODO(..)`, which is a compile error naming
+what is missing, so a Windows build stops at the hole instead of linking a stub. The C side
+still compiles and links on Windows and returns `-ENOSYS` there, which is belt and braces —
+the Neon guard is what a user meets.
+
+`read_dir` returns entry NAMES as a NUL-separated string from the native, split in Neon. A
+runtime function cannot build a `List[str]`: that needs the element's value-witness, which
+codegen generates per type and hands only to the natives it special-cases. NUL is the one
+byte a POSIX filename cannot contain, so the split is lossless. `copy` needs no native at
+all — it is `read` plus `write`, and says so.
+
+Not done, and each is a rule to add rather than a redesign: a `Dir` HANDLE type (this is
+`read_dir` returning names, not an open directory), permissions, timestamps, symlink
+operations, and the Windows bodies the TODOs name.
 
 **Still open, and it is item 2 unchanged: the keys are the HOST, not the target.** `--cfg`
 ADDS keys rather than describing a machine to build for, so with `--cfg windows` on Linux

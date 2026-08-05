@@ -47,7 +47,7 @@ pub fn run(file: &OsString, lib: bool, cfg: &[String]) -> Result<()> {
 
     // The stdlib is declared alongside the program, so `use std::io` resolves.
     let std_sources = crate::stdlib::sources()?;
-    let std_modules = neon_compiler::stdlib::parse(&std_sources)
+    let std_modules = neon_compiler::stdlib::parse_with(&std_sources, &config)
         .map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
     let mut modules: Vec<(Vec<String>, &_)> =
         std_modules.iter().map(|(p, m)| (p.clone(), m)).collect();
@@ -59,7 +59,16 @@ pub fn run(file: &OsString, lib: bool, cfg: &[String]) -> Result<()> {
     // every diagnostic of the run — its own and the ones raised while resolving
     // annotations — so there is one list either way.
     let errors = if env.errors().is_empty() {
-        neon_compiler::typecheck::check::check_module(&mut env, &module).1
+        // `check_all` over every module, not `check_module` over the program alone.
+        // `check_module`'s own doc says it is for callers with nothing else to check and
+        // that a real compilation goes through `check_all` "so the stdlib is checked into
+        // the same result" -- and `neon check` is a real compilation front end. Checking
+        // only the program made this verb WEAKER than `neon run`: a stdlib body that did
+        // not type-check passed `check` and failed `run`, which is precisely the "the two
+        // verbs disagree about the same file" trap the derive pass was restructured to
+        // avoid. It also made `--cfg windows` unable to see a `TODO` in a `@cfg`-guarded
+        // stdlib branch, which is most of what that flag is for.
+        neon_compiler::typecheck::check::check_all(&mut env, &modules).1
     } else {
         env.take_errors()
     };

@@ -392,6 +392,12 @@ pub enum ExprKind {
     /// `assert(..)`, `assert_eq(..)` — intrinsics, so failures can report the
     /// actual values and a span.
     Assert { kind: AssertKind, args: Vec<Expr> },
+    /// `TODO("why")` — an implementation that has not been written. It is a compile
+    /// ERROR wherever it appears, so a hole cannot be shipped: the message says what is
+    /// missing and the span says where. Its type is `never`, which is what lets it stand
+    /// in any position without a second, cascading error about the type it should have
+    /// produced.
+    Todo(String),
     Error,
 }
 
