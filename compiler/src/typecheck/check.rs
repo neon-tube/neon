@@ -2161,9 +2161,19 @@ impl Checker<'_> {
         expected: Option<TyId>,
     ) -> TyId {
         self.throw_sinks.push(vec![]);
-        // The body's value flows the expected type down only when nothing follows it;
-        // with a catch the arms are unioned, so let both synthesize.
-        let val = self.expr(module, body, if catch.is_some() { None } else { expected });
+        // The expected type flows into the body whether or not a `catch` follows.
+        //
+        // It used to be withheld when there was one, on the reasoning that the two arms are
+        // unioned afterwards so neither should be forced. But the catch arm is checked
+        // against `expected` below, so the two halves disagreed about their own rule — and
+        // the union still has to fit `expected`, which means each arm does too. Withholding
+        // it was never the more permissive choice, only the less informative one.
+        //
+        // What it cost: a call that dispatches on the type it RETURNS has nothing to select
+        // on without it. `let s: Server = try json::from_json(j) catch (e) { .. }` was
+        // "`from_json` has no parameter to dispatch on, and nothing here says what it should
+        // return" -- with the annotation sitting right there on the binding.
+        let val = self.expr(module, body, expected);
         let thrown = self.throw_sinks.pop().unwrap_or_default();
         let caught = self.env.solver.t.union_all(&thrown);
         let never = self.env.solver.t.never();

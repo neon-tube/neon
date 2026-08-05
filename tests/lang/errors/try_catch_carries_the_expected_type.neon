@@ -1,0 +1,46 @@
+// The expected type reaches the body of a `try`, whether or not a `catch` follows it.
+//
+// It used to be withheld when there was a `catch`, on the reasoning that the two arms are
+// unioned afterwards so neither should be forced. The catch arm was checked against the
+// expected type anyway, so the two halves disagreed about their own rule -- and since the
+// union has to fit the expected type, each arm does too. Withholding it was never the more
+// permissive choice, only the less informative one.
+//
+// What it cost is below. A call that dispatches on the type it RETURNS has nothing to select
+// on without an expected type, so `let s: Server = try from_json(j) catch (e) { .. }` failed
+// with "`from_json` has no parameter to dispatch on, and nothing here says what it should
+// return" -- with the annotation sitting right there on the binding. Writing decode code with
+// a handler is the first thing anyone does, so this was the first wall they would hit.
+
+use std::io;
+use std::json;
+
+@derive(json::ToJson, json::FromJson)
+record Server { host: str, port: i64, tls: bool }
+
+// Return-position dispatch inside a `try` with a handler: the binding's annotation is the
+// only thing that says which impl to run.
+fn describe(j: json::Json) -> str {
+    let s: Server = try json::from_json(j) catch (e) { return e.message };
+    "ok: #{s.host}"
+}
+
+// The expected type also reaches an empty collection literal, which has nothing else to
+// infer its element type from.
+fn ids(j: json::Json) -> List[i64] {
+    let xs: List[i64] = try json::from_json(j) catch (e) { [] };
+    xs
+}
+
+fn main() {
+    io::println(describe(json::object([
+        ("host", json::to_json("a.example")),
+        ("port", json::to_json(8080)),
+        ("tls", json::to_json(true)),
+    ])));
+    io::println(describe(json::object([("host", json::to_json("a.example"))])));
+    io::println(describe(json::to_json(42)));
+
+    io::println(json::stringify(json::to_json(ids(json::to_json([1, 2, 3])))));
+    io::println(json::stringify(json::to_json(ids(json::to_json("nope")))));
+}
