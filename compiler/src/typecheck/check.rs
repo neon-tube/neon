@@ -1665,17 +1665,26 @@ impl Checker<'_> {
                 self.env.solver.t.tuple(vec![])
             }
 
-            // `TODO("why")` is a compile error at the point the implementation is missing.
+            // `TODO("why")` is an implementation that has not been written. It TYPE-CHECKS,
+            // and panics if it is ever reached.
             //
-            // Typed `never`, which is the half that matters for using it. A hole stands
-            // wherever a value is wanted -- a function body, one arm of a match, an argument
-            // -- and `never` is below every type, so the surrounding code still checks and
-            // this is the ONLY error reported. Typing it `()` would bury the message under a
-            // second complaint about the type the hole should have produced.
-            ExprKind::Todo(msg) => {
-                self.error(e.span.clone(), TypeErrorKind::Todo(msg.clone()));
-                self.env.solver.t.never()
-            }
+            // It was a compile error first, and the first real use is what argued it down.
+            // `std::fs`'s Windows half is a wall of `TODO`s, and a compile error at the
+            // DEFINITION took the whole module out on Windows: a program calling only
+            // `fs::read` -- implemented everywhere, touching no hole -- collected five
+            // errors about functions it never mentions. A marker meant to say "this part is
+            // missing" was saying "this library is unusable".
+            //
+            // So the hole is a runtime one, as in Rust. The cost is real and worth naming:
+            // a `TODO` can ship, and nothing in a signature warns the caller. What would buy
+            // back that safety without the blast radius is an error at the CALL site rather
+            // than the definition -- `fs::read` compiles, `fs::mkdir(p)` does not -- which
+            // needs the checker to mark a holed function and diagnose its callers. That is
+            // the design worth having; this is not it, and TODO.md says so.
+            //
+            // Typed `never` either way, which is what lets it stand where a value is wanted:
+            // a whole body, one match arm, an argument.
+            ExprKind::Todo(_) => self.env.solver.t.never(),
 
             ExprKind::Call { callee, generics, args } => {
                 self.call(module, e, callee, generics, args, expected)

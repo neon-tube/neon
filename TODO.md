@@ -69,6 +69,34 @@ Two things it must NOT do, both of which it got wrong first and the corpus caugh
 
 ---
 
+## Design — `TODO` should error at the CALL site, not the definition
+
+`TODO("why")` type-checks and panics if reached, as Rust's `todo!()` does. That is the
+second design; the first made it a compile error where it sat, and the first real use argued
+it down within a day.
+
+`std::fs`'s Windows half is a wall of `TODO`s. Erroring at the DEFINITION took the whole
+module out on Windows: a program calling only `fs::read` — implemented everywhere, touching
+no hole — collected five errors about functions it never mentions. A marker meant to say
+"this part is missing" was saying "this library is unusable".
+
+The runtime form has its own cost, and it is the one Rust lives with: a `TODO` can ship, and
+nothing in a signature warns the caller.
+
+**Neither is the design worth having.** That is an error at the CALL site: `fs::read`
+compiles and runs on Windows, `fs::mkdir(p)` is a compile error naming what is missing. It
+gives the safety of the first form without the blast radius, and it is strictly better than
+Rust's answer rather than a copy of it.
+
+What it needs: the checker records a function whose body contains a `TODO` as holed, and
+diagnoses calls to it with the TODO's message. Transitivity needs no special handling —
+calling a holed function is itself an error, so a wrapper is caught at its own call. The
+question worth deciding first is whether a `TODO` in ONE branch holes the whole function.
+Conservative (yes) is sound and refuses code that would have run; precise (no) needs
+reachability nobody has. Conservative first, and say so in the message.
+
+---
+
 ## P2 — decisions. These need an owner's call, not an implementation.
 
 ### 16. Should block comments exist?

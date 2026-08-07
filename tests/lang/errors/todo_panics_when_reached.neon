@@ -1,0 +1,37 @@
+//@ exit: 101
+
+// `TODO("why")` is an implementation that has not been written. It TYPE-CHECKS, and panics
+// with its message if it is ever reached.
+//
+// Typed `never`, which is what lets it stand where a value is wanted: a whole function body,
+// one arm of a match, an argument. The surrounding code checks as if the hole were any other
+// expression, so a half-written function is still a function.
+//
+// It was a COMPILE error first, and the first real use argued it down. `std::fs`'s Windows
+// half is a wall of `TODO`s, and erroring at the DEFINITION took the whole module out on
+// Windows: a program calling only `fs::read` -- implemented everywhere, touching no hole --
+// collected five errors about functions it never mentions. A marker meant to say "this part
+// is missing" was saying "this library is unusable".
+//
+// The cost of the runtime form is real and worth naming: a `TODO` can ship, and nothing in a
+// signature warns the caller. What would buy that back without the blast radius is an error
+// at the CALL site rather than the definition -- `fs::read` compiles, `fs::mkdir(p)` does not
+// -- which needs the checker to mark a holed function and diagnose its callers. TODO.md
+// carries that as the design worth having.
+//
+// The line before the hole runs, which is the whole point: work proceeds around it.
+
+use std::io;
+
+fn classify(n: i64) -> str {
+    if n > 0 {
+        "positive"
+    } else {
+        TODO("the negative case")
+    }
+}
+
+fn main() {
+    io::println(classify(1));
+    io::println(classify(-1));
+}

@@ -1387,6 +1387,22 @@ impl Lower<'_> {
                 // The value of a `return` is never consumed; mint one without emitting.
                 self.b.value(Repr::Never, ty)
             }
+            // `TODO("why")` — panic with the message, then `Unreachable`. Typed `never`, so
+            // there is no value to produce and nothing after it runs.
+            ExprKind::Todo(msg) => {
+                let text = if msg.is_empty() {
+                    "TODO: this is not implemented".to_string()
+                } else {
+                    format!("TODO: {msg}")
+                };
+                let m = self.b.emit(Op::ConstStr(text), Repr::Str, ty);
+                self.b.emit_void(Op::Native { symbol: "neon_panic".into(), args: vec![m] });
+                self.b.terminate(Term::Unreachable);
+                let after = self.b.new_block();
+                self.b.switch_to(after);
+                self.terminated = false;
+                self.b.emit(Op::ConstUnit, repr, ty)
+            }
             ExprKind::Assert { kind, args } => self.lower_assert(*kind, args, ty),
             _ => self.unhandled(e, repr, ty),
         }
@@ -3145,6 +3161,7 @@ fn kind_name(k: &ExprKind) -> &'static str {
         ExprKind::Index { .. } => "index",
         ExprKind::Field { .. } => "field",
         ExprKind::Assert { .. } => "assert",
+        ExprKind::Todo(_) => "todo",
         _ => "expr",
     }
 }
@@ -3429,6 +3446,7 @@ fn collect_free_expr(
         }
         ExprKind::Is { lhs, .. } | ExprKind::As { lhs, .. } => collect_free_expr(lhs, bound, used),
         ExprKind::Assert { args, .. } => args.iter().for_each(|a| collect_free_expr(a, bound, used)),
+        ExprKind::Todo(_) => {}
         _ => {}
     }
 }
