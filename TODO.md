@@ -781,6 +781,14 @@ worth knowing before deciding this list is noise.
 
 Not bugs in the compiler, but they have cost real time and have invalidated evidence.
 
+- **A green local build is not evidence about Windows, or about the linker.** Two CI breaks
+  in three days came from taking it as one: `-lm` sat before the archive on the link line
+  and glibc 2.34+ resolved `sqrt` anyway, and `cap` was unused inside a `#ifdef _WIN32`
+  while the local build carried no `-Werror`. Both were one `cc` invocation from being
+  caught. `verify/windows.sh` is that invocation: mingw-w64 builds the archives with
+  `-Werror` and the tinyunit suite, and Wine runs it — 90 tests, including the re-exec path
+  tinyunit uses for per-test isolation on Windows. It does NOT cover MSVC.
+
 - **The git stat cache is unreliable here.** `git diff` reports a file clean while it holds
   edits, and `git checkout` can be a silent no-op. `git update-index --refresh` fixes it.
   Do not use `git stash` to snapshot; copy files.
