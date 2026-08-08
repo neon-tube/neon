@@ -12,7 +12,7 @@ int64_t neon_list_len(neon_list* l) {
 
 void* neon_list_at(neon_list* l, int64_t i) {
     if (i < 0 || (size_t)i >= l->len) {
-        neon_trap("list index out of range");
+        neon_trap_oob(i, l->len);
     }
     return l->data + (size_t)i * l->w->size;
 }
@@ -117,7 +117,7 @@ neon_list* neon_list_push(neon_list* l, const void* elem) {
 // with no output difference until the other holder is read.
 void neon_list_set_scalar_inplace(neon_list* l, int64_t i, const void* elem, size_t sz) {
     if (i < 0 || (size_t)i >= l->len) {
-        neon_trap("list index out of range");
+        neon_trap_oob(i, l->len);
     }
     memcpy(l->data + (size_t)i * sz, elem, sz);
 }
@@ -138,7 +138,7 @@ void neon_list_set_scalar_inplace(neon_list* l, int64_t i, const void* elem, siz
 // this slot sees `rc == 1` and pays a pointer test.
 neon_list* neon_list_ensure_unique_at(neon_list* l, int64_t i) {
     if (i < 0 || (size_t)i >= l->len) {
-        neon_trap("list index out of range");
+        neon_trap_oob(i, l->len);
     }
     neon_list** slot = (neon_list**)(l->data + (size_t)i * sizeof(neon_list*));
     *slot = neon_list_ensure_unique(*slot);
@@ -147,7 +147,7 @@ neon_list* neon_list_ensure_unique_at(neon_list* l, int64_t i) {
 
 neon_list* neon_list_set_scalar(neon_list* l, int64_t i, const void* elem, size_t sz) {
     if (i < 0 || (size_t)i >= l->len) {
-        neon_trap("list index out of range");
+        neon_trap_oob(i, l->len);
     }
     l = neon_list_ensure_unique(l);
     memcpy(l->data + (size_t)i * sz, elem, sz);
@@ -156,7 +156,7 @@ neon_list* neon_list_set_scalar(neon_list* l, int64_t i, const void* elem, size_
 
 neon_list* neon_list_set(neon_list* l, int64_t i, const void* elem) {
     if (i < 0 || (size_t)i >= l->len) {
-        neon_trap("list index out of range");
+        neon_trap_oob(i, l->len);
     }
     size_t sz = l->w->size;
     l = neon_list_ensure_unique(l);

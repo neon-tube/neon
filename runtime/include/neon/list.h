@@ -62,7 +62,7 @@ neon_list* neon_list_ensure_unique_at(neon_list* l, int64_t i);
 // touches the witness for nothing but its width, whatever the element type is.
 static inline void* neon_list_at_scalar(neon_list* l, int64_t i, size_t sz) {
     if (i < 0 || (size_t)i >= l->len) {
-        neon_trap("list index out of range");
+        neon_trap_oob(i, l->len);
     }
     return l->data + (size_t)i * sz;
 }

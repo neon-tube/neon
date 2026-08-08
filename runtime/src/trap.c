@@ -26,6 +26,23 @@ NEON_NORETURN void neon_trap(const char* msg) {
 #endif
 }
 
+NEON_NORETURN void neon_trap_oob(int64_t index, size_t len) {
+    // The out-of-bounds trap, carrying the two numbers every report needs. Its own
+    // entry point rather than callers formatting a message: a trap must not allocate,
+    // and `fprintf` formats into stderr's own buffer. The stdlib's CATCHABLE
+    // IndexError spells the same facts ("index 9 out of range for length 2"); a trap
+    // saying less than the throw did was a debugging tax with no payer.
+    fflush(stdout);
+    fprintf(stderr, "neon: list index %lld out of range for length %zu\n",
+            (long long)index, len);
+    fflush(stderr);
+#ifdef NEON_DEBUG
+    abort();
+#else
+    neon_plat_exit_now(NEON_TRAP_CODE);
+#endif
+}
+
 NEON_NORETURN void neon_panic(neon_str msg) {
     // Flush stdout first, for the same reason a trap does: exiting this way skips stdio
     // teardown, and whatever the program printed before failing must still be seen.
