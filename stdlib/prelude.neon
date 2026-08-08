@@ -26,18 +26,18 @@
 // implement. `Ord` survives only as a marker; see below. "Comparison is structural" in
 // docs/decisions.md has the reasoning.
 
-// The return type for hand-written comparison functions, e.g. the callback `sort_by`
-// takes. Nothing in the language depends on it.
+/// The return type for hand-written comparison functions, e.g. the callback `sort_by`
+/// takes. Nothing in the language depends on it.
 type Ordering = :lt | :eq | :gt
 
-// `for i in range(a, b)` -- the half-open range [a, b) as a list, empty when `to <= from`.
-// Written in Neon rather than as a native: a C function cannot build a `List[i64]` without
-// the element's value-witness, which codegen generates per program.
-//
-// It really is a list, not a lazy sequence -- there is no laziness in the language to be
-// had -- so a counted loop allocates one `i64` per iteration up front. That is fine at the
-// sizes loops are usually written for and wrong for a range in the millions, where a
-// `while` costs nothing.
+/// `for i in range(a, b)` -- the half-open range [a, b) as a list, empty when `to <= from`.
+/// Written in Neon rather than as a native: a C function cannot build a `List[i64]` without
+/// the element's value-witness, which codegen generates per program.
+///
+/// It really is a list, not a lazy sequence -- there is no laziness in the language to be
+/// had -- so a counted loop allocates one `i64` per iteration up front. That is fine at the
+/// sizes loops are usually written for and wrong for a range in the millions, where a
+/// `while` costs nothing.
 fn range(from: i64, to: i64) -> List[i64] {
     let out: List[i64] = [];
     let i = from;
@@ -58,17 +58,17 @@ use std::collections::map::Map;
 
 // ---- markers ----
 
-// A bound with no methods: `where T: Ord` says T can be ordered, and the compiler
-// answers that from T's structure. There is nothing to implement and no way to
-// override it -- see "Comparison is structural" in docs/decisions.md.
-//
-// Order is infectious. A record is ordered when every field is, `List[T]` when T is; an
-// atom, `null`, a Map, a closure, a union and a self-referencing record are not. A union
-// is the surprising one: there is no honest rank between its arms, so
-// `(i64 | :none) < (i64 | :none)` is a diagnostic even though its *equality* is fine.
-//
-// For a type whose meaningful order is not its structural one, pass the order in:
-// `max_by`/`sort_by` take a comparator and need no bound at all.
+/// A bound with no methods: `where T: Ord` says T can be ordered, and the compiler
+/// answers that from T's structure. There is nothing to implement and no way to
+/// override it -- see "Comparison is structural" in docs/decisions.md.
+///
+/// Order is infectious. A record is ordered when every field is, `List[T]` when T is; an
+/// atom, `null`, a Map, a closure, a union and a self-referencing record are not. A union
+/// is the surprising one: there is no honest rank between its arms, so
+/// `(i64 | :none) < (i64 | :none)` is a diagnostic even though its *equality* is fine.
+///
+/// For a type whose meaningful order is not its structural one, pass the order in:
+/// `max_by`/`sort_by` take a comparator and need no bound at all.
 marker Ord
 
 // ---- the protocols ----
@@ -77,21 +77,21 @@ protocol Display for T {
     fn to_string(v: T) -> str
 }
 
-// An error explains what went wrong. That is a different question from `Display`'s
-// "how does this value render", so `Error` owns `message` rather than borrowing
-// `to_string`: a type can be both a value and an error without the two answers
-// fighting over one method. `message` is the only thing an error knows about itself --
-// a stacktrace belongs to the throw, not to the value, so the compiler supplies it.
+/// An error explains what went wrong. That is a different question from `Display`'s
+/// "how does this value render", so `Error` owns `message` rather than borrowing
+/// `to_string`: a type can be both a value and an error without the two answers
+/// fighting over one method. `message` is the only thing an error knows about itself --
+/// a stacktrace belongs to the throw, not to the value, so the compiler supplies it.
 protocol Error for T {
     fn message(v: T) -> str
 }
 
-// Thrown by two modules -- `std::string` and `std::collections::list` -- which is why it
-// is here rather than owned by one of them.
-//
-// `Display` renders the value; `Error::message` explains the failure. Here they read the
-// same field, but they answer different questions and a type is free to answer them
-// differently.
+/// Thrown by two modules -- `std::string` and `std::collections::list` -- which is why it
+/// is here rather than owned by one of them.
+///
+/// `Display` renders the value; `Error::message` explains the failure. Here they read the
+/// same field, but they answer different questions and a type is free to answer them
+/// differently.
 record IndexError { message: str }
 
 impl Display for IndexError { fn to_string(v: IndexError) -> str { v.message } }

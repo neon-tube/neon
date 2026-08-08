@@ -56,19 +56,19 @@ impl Mappable for List {
 // the input as well and every `push` copies the whole list, which turns that loop
 // quadratic -- the one performance cliff in this module worth knowing about.
 
-// How a list renders. An ordinary library impl rather than a walk baked into the compiler:
-// `Display` is a protocol because formatting genuinely varies (docs/decisions.md), where
-// equality and order do not and stay structural primitives.
-//
-// This is the shape `protocols/library_impl_for_a_container.neon` was written to prove the
-// dispatch machinery could express -- a generic head matched against the receiver, the bound
-// discharged against whatever the head bound `T` to, and one lowered body per element type.
-// It lives here now rather than in a test, which is what "the litmus graduates" means.
-//
-// Nested lists need no special case: `[[1, 2], [3]]` discharges `T: Display` against
-// `List[i64]`, which this same impl covers.
-//
-// Not an orphan: this module declares `List`.
+/// How a list renders. An ordinary library impl rather than a walk baked into the compiler:
+/// `Display` is a protocol because formatting genuinely varies (docs/decisions.md), where
+/// equality and order do not and stay structural primitives.
+///
+/// This is the shape `protocols/library_impl_for_a_container.neon` was written to prove the
+/// dispatch machinery could express -- a generic head matched against the receiver, the bound
+/// discharged against whatever the head bound `T` to, and one lowered body per element type.
+/// It lives here now rather than in a test, which is what "the litmus graduates" means.
+///
+/// Nested lists need no special case: `[[1, 2], [3]]` discharges `T: Display` against
+/// `List[i64]`, which this same impl covers.
+///
+/// Not an orphan: this module declares `List`.
 impl[T] Display for List[T] where T: Display {
     fn to_string(v: List[T]) -> str {
         let parts: List[str] = [];
@@ -81,48 +81,48 @@ impl[T] Display for List[T] where T: Display {
 }
 
 @pure @native("neon_list_new") fn new[T]() -> List[T]
-// Preallocate capacity for `n` elements to avoid regrowth while building. The list comes
-// back EMPTY -- this reserves room, it does not produce elements. For `n` copies of a
-// value, which is what a fixed-size buffer wants, use `repeat`.
+/// Preallocate capacity for `n` elements to avoid regrowth while building. The list comes
+/// back EMPTY -- this reserves room, it does not produce elements. For `n` copies of a
+/// value, which is what a fixed-size buffer wants, use `repeat`.
 @pure @native("neon_list_new_with_capacity") fn new_with_capacity[T](n: i64) -> List[T]
 @pure @native("neon_list_len") fn len[T](xs: List[T]) -> i64
 
-// Every element of `xs` replaced by `v`, keeping its length: resetting a buffer between
-// passes without giving up the allocation it already has.
-//
-// Takes the list rather than a count, like everything else here: a constructor would be
-// the only function in this module that is not `xs`-first, and "operations take a list and
-// return a new one" is the shape the whole module is in. Building a sized buffer from
-// nothing is `repeat`, which is a different job with a name that says which.
-//
-// The empty list fills to the empty list -- there is nothing to replace, which is the
-// answer rather than an edge case.
-//
-// Written in Neon rather than as a native. `push` already retains `v` once per copy, so a
-// native would reimplement the element witness handling for no asymptotic gain: the
-// reservation means no regrowth and pushing into a uniquely owned list is in place, so
-// this is one allocation and `len` writes.
+/// Every element of `xs` replaced by `v`, keeping its length: resetting a buffer between
+/// passes without giving up the allocation it already has.
+///
+/// Takes the list rather than a count, like everything else here: a constructor would be
+/// the only function in this module that is not `xs`-first, and "operations take a list and
+/// return a new one" is the shape the whole module is in. Building a sized buffer from
+/// nothing is `repeat`, which is a different job with a name that says which.
+///
+/// The empty list fills to the empty list -- there is nothing to replace, which is the
+/// answer rather than an edge case.
+///
+/// Written in Neon rather than as a native. `push` already retains `v` once per copy, so a
+/// native would reimplement the element witness handling for no asymptotic gain: the
+/// reservation means no regrowth and pushing into a uniquely owned list is in place, so
+/// this is one allocation and `len` writes.
 fn fill[T](xs: List[T], v: T) -> List[T] {
     repeat(v, len(xs))
 }
 
-// `n` copies of `v`: the fixed-size buffer a tape, a grid row, a histogram or a sieve
-// starts from. `new_with_capacity` does not do this -- it reserves room and hands back an
-// empty list -- so without this the only way to get one is a `push` loop at every call
-// site, which is a lot of ceremony for "ten zeroes".
-//
-// Argument order and name both follow `string::repeat(s, n)`: the thing first, the count
-// second. It is the one constructor here that is not `xs`-first, which is why it is named
-// for what it produces rather than for a list it does not have.
-//
-// `n <= 0` is the empty list rather than an error, matching `string::repeat` -- the
-// natural reading of "zero copies", and it keeps this out of the `throws` machinery for a
-// case every caller would have to handle and none would want to.
-//
-// Written in Neon rather than as a native. `push` already retains `v` once per copy, so a
-// native would reimplement the element witness handling for no asymptotic gain: the
-// reservation means no regrowth and pushing into a uniquely owned list is in place, so
-// this is one allocation and `n` writes.
+/// `n` copies of `v`: the fixed-size buffer a tape, a grid row, a histogram or a sieve
+/// starts from. `new_with_capacity` does not do this -- it reserves room and hands back an
+/// empty list -- so without this the only way to get one is a `push` loop at every call
+/// site, which is a lot of ceremony for "ten zeroes".
+///
+/// Argument order and name both follow `string::repeat(s, n)`: the thing first, the count
+/// second. It is the one constructor here that is not `xs`-first, which is why it is named
+/// for what it produces rather than for a list it does not have.
+///
+/// `n <= 0` is the empty list rather than an error, matching `string::repeat` -- the
+/// natural reading of "zero copies", and it keeps this out of the `throws` machinery for a
+/// case every caller would have to handle and none would want to.
+///
+/// Written in Neon rather than as a native. `push` already retains `v` once per copy, so a
+/// native would reimplement the element witness handling for no asymptotic gain: the
+/// reservation means no regrowth and pushing into a uniquely owned list is in place, so
+/// this is one allocation and `n` writes.
 fn repeat[T](v: T, n: i64) -> List[T] {
     let out: List[T] = new_with_capacity(n);
     let i = 0;
@@ -133,18 +133,18 @@ fn repeat[T](v: T, n: i64) -> List[T] {
     out
 }
 
-// The unchecked primitives. A native cannot build the tagged result a throwing function
-// returns, nor construct an `IndexError` -- both are program-specific layouts codegen owns.
-// So the native does the unchecked operation and the check lives here, in the language,
-// where the error record is declared and its message can name the offending index.
+/// The unchecked primitives. A native cannot build the tagged result a throwing function
+/// returns, nor construct an `IndexError` -- both are program-specific layouts codegen owns.
+/// So the native does the unchecked operation and the check lives here, in the language,
+/// where the error record is declared and its message can name the offending index.
 internal mod raw {
     @pure @native("neon_list_set") fn set_unchecked[T](xs: List[T], i: i64, v: T) -> List[T]
 }
 
-// `@inline` on both: each is a bounds check around a primitive, and the call plus the
-// tagged-result return cost more than the body. Measured on the brainfuck benchmark, where
-// `set` is the hot loop's only write: 1.09s -> 0.84s. gcc will not do this on its own --
-// branch hints, outlining the cold error path and `static` linkage each moved it under 4%.
+/// `@inline` on both: each is a bounds check around a primitive, and the call plus the
+/// tagged-result return cost more than the body. Measured on the brainfuck benchmark, where
+/// `set` is the hot loop's only write: 1.09s -> 0.84s. gcc will not do this on its own --
+/// branch hints, outlining the cold error path and `static` linkage each moved it under 4%.
 @inline
 fn get[T](xs: List[T], i: i64) throws IndexError -> T {
     if i < 0 or i >= len(xs) {
@@ -199,9 +199,9 @@ fn sort_by[T](xs: List[T], cmp: (T, T) -> Ordering) -> List[T] {
     }
 }
 
-// Merge two lists that are each already sorted by `cmp`. `sort_by`'s combining step,
-// exposed because it is useful on its own. Passing unsorted input is not an error and not
-// checked; it just gives you an unsorted result.
+/// Merge two lists that are each already sorted by `cmp`. `sort_by`'s combining step,
+/// exposed because it is useful on its own. Passing unsorted input is not an error and not
+/// checked; it just gives you an unsorted result.
 fn merge[T](a: List[T], b: List[T], cmp: (T, T) -> Ordering) -> List[T] {
     let out: List[T] = [];
     let i = 0;
@@ -237,9 +237,9 @@ fn is_empty[T](xs: List[T]) -> bool {
     len(xs) == 0
 }
 
-// `null` rather than a throw: asking for the first element of a possibly-empty list is
-// ordinary, and the caller usually has something to do in the empty case. `get` throws
-// because an out-of-range *index* is a mistake; an empty list is not.
+/// `null` rather than a throw: asking for the first element of a possibly-empty list is
+/// ordinary, and the caller usually has something to do in the empty case. `get` throws
+/// because an out-of-range *index* is a mistake; an empty list is not.
 fn first[T](xs: List[T]) -> T | null {
     if is_empty(xs) { null } else { xs[0] }
 }
@@ -258,8 +258,8 @@ fn contains[T](xs: List[T], v: T) -> bool {
     found
 }
 
-// The first index holding `v`, or `null`. Mirrors `string::find`, which answers the same
-// question about bytes and returns the same shape.
+/// The first index holding `v`, or `null`. Mirrors `string::find`, which answers the same
+/// question about bytes and returns the same shape.
 fn index_of[T](xs: List[T], v: T) -> i64 | null {
     let at: i64 | null = null;
     let i = 0;
@@ -284,7 +284,7 @@ fn reverse[T](xs: List[T]) -> List[T] {
     out
 }
 
-// Half-open `[from, to)`, matching `string::slice` and `range`.
+/// Half-open `[from, to)`, matching `string::slice` and `range`.
 fn slice[T](xs: List[T], from: i64, to: i64) throws IndexError -> List[T] {
     if from < 0 or from > to or to > len(xs) {
         throw IndexError { message: "slice #{from}..#{to} out of range for length #{len(xs)}" };
@@ -298,8 +298,8 @@ fn slice[T](xs: List[T], from: i64, to: i64) throws IndexError -> List[T] {
     out
 }
 
-// Monomorphic because there is no numeric bound to write and no overloading: `sum` over
-// `i64` is the case that comes up.
+/// Monomorphic because there is no numeric bound to write and no overloading: `sum` over
+/// `i64` is the case that comes up.
 fn sum(xs: List[i64]) -> i64 {
     let total = 0;
     for x in xs {

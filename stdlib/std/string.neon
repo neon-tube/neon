@@ -3,9 +3,9 @@
 
 @pure @native("neon_str_byte_len") fn byte_len(s: str) -> i64
 @pure @native("neon_str_concat") fn concat(a: str, b: str) -> str
-// The unchecked primitives. A native can return neither a tagged result nor an
-// `i64 | null` -- both are layouts codegen generates per program -- so the check, the error
-// and the union all live here, where the types are declared.
+/// The unchecked primitives. A native can return neither a tagged result nor an
+/// `i64 | null` -- both are layouts codegen generates per program -- so the check, the error
+/// and the union all live here, where the types are declared.
 internal mod raw {
     @pure @native("neon_str_slice_unchecked") fn slice_unchecked(s: str, from: i64, to: i64) -> str
     @pure @native("neon_str_char_at_unchecked") fn char_at_unchecked(s: str, i: i64) -> str
@@ -22,9 +22,9 @@ fn slice(s: str, from: i64, to: i64) throws IndexError -> str {
     raw::slice_unchecked(s, from, to)
 }
 
-// The single *byte* at `i`, as a one-byte `str`. Byte-oriented like the rest of this
-// module, so on a multi-byte character it hands back a fragment that is not valid UTF-8 on
-// its own.
+/// The single *byte* at `i`, as a one-byte `str`. Byte-oriented like the rest of this
+/// module, so on a multi-byte character it hands back a fragment that is not valid UTF-8 on
+/// its own.
 fn char_at(s: str, i: i64) throws IndexError -> str {
     if i < 0 or i >= byte_len(s) {
         throw IndexError { message: "index #{i} out of range" };
@@ -32,11 +32,11 @@ fn char_at(s: str, i: i64) throws IndexError -> str {
     raw::char_at_unchecked(s, i)
 }
 
-// The byte at `i` as a number, 0..=255. `char_at` hands back the same byte as a one-byte
-// `str`, which is what you want to print or concatenate; this is what you want to
-// *classify*, because comparing a byte against a range is one test where comparing a
-// one-byte string against a set of literals is one test per member. Unsigned, so a byte
-// from the middle of a UTF-8 sequence sorts above ASCII rather than below it.
+/// The byte at `i` as a number, 0..=255. `char_at` hands back the same byte as a one-byte
+/// `str`, which is what you want to print or concatenate; this is what you want to
+/// *classify*, because comparing a byte against a range is one test where comparing a
+/// one-byte string against a set of literals is one test per member. Unsigned, so a byte
+/// from the middle of a UTF-8 sequence sorts above ASCII rather than below it.
 fn byte_at(s: str, i: i64) throws IndexError -> i64 {
     if i < 0 or i >= byte_len(s) {
         throw IndexError { message: "index #{i} out of range" };
@@ -44,16 +44,16 @@ fn byte_at(s: str, i: i64) throws IndexError -> i64 {
     raw::byte_at_unchecked(s, i)
 }
 
-// Thrown by `to_int`, which is the only thing here that parses.
+/// Thrown by `to_int`, which is the only thing here that parses.
 record ParseError { message: str }
 impl Display for ParseError { fn to_string(v: ParseError) -> str { v.message } }
 impl Error for ParseError { fn message(v: ParseError) -> str { v.message } }
 
-// An optional leading `+` or `-` and then digits, with nothing else allowed: no
-// whitespace, no underscores, no radix prefix, so `to_int(" 1")` throws rather than
-// trimming for you. A value too large for an `i64` wraps rather than throwing -- the
-// digits are accumulated modulo 2^64 -- so range-check separately if the input is
-// untrusted.
+/// An optional leading `+` or `-` and then digits, with nothing else allowed: no
+/// whitespace, no underscores, no radix prefix, so `to_int(" 1")` throws rather than
+/// trimming for you. A value too large for an `i64` wraps rather than throwing -- the
+/// digits are accumulated modulo 2^64 -- so range-check separately if the input is
+/// untrusted.
 fn to_int(s: str) throws ParseError -> i64 {
     if !raw::is_int(s) {
         throw ParseError { message: "not an integer" };
@@ -61,8 +61,8 @@ fn to_int(s: str) throws ParseError -> i64 {
     raw::parse_int(s)
 }
 @pure @native("neon_str_join") fn join(parts: List[str], sep: str) -> str
-// The byte offset of the first `needle`, or `null`. `null` rather than the C convention of
-// `-1`: a sentinel index is a value the type system cannot stop you indexing with.
+/// The byte offset of the first `needle`, or `null`. `null` rather than the C convention of
+/// `-1`: a sentinel index is a value the type system cannot stop you indexing with.
 fn find(s: str, needle: str) -> i64 | null {
     let at = raw::index_of(s, needle);
     if at < 0 { null } else { at }
@@ -81,14 +81,14 @@ fn find(s: str, needle: str) -> i64 | null {
 // function cannot construct a list without the element's value-witness, which codegen
 // generates per program. Same reason `range` lives in the prelude.
 
-// The parts of `s` between each occurrence of `sep`, left to right. Adjacent separators
-// yield empty parts, and a separator at either end yields an empty part there, so
-// `split(",a,", ",")` is `["", "a", ""]` -- the inverse of `join`, which is the property
-// worth preserving.
-//
-// An empty separator returns `[s]`. Splitting on nothing has no meaningful answer, and the
-// alternatives are worse: a loop that never advances, or a silent per-byte split that
-// would cut a multi-byte character in half.
+/// The parts of `s` between each occurrence of `sep`, left to right. Adjacent separators
+/// yield empty parts, and a separator at either end yields an empty part there, so
+/// `split(",a,", ",")` is `["", "a", ""]` -- the inverse of `join`, which is the property
+/// worth preserving.
+///
+/// An empty separator returns `[s]`. Splitting on nothing has no meaningful answer, and the
+/// alternatives are worse: a loop that never advances, or a silent per-byte split that
+/// would cut a multi-byte character in half.
 fn split(s: str, sep: str) -> List[str] {
     if is_empty(sep) {
         [s]
@@ -105,10 +105,10 @@ fn split(s: str, sep: str) -> List[str] {
     }
 }
 
-// Split on newlines, dropping a trailing `\r` so a CRLF file does not leave one on every
-// line. A trailing newline does not produce a final empty line: `"a\n"` is `["a"]`, which
-// is what reading a text file line by line should give. The empty string is no lines at
-// all, `[]`, rather than one empty line.
+/// Split on newlines, dropping a trailing `\r` so a CRLF file does not leave one on every
+/// line. A trailing newline does not produce a final empty line: `"a\n"` is `["a"]`, which
+/// is what reading a text file line by line should give. The empty string is no lines at
+/// all, `[]`, rather than one empty line.
 fn lines(s: str) -> List[str] {
     let out: List[str] = [];
     if is_empty(s) {
@@ -125,8 +125,8 @@ fn lines(s: str) -> List[str] {
 }
 
 internal mod raw_ws {
-    // Space, tab, newline, carriage return. Byte-oriented, like everything else here: a
-    // Unicode space is not trimmed, and the name would have to say so if it were.
+    /// Space, tab, newline, carriage return. Byte-oriented, like everything else here: a
+    /// Unicode space is not trimmed, and the name would have to say so if it were.
     fn is_space(c: str) -> bool {
         c == " " or c == "\t" or c == "\n" or c == "\r"
     }
@@ -153,8 +153,8 @@ fn trim(s: str) -> str {
     trim_start(trim_end(s))
 }
 
-// Drop one trailing occurrence of `suffix`, if present. Not general trimming -- `lines`
-// wants exactly this for `\r` and for the final newline.
+/// Drop one trailing occurrence of `suffix`, if present. Not general trimming -- `lines`
+/// wants exactly this for `\r` and for the final newline.
 fn trim_end_of(s: str, suffix: str) -> str {
     if !is_empty(suffix) and ends_with(s, suffix) {
         raw::slice_unchecked(s, 0, byte_len(s) - byte_len(suffix))
@@ -163,8 +163,8 @@ fn trim_end_of(s: str, suffix: str) -> str {
     }
 }
 
-// Every occurrence of `from` replaced by `to`, left to right and non-overlapping. An empty
-// `from` matches nothing, for the same reason it does not split.
+/// Every occurrence of `from` replaced by `to`, left to right and non-overlapping. An empty
+/// `from` matches nothing, for the same reason it does not split.
 fn replace(s: str, from: str, to: str) -> str {
     if is_empty(from) {
         s

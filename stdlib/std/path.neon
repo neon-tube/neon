@@ -81,8 +81,8 @@ mod posix {
         "/"
     }
 
-    // The absolute prefix, or `null` when the path is relative. A leading `~` is a shell
-    // convention, not a path one.
+    /// The absolute prefix, or `null` when the path is relative. A leading `~` is a shell
+    /// convention, not a path one.
     fn root_of(p: str) -> str | null {
         if string::starts_with(p, "/") { "/" } else { null }
     }
@@ -101,10 +101,10 @@ mod win {
         "\\"
     }
 
-    // `C:\x` is absolute and so is `\\server\share`. Deliberately NOT absolute: a bare
-    // `\x`, which is relative to the current drive, and `C:x`, which is relative to that
-    // drive's own working directory. Both name different files depending on state this
-    // module cannot see, and calling them absolute is how a join silently escapes its base.
+    /// `C:\x` is absolute and so is `\\server\share`. Deliberately NOT absolute: a bare
+    /// `\x`, which is relative to the current drive, and `C:x`, which is relative to that
+    /// drive's own working directory. Both name different files depending on state this
+    /// module cannot see, and calling them absolute is how a join silently escapes its base.
     fn root_of(p: str) -> str | null {
         if string::starts_with(p, "\\\\") or string::starts_with(p, "//") {
             try! string::slice(p, 0, 2)
@@ -116,7 +116,7 @@ mod win {
         }
     }
 
-    // Both separators, because every Windows API accepts `/` and real paths mix them.
+    /// Both separators, because every Windows API accepts `/` and real paths mix them.
     fn split_parts(p: str) -> List[str] {
         let out: List[str] = [];
         for chunk in string::split(p, "\\") {
@@ -127,7 +127,7 @@ mod win {
         out
     }
 
-    // A root component is a drive (`C:\`) or the UNC prefix, never a plain name.
+    /// A root component is a drive (`C:\`) or the UNC prefix, never a plain name.
     fn is_root(part: str) -> bool {
         part == "\\\\" or part == "//" or string::byte_len(part) == 3 and is_drive_letter(try! string::slice(part, 0, 1))
     }
@@ -140,9 +140,9 @@ mod win {
 
 // ---- the shape of a path ----
 
-// The rest of the platform surface, selected the same way. Four one-line delegators rather
-// than a `@cfg` around the whole module: the logic below is shared, and only these four
-// facts differ.
+/// The rest of the platform surface, selected the same way. Four one-line delegators rather
+/// than a `@cfg` around the whole module: the logic below is shared, and only these four
+/// facts differ.
 @cfg(windows)
 internal mod plat {
     fn sep() -> str {
@@ -177,50 +177,50 @@ internal mod plat {
 
 // ---- Path ----
 
-// A path is its own type, opaque, wrapping the text.
-//
-// This REVERSES the argument that stood here before, and the reversal has a reason rather
-// than a preference. That argument had three parts, and the load-bearing one was that
-// `std::fs` takes `str`, so a `Path` would mean an `as str` at every call site -- friction
-// bought with nothing. `std::fs` takes `Path` now, so that cost is gone.
-//
-// The first part -- "every `std::string` operation on a path is meaningful" -- does not
-// survive contact either. `to_upper` breaks a case-sensitive path, `replace` corrupts
-// separators, and `concat` where `join` was meant is the classic path bug. This module's own
-// header already listed "a prefix check done on bytes instead of components" as a defect
-// worth designing against; that IS a string operation being wrong for a path.
-//
-// The second part still stands and is worth keeping in view: the real bugs are wrong VALUES
-// -- an unnormalised `..`, a joined absolute silently replacing its base -- and a wrapper
-// catches none of them by itself. What it does buy is a single door. `of` is the only way in,
-// so normalisation has somewhere to live, and `join` is the only way to combine two paths.
-//
-// Opaque rather than `newtype`: a newtype would let any `str` be cast to a `Path` and back,
-// which is the boundary being drawn. `of` is deliberately still total -- a path comes from
-// user input and the environment, and refusing to build one is not this module's call.
+/// A path is its own type, opaque, wrapping the text.
+///
+/// This REVERSES the argument that stood here before, and the reversal has a reason rather
+/// than a preference. That argument had three parts, and the load-bearing one was that
+/// `std::fs` takes `str`, so a `Path` would mean an `as str` at every call site -- friction
+/// bought with nothing. `std::fs` takes `Path` now, so that cost is gone.
+///
+/// The first part -- "every `std::string` operation on a path is meaningful" -- does not
+/// survive contact either. `to_upper` breaks a case-sensitive path, `replace` corrupts
+/// separators, and `concat` where `join` was meant is the classic path bug. This module's own
+/// header already listed "a prefix check done on bytes instead of components" as a defect
+/// worth designing against; that IS a string operation being wrong for a path.
+///
+/// The second part still stands and is worth keeping in view: the real bugs are wrong VALUES
+/// -- an unnormalised `..`, a joined absolute silently replacing its base -- and a wrapper
+/// catches none of them by itself. What it does buy is a single door. `of` is the only way in,
+/// so normalisation has somewhere to live, and `join` is the only way to combine two paths.
+///
+/// Opaque rather than `newtype`: a newtype would let any `str` be cast to a `Path` and back,
+/// which is the boundary being drawn. `of` is deliberately still total -- a path comes from
+/// user input and the environment, and refusing to build one is not this module's call.
 opaque record Path { s: str }
 
-// The only constructor. Total: any text names something on some platform, and validating
-// here would reject paths the OS accepts.
+/// The only constructor. Total: any text names something on some platform, and validating
+/// here would reject paths the OS accepts.
 fn of(s: str) -> Path {
     Path { s: s }
 }
 
-// The text back. The escape hatch is deliberate and named: code that has to hand a path to
-// something outside this API -- a C interface, a log line, a protocol -- should be visible.
+/// The text back. The escape hatch is deliberate and named: code that has to hand a path to
+/// something outside this API -- a C interface, a log line, a protocol -- should be visible.
 fn to_str(p: Path) -> str {
     p.s
 }
 
-// So a path interpolates like anything else: `"reading #{p}"`.
+/// So a path interpolates like anything else: `"reading #{p}"`.
 impl Display for Path {
     fn to_string(v: Path) -> str {
         v.s
     }
 }
 
-// Absolute iff it starts at a root. Which prefixes count is the platform's business; see the
-// rule sets above.
+/// Absolute iff it starts at a root. Which prefixes count is the platform's business; see the
+/// rule sets above.
 fn is_absolute(p: Path) -> bool {
     !plat::root_of(p.s) is null
 }
@@ -229,22 +229,22 @@ fn is_relative(p: Path) -> bool {
     !is_absolute(p)
 }
 
-// The meaningful parts of `p`, left to right, and the primitive the rest of this module is
-// built on. An absolute path gets `"/"` as its first component; nothing else can produce a
-// `"/"` component, so the root is distinguishable from a name.
-//
-// Three things are dropped, because none of them changes which file a path names:
-//
-//   * empty components, so repeated separators collapse -- `a//b` is `["a", "b"]`
-//   * a trailing separator -- `a/b/` is `["a", "b"]`, same as `a/b`
-//   * `.` components -- `./a/./b` is `["a", "b"]`, and `.` alone is `[]`
-//
-// `..` is *kept*. It is not resolved here: `/a/../b` is `["/", "a", "..", "b"]`. Resolving
-// it is `normalize`'s job, and keeping the two separate is what lets `starts_with` compare
-// paths exactly as written.
-//
-// The empty string has no components. `components("")` and `components(".")` are both `[]`,
-// which is the honest answer: neither names anything.
+/// The meaningful parts of `p`, left to right, and the primitive the rest of this module is
+/// built on. An absolute path gets `"/"` as its first component; nothing else can produce a
+/// `"/"` component, so the root is distinguishable from a name.
+///
+/// Three things are dropped, because none of them changes which file a path names:
+///
+///   * empty components, so repeated separators collapse -- `a//b` is `["a", "b"]`
+///   * a trailing separator -- `a/b/` is `["a", "b"]`, same as `a/b`
+///   * `.` components -- `./a/./b` is `["a", "b"]`, and `.` alone is `[]`
+///
+/// `..` is *kept*. It is not resolved here: `/a/../b` is `["/", "a", "..", "b"]`. Resolving
+/// it is `normalize`'s job, and keeping the two separate is what lets `starts_with` compare
+/// paths exactly as written.
+///
+/// The empty string has no components. `components("")` and `components(".")` are both `[]`,
+/// which is the honest answer: neither names anything.
 fn components(p: Path) -> List[str] {
     let out: List[str] = [];
     let p = p.s;
@@ -268,8 +268,8 @@ fn components(p: Path) -> List[str] {
 }
 
 internal mod raw {
-    // Components back to a string. The inverse of `components` up to the things
-    // `components` deliberately drops, so it round-trips a normalised path exactly.
+    /// Components back to a string. The inverse of `components` up to the things
+    /// `components` deliberately drops, so it round-trips a normalised path exactly.
     fn render(parts: List[str]) -> str {
         if list::is_empty(parts) {
             ""
@@ -301,8 +301,8 @@ internal mod raw {
         out
     }
 
-    // Strip every trailing separator. `"/"` becomes `""`; the caller decides what that
-    // means, because for `join` it means the root and for nothing else does.
+    /// Strip every trailing separator. `"/"` becomes `""`; the caller decides what that
+    /// means, because for `join` it means the root and for nothing else does.
     fn trim_seps(s: str) -> str {
         let out = s;
         while string::ends_with(out, plat::sep()) or string::ends_with(out, "/") {
@@ -312,15 +312,15 @@ internal mod raw {
         out
     }
 
-    // The byte offset of the dot that starts an extension, or `null`.
-    //
-    // The scan starts at 1 and stops before the last byte, which encodes both rules worth
-    // having: a *leading* dot is part of the name, so `.bashrc` has no extension and is not
-    // a nameless file with a `bashrc` one; and a *trailing* dot starts nothing, so `a.` has
-    // no extension rather than an empty one. Ruling out the empty extension is why nothing
-    // else in this module has to think about it.
-    //
-    // The last such dot wins: `a.tar.gz` is stem `a.tar`, extension `gz`.
+    /// The byte offset of the dot that starts an extension, or `null`.
+    ///
+    /// The scan starts at 1 and stops before the last byte, which encodes both rules worth
+    /// having: a *leading* dot is part of the name, so `.bashrc` has no extension and is not
+    /// a nameless file with a `bashrc` one; and a *trailing* dot starts nothing, so `a.` has
+    /// no extension rather than an empty one. Ruling out the empty extension is why nothing
+    /// else in this module has to think about it.
+    ///
+    /// The last such dot wins: `a.tar.gz` is stem `a.tar`, extension `gz`.
     fn dot_at(name: str) -> i64 | null {
         let n = string::byte_len(name);
         let found: i64 | null = null;
@@ -337,16 +337,16 @@ internal mod raw {
 
 // ---- building ----
 
-// `b` resolved against `a`.
-//
-// An absolute `b` *replaces* `a` entirely: `join("/etc", "/tmp/x")` is `/tmp/x`. This is
-// the one surprising rule here and it is deliberate -- it is what makes `join(base, arg)`
-// behave like passing `arg` to a command, where an absolute argument ignores the working
-// directory. Check `is_absolute` first if a caller must not escape `a`.
-//
-// Separators are neither doubled nor required: `join("a/", "b")` and `join("a", "b")` are
-// both `a/b`. An empty operand contributes nothing, so `join("a", "")` is `a` and not
-// `a/` -- joining nothing on should not change what the path names.
+/// `b` resolved against `a`.
+///
+/// An absolute `b` *replaces* `a` entirely: `join("/etc", "/tmp/x")` is `/tmp/x`. This is
+/// the one surprising rule here and it is deliberate -- it is what makes `join(base, arg)`
+/// behave like passing `arg` to a command, where an absolute argument ignores the working
+/// directory. Check `is_absolute` first if a caller must not escape `a`.
+///
+/// Separators are neither doubled nor required: `join("a/", "b")` and `join("a", "b")` are
+/// both `a/b`. An empty operand contributes nothing, so `join("a", "")` is `a` and not
+/// `a/` -- joining nothing on should not change what the path names.
 fn join(a: Path, b: Path) -> Path {
     if is_absolute(b) {
         b
@@ -365,18 +365,18 @@ fn join(a: Path, b: Path) -> Path {
     }
 }
 
-// Everything but the last component, or `null` when there is nothing left to name.
-//
-// `null` rather than a throw, and rather than `""`: asking for the parent of a path is
-// ordinary, and running out of parents is an answer, not a failure. `parent("/")` is `null`
-// -- the root is its own parent on POSIX, and returning `"/"` forever would turn a
-// walk-upwards loop into a spin. `parent("a")` is also `null`: the empty string is not a
-// path any syscall accepts, and inventing `"."` would name a directory the caller never
-// wrote. Write `parent(p) orelse "."` if that is the meaning you want.
-//
-// Trailing separators and `.` do not count as components, so `parent("a/b/")` is `a` and
-// `parent("a/./b")` is `a`. `..` does count, since it is not resolved: `parent("a/..")` is
-// `a`, not `null`.
+/// Everything but the last component, or `null` when there is nothing left to name.
+///
+/// `null` rather than a throw, and rather than `""`: asking for the parent of a path is
+/// ordinary, and running out of parents is an answer, not a failure. `parent("/")` is `null`
+/// -- the root is its own parent on POSIX, and returning `"/"` forever would turn a
+/// walk-upwards loop into a spin. `parent("a")` is also `null`: the empty string is not a
+/// path any syscall accepts, and inventing `"."` would name a directory the caller never
+/// wrote. Write `parent(p) orelse "."` if that is the meaning you want.
+///
+/// Trailing separators and `.` do not count as components, so `parent("a/b/")` is `a` and
+/// `parent("a/./b")` is `a`. `..` does count, since it is not resolved: `parent("a/..")` is
+/// `a`, not `null`.
 fn parent(p: Path) -> Path | null {
     let parts = components(p);
     if list::len(parts) <= 1 {
@@ -386,12 +386,12 @@ fn parent(p: Path) -> Path | null {
     }
 }
 
-// The last component, when it is a name.
-//
-// `null` when the path has no components (`""`, `"/"`, `"."`) and also when the last
-// component is `".."` -- `a/..` names a directory, but not by name, and answering `".."`
-// would hand back something no caller can use as a filename. Trailing separators are
-// ignored, so `file_name("a/b/")` is `b`.
+/// The last component, when it is a name.
+///
+/// `null` when the path has no components (`""`, `"/"`, `"."`) and also when the last
+/// component is `".."` -- `a/..` names a directory, but not by name, and answering `".."`
+/// would hand back something no caller can use as a filename. Trailing separators are
+/// ignored, so `file_name("a/b/")` is `b`.
 fn file_name(p: Path) -> str | null {
     let last = list::last(components(p));
     if last is null {
@@ -406,9 +406,9 @@ fn file_name(p: Path) -> str | null {
     }
 }
 
-// The file name without its extension, or `null` wherever `file_name` is `null`. A name
-// with no extension is its own stem: `stem("README")` is `README`, and `stem(".bashrc")` is
-// `.bashrc`.
+/// The file name without its extension, or `null` wherever `file_name` is `null`. A name
+/// with no extension is its own stem: `stem("README")` is `README`, and `stem(".bashrc")` is
+/// `.bashrc`.
 fn stem(p: Path) -> str | null {
     let name = file_name(p);
     if name is null {
@@ -424,8 +424,8 @@ fn stem(p: Path) -> str | null {
     }
 }
 
-// The extension without its dot, or `null` when there is none. Never `""`: see
-// `raw::dot_at` for why `a.` has no extension.
+/// The extension without its dot, or `null` when there is none. Never `""`: see
+/// `raw::dot_at` for why `a.` has no extension.
 fn extension(p: Path) -> str | null {
     let name = file_name(p);
     if name is null {
@@ -441,14 +441,14 @@ fn extension(p: Path) -> str | null {
     }
 }
 
-// `p` with its extension replaced by `ext`, which is written *without* a leading dot:
-// `with_extension("a/b.txt", "md")` is `a/b.md`. An empty `ext` removes the extension
-// instead of leaving a trailing dot, so `with_extension("a/b.txt", "")` is `a/b`.
-//
-// `null` when there is no file name to attach an extension to -- `"/"`, `""`, `"a/.."`.
-// The alternative was returning `p` unchanged, which silently reports success for an
-// operation that did not happen; a caller that genuinely does not care can write
-// `with_extension(p, e) orelse p` and say so.
+/// `p` with its extension replaced by `ext`, which is written *without* a leading dot:
+/// `with_extension("a/b.txt", "md")` is `a/b.md`. An empty `ext` removes the extension
+/// instead of leaving a trailing dot, so `with_extension("a/b.txt", "")` is `a/b`.
+///
+/// `null` when there is no file name to attach an extension to -- `"/"`, `""`, `"a/.."`.
+/// The alternative was returning `p` unchanged, which silently reports success for an
+/// operation that did not happen; a caller that genuinely does not care can write
+/// `with_extension(p, e) orelse p` and say so.
 fn with_extension(p: Path, ext: str) -> Path | null {
     let base = stem(p);
     if base is null {
@@ -462,23 +462,23 @@ fn with_extension(p: Path, ext: str) -> Path | null {
 
 // ---- normalising ----
 
-// `p` with `.`, empty and repeated separators removed and `..` resolved against the
-// components to its left. Purely lexical: nothing here touches the filesystem, so a `..`
-// that crosses a symlink resolves to the wrong place. See the header.
-//
-// The two cases worth stating:
-//
-//   * `..` above the root is the root. `/..` and `/a/../..` are both `/`. This is not a
-//     fudge -- POSIX defines `..` in `/` as `/` -- so the result names the same directory
-//     the kernel would reach.
-//   * `..` above a *relative* path is kept. `../a` stays `../a` and `a/../..` becomes `..`,
-//     because without a working directory -- which needs a syscall -- there is nothing to
-//     resolve them against, and dropping them would silently change which file is named.
-//
-// A relative path that normalises to nothing becomes `"."`, not `""`: `normalize("a/..")`,
-// `normalize(".")` and `normalize("")` are all `"."`. This is the one place the module
-// invents a component, and it does so because `normalize`'s whole job is to hand back a
-// string that can be used as a path -- and `""` cannot be.
+/// `p` with `.`, empty and repeated separators removed and `..` resolved against the
+/// components to its left. Purely lexical: nothing here touches the filesystem, so a `..`
+/// that crosses a symlink resolves to the wrong place. See the header.
+///
+/// The two cases worth stating:
+///
+///   * `..` above the root is the root. `/..` and `/a/../..` are both `/`. This is not a
+///     fudge -- POSIX defines `..` in `/` as `/` -- so the result names the same directory
+///     the kernel would reach.
+///   * `..` above a *relative* path is kept. `../a` stays `../a` and `a/../..` becomes `..`,
+///     because without a working directory -- which needs a syscall -- there is nothing to
+///     resolve them against, and dropping them would silently change which file is named.
+///
+/// A relative path that normalises to nothing becomes `"."`, not `""`: `normalize("a/..")`,
+/// `normalize(".")` and `normalize("")` are all `"."`. This is the one place the module
+/// invents a component, and it does so because `normalize`'s whole job is to hand back a
+/// string that can be used as a path -- and `""` cannot be.
 fn normalize(p: Path) -> Path {
     let abs = is_absolute(p);
     let out: List[str] = [];
@@ -512,16 +512,16 @@ fn normalize(p: Path) -> Path {
     }
 }
 
-// Is `prefix` a leading run of whole components of `p`?
-//
-// Component-wise, not byte-wise, which is the entire reason this exists rather than
-// `string::starts_with`: `/foobar` does *not* start with `/foo`, though its bytes do. That
-// distinction is the difference between a containment check and a sandbox escape.
-//
-// Compared as written -- `..` is not resolved on either side, so normalize both first if
-// they may not be in the same form. The empty prefix is a prefix of everything, since it
-// has no components to fail to match. An absolute prefix only matches an absolute path,
-// because `"/"` is a component that only absolute paths have.
+/// Is `prefix` a leading run of whole components of `p`?
+///
+/// Component-wise, not byte-wise, which is the entire reason this exists rather than
+/// `string::starts_with`: `/foobar` does *not* start with `/foo`, though its bytes do. That
+/// distinction is the difference between a containment check and a sandbox escape.
+///
+/// Compared as written -- `..` is not resolved on either side, so normalize both first if
+/// they may not be in the same form. The empty prefix is a prefix of everything, since it
+/// has no components to fail to match. An absolute prefix only matches an absolute path,
+/// because `"/"` is a component that only absolute paths have.
 fn starts_with(p: Path, prefix: Path) -> bool {
     let a = components(p);
     let b = components(prefix);

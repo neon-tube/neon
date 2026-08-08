@@ -27,21 +27,21 @@ use std::collections::map;
 use std::math;
 use std::string;
 
-// A JSON document. Every arm is a type you already have, so `1.5`, `"hi"` and `null` are
-// `Json` values with no wrapping step.
+/// A JSON document. Every arm is a type you already have, so `1.5`, `"hi"` and `null` are
+/// `Json` values with no wrapping step.
 mu type Json = null | bool | i64 | f64 | str | List[Json] | Map[str, Json]
 
-// How a type renders as JSON. One method, and the value it returns is a `Json` rather
-// than text: composing documents is what the encoder does most, and composing *strings*
-// would mean re-parsing to nest.
+/// How a type renders as JSON. One method, and the value it returns is a `Json` rather
+/// than text: composing documents is what the encoder does most, and composing *strings*
+/// would mean re-parsing to nest.
 protocol ToJson for T {
     fn to_json(v: T) -> Json
 }
 
-// The primitives are already `Json` arms, so their impls are the identity. They exist so
-// that a generic body with `where T: ToJson` can call `to_json` on a field of type `T`
-// whatever `T` turns out to be -- without them the bound is unsatisfiable for exactly the
-// types most records are made of.
+/// The primitives are already `Json` arms, so their impls are the identity. They exist so
+/// that a generic body with `where T: ToJson` can call `to_json` on a field of type `T`
+/// whatever `T` turns out to be -- without them the bound is unsatisfiable for exactly the
+/// types most records are made of.
 impl ToJson for bool { fn to_json(v: bool) -> Json { v } }
 impl ToJson for i64 { fn to_json(v: i64) -> Json { v } }
 impl ToJson for f64 { fn to_json(v: f64) -> Json { v } }
@@ -57,9 +57,9 @@ impl[T] ToJson for List[T] where T: ToJson {
     }
 }
 
-// Only `str` keys. JSON object keys are strings, and a `Map[i64, V]` that quietly
-// stringified its keys would not round-trip -- so that is a conversion the caller makes
-// on purpose rather than one this impl makes silently.
+/// Only `str` keys. JSON object keys are strings, and a `Map[i64, V]` that quietly
+/// stringified its keys would not round-trip -- so that is a conversion the caller makes
+/// on purpose rather than one this impl makes silently.
 impl[V] ToJson for Map[str, V] where V: ToJson {
     fn to_json(v: Map[str, V]) -> Json {
         let out: Map[str, Json] = map::new[str, Json]();
@@ -70,11 +70,11 @@ impl[V] ToJson for Map[str, V] where V: ToJson {
     }
 }
 
-// An object from its fields, in one call. This is the shape `@derive(ToJson)` generates
-// against: a derive that emitted a `map::new` and one `map::set` per field would work, but
-// it would need `std::collections::map` in scope in the *user's* module to do it, and a
-// generated body that depends on the author's imports is a generated body that breaks on
-// someone else's file.
+/// An object from its fields, in one call. This is the shape `@derive(ToJson)` generates
+/// against: a derive that emitted a `map::new` and one `map::set` per field would work, but
+/// it would need `std::collections::map` in scope in the *user's* module to do it, and a
+/// generated body that depends on the author's imports is a generated body that breaks on
+/// someone else's file.
 fn object(fields: List[(str, Json)]) -> Json {
     let out: Map[str, Json] = map::new[str, Json]();
     for f in fields {
@@ -84,13 +84,13 @@ fn object(fields: List[(str, Json)]) -> Json {
     out
 }
 
-// Compact JSON text: no spaces, no trailing newline.
-//
-// Object keys are emitted in sorted order. A `Map` is unordered -- `keys` walks the hash
-// table, and the same map built two ways can walk differently -- so *some* order has to be
-// imposed for the output to be a function of the value. Sorted is the one that is stable
-// across runs, across builds, and under a rehash; insertion order is not available to
-// recover here, and field order would only be recoverable for derived records anyway.
+/// Compact JSON text: no spaces, no trailing newline.
+///
+/// Object keys are emitted in sorted order. A `Map` is unordered -- `keys` walks the hash
+/// table, and the same map built two ways can walk differently -- so *some* order has to be
+/// imposed for the output to be a function of the value. Sorted is the one that is stable
+/// across runs, across builds, and under a rehash; insertion order is not available to
+/// recover here, and field order would only be recoverable for derived records anyway.
 fn stringify(j: Json) -> str {
     match j {
         is null => "null",
@@ -119,13 +119,13 @@ fn stringify(j: Json) -> str {
     }
 }
 
-// `s` as a quoted JSON string literal, escapes and all. Public because rendering a string
-// as JSON is useful without building a document around it.
-//
-// Byte-oriented, like the rest of `std::string`. A multi-byte UTF-8 character passes
-// through as its bytes, which is what JSON wants -- the format is UTF-8 and only requires
-// escaping for `"`, `\` and the C0 controls. Invalid UTF-8 in, invalid UTF-8 out: this
-// does not validate, and `str` in this language does not either.
+/// `s` as a quoted JSON string literal, escapes and all. Public because rendering a string
+/// as JSON is useful without building a document around it.
+///
+/// Byte-oriented, like the rest of `std::string`. A multi-byte UTF-8 character passes
+/// through as its bytes, which is what JSON wants -- the format is UTF-8 and only requires
+/// escaping for `"`, `\` and the C0 controls. Invalid UTF-8 in, invalid UTF-8 out: this
+/// does not validate, and `str` in this language does not either.
 fn quote(s: str) -> str {
     let parts: List[str] = ["\""];
     let n = string::byte_len(s);
@@ -141,14 +141,14 @@ fn quote(s: str) -> str {
 }
 
 internal mod esc {
-    // The escape for one byte, or the byte itself when none is needed. `c` is the byte as
-    // a one-byte string, already sliced by the caller, so the common path is a return
-    // rather than a re-slice.
-    //
-    // The two-character forms are the ones JSON names; every other C0 control takes the
-    // `\u00XX` form. Codes above 0x7F are *not* escaped: they are UTF-8 continuation and
-    // lead bytes, and escaping them per byte would produce `Ã` for a byte that is
-    // half a character -- text no decoder would reassemble.
+    /// The escape for one byte, or the byte itself when none is needed. `c` is the byte as
+    /// a one-byte string, already sliced by the caller, so the common path is a return
+    /// rather than a re-slice.
+    ///
+    /// The two-character forms are the ones JSON names; every other C0 control takes the
+    /// `\u00XX` form. Codes above 0x7F are *not* escaped: they are UTF-8 continuation and
+    /// lead bytes, and escaping them per byte would produce `Ã` for a byte that is
+    /// half a character -- text no decoder would reassemble.
     fn byte(b: i64, c: str) -> str {
         if b == 34 {
             "\\\""
@@ -181,25 +181,25 @@ internal mod esc {
 
 // ---- decoding ----
 
-// Thrown by every decode. The message names what was expected and what was there, because
-// a decoder that only says "invalid JSON" leaves the caller to bisect the document by hand.
+/// Thrown by every decode. The message names what was expected and what was there, because
+/// a decoder that only says "invalid JSON" leaves the caller to bisect the document by hand.
 record JsonError { message: str }
 impl Display for JsonError { fn to_string(v: JsonError) -> str { v.message } }
 impl Error for JsonError { fn message(v: JsonError) -> str { v.message } }
 
-// How a type is read back out of JSON.
-//
-// The subject appears only in the RETURN, so this dispatches on the type the call is
-// checked against rather than on an argument -- `let p: P = try from_json(j)` picks P's
-// impl, and a field slot in a record literal picks that field's. That is the same
-// selection serde spells `T::deserialize`, and it needs no turbofish here because the
-// checker already carries an expected type to every call.
+/// How a type is read back out of JSON.
+///
+/// The subject appears only in the RETURN, so this dispatches on the type the call is
+/// checked against rather than on an argument -- `let p: P = try from_json(j)` picks P's
+/// impl, and a field slot in a record literal picks that field's. That is the same
+/// selection serde spells `T::deserialize`, and it needs no turbofish here because the
+/// checker already carries an expected type to every call.
 protocol FromJson for T {
     fn from_json(j: Json) throws JsonError -> T
 }
 
-// What a document node is, for a diagnostic. Not public: a caller wanting to branch on the
-// shape should match the union, which is the whole reason `Json` is not opaque.
+/// What a document node is, for a diagnostic. Not public: a caller wanting to branch on the
+/// shape should match the union, which is the whole reason `Json` is not opaque.
 internal mod what {
     fn of(j: Json) -> str {
         match j {
@@ -241,12 +241,12 @@ impl FromJson for i64 {
     }
 }
 
-// An `i64` node decodes as an `f64`, which is the one place decoding is deliberately not the
-// mirror of encoding. JSON has a single number type, so a document written anywhere else
-// spells 1.0 as `1` and the arms this module keeps distinct are a Neon distinction that the
-// wire does not carry. Refusing it would make every round trip through another language fail
-// on whole numbers. The reverse is NOT done -- an `f64` node is not an `i64` -- because that
-// direction loses information rather than recovering it.
+/// An `i64` node decodes as an `f64`, which is the one place decoding is deliberately not the
+/// mirror of encoding. JSON has a single number type, so a document written anywhere else
+/// spells 1.0 as `1` and the arms this module keeps distinct are a Neon distinction that the
+/// wire does not carry. Refusing it would make every round trip through another language fail
+/// on whole numbers. The reverse is NOT done -- an `f64` node is not an `i64` -- because that
+/// direction loses information rather than recovering it.
 impl FromJson for f64 {
     fn from_json(j: Json) throws JsonError -> f64 {
         match j {
@@ -291,13 +291,13 @@ impl[V] FromJson for Map[str, V] where V: FromJson {
     }
 }
 
-// One field of an object. This is the shape `@derive(FromJson)` generates against, for the
-// reason `object` is on the encode side: a generated body must not depend on the author
-// having imported `std::collections::map`.
-//
-// A missing field is an error rather than null. A field whose type admits null can say so,
-// and then `null` is what is in the document; conflating "absent" with "present and null"
-// would make the two indistinguishable to a type that cares.
+/// One field of an object. This is the shape `@derive(FromJson)` generates against, for the
+/// reason `object` is on the encode side: a generated body must not depend on the author
+/// having imported `std::collections::map`.
+///
+/// A missing field is an error rather than null. A field whose type admits null can say so,
+/// and then `null` is what is in the document; conflating "absent" with "present and null"
+/// would make the two indistinguishable to a type that cares.
 fn field(j: Json, name: str) throws JsonError -> Json {
     match j {
         is Map[str, Json] => {
