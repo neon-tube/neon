@@ -156,6 +156,38 @@ prevent, folding `i64::MIN / -1` instead of leaving the trap — makes
 to the helpers in `src/fold.rs`, since a mistake there (forgetting the wrong
 value, asserting nothing) would fail open.
 
+## `inert.sh` — proving a change is *inert*
+
+Kani proves a function right. `inert.sh` proves a change did not alter what the
+compiler emits, which is the actual contract of a refactor and is checkable even
+where nothing is proved.
+
+```sh
+verify/inert.sh record     # before, into target/inert.txt
+verify/inert.sh check      # after; silence means inert
+```
+
+It hashes five observables per corpus file — `parse`, `check` (diagnostics
+included, so compile-fail tests pin their error text), `ir`, `fmt`, and the
+generated C — 1790 in total, in about a second. The C comes from a `--cc`
+wrapper that pockets the file and exits, so no C compiler runs.
+
+**Why it is worth more than the suite for this purpose.** Disabling constant
+folding outright — commenting `const_fold` out of the pipeline — leaves all 265
+corpus tests passing. `inert.sh` flags it across a hundred files. The corpus
+asks "do the cases we wrote still work"; this asks "is the compiler emitting the
+same thing for 358 programs", and a refactor that quietly changes behaviour in
+an unexercised corner only shows up in the second question.
+
+It assumes emission is a function of the input. Two places where it was not
+were found by running it: `ir::partial` took SSA numbers from a `HashMap`'s
+iteration order, and `check_contractivity` took the order of two mutual-recursion
+diagnostics from another. If a pass reintroduces that, `record` twice with no
+change in between and this will report a diff.
+
+An inert result is evidence a change preserved behaviour — never that the
+behaviour is correct. Nothing here runs the generated C.
+
 ## Adding a target
 
 Kani suits **pure functions over scalars with a small, total contract**. It does

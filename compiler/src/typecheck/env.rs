@@ -1366,12 +1366,19 @@ impl Env {
     /// A `mu` that never names itself is also an error: the binder is an assertion, and
     /// silently accepting it would leave `type` and `mu type` interchangeable.
     fn check_contractivity(&mut self) {
-        let mus: Vec<String> = self
+        // In source order, not `decls`' hash order. Two mutually recursive `mu type`s
+        // each accuse the other, so the order they are visited is the order the two
+        // diagnostics print -- and taken from a `HashMap` that was a coin flip per run.
+        // The key breaks ties so the order is total even for declarations that somehow
+        // share a position.
+        let mut mus: Vec<(&Vec<String>, usize, &String)> = self
             .decls
             .iter()
             .filter(|(_, d)| matches!(d.sort, Sort::Mu(_)))
-            .map(|(k, _)| k.clone())
+            .map(|(k, d)| (&d.module, d.span.start, k))
             .collect();
+        mus.sort();
+        let mus: Vec<String> = mus.into_iter().map(|(_, _, k)| k.clone()).collect();
         for key in mus {
             let (errors, found) = contractivity(self, &key);
             let bad = !errors.is_empty();
