@@ -204,6 +204,7 @@ operators/orelse_chain.neon
 operators/orelse_union.neon
 operators/orelse_zero_is_not_null.neon
 operators/pipe.neon
+operators/pipe_bare_callee.neon
 operators/pipe_chain.neon
 operators/pipe_orelse_precedence.neon
 operators/precedence_arith.neon

@@ -1,0 +1,24 @@
+// `x |> f` with a BARE callee — no parentheses — applies `f` to the piped
+// value: it is `f(x)` exactly as `x |> f()` is. The checker has always
+// accepted this form; lowering once did not, and `5 |> double` compiled to a
+// placeholder string fed to `i64`'s to_string. This file pins the form for a
+// named function, a local closure, and a lambda written in place.
+
+use std::io;
+use std::string;
+
+fn double(x: i64) -> i64 { x * 2 }
+
+fn main() {
+    io::println(to_string(5 |> double));
+
+    // A local of arrow type is called the same way.
+    let inc = (x: i64) => x + 1;
+    io::println(to_string(5 |> inc));
+
+    // The callee can be any expression producing a function.
+    io::println(to_string(5 |> ((x: i64) => x * x)));
+
+    // Bare and parenthesised forms chain together.
+    io::println(to_string(5 |> double |> inc));
+}

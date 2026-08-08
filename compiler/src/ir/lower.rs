@@ -1870,7 +1870,15 @@ impl Lower<'_> {
     /// `a |> f(b)` is `f(a, b)` — the pipe threads its left side as the first argument.
     fn lower_pipe(&mut self, lhs: &Expr, rhs: &Expr, repr: Repr, ty: TyId) -> Value {
         let ExprKind::Call { callee, args, .. } = &rhs.kind else {
-            return self.unhandled_note("pipe rhs", repr, ty);
+            // `a |> f` with a bare callee applies it to the receiver — the checker
+            // accepts this form (its `apply` arm), but lowering used to emit a
+            // `<todo: pipe rhs>` marker here, so `5 |> double` fed a string constant
+            // to `neon_i64_to_string`. The rhs goes through `lower_call_vals` as the
+            // callee with the piped value as the only argument; the ladder there
+            // already handles a local closure, a named function, or any expression
+            // producing a closure.
+            let arg = self.lower_expr(lhs);
+            return self.lower_call_vals(rhs.id, rhs, &[], vec![arg], repr, ty);
         };
         let mut arg_vs = vec![self.lower_expr(lhs)];
         arg_vs.extend(args.iter().map(|a| self.lower_expr(a)));
