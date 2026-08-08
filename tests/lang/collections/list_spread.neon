@@ -1,0 +1,32 @@
+// `[1, 2, ..xs, 5]` — a spread contributes the list's ELEMENTS, in place, and the
+// literal is a concatenation folded left to right in source order. `[..xs]` alone is a
+// copy — a fresh list, the same way every literal builds fresh — and the spread's
+// operand is untouched afterwards. A non-list operand is rejected at the check
+// (`[1, ..5]` is "not a collection"), and the spread's element type joins inference:
+// `[:a, ..bs]` is as wide as `bs` says.
+//
+// Like record update, this spent a while as a compile error after a placeholder value
+// silently miscompiled it; these values pin the real thing.
+
+use std::io;
+use std::collections::list;
+
+fn main() {
+    let xs = [3, 4];
+
+    let ys = [1, 2, ..xs, 5];
+    io::println("#{list::len(ys)} #{ys[0]} #{ys[2]} #{ys[4]}");
+
+    let zs = [..xs, ..xs];
+    io::println("#{list::len(zs)} #{zs[3]}");
+
+    let copy = [..xs];
+    io::println("#{list::len(copy)} #{copy[1]}");
+
+    // Counted elements ride the concat with their references intact.
+    let names = ["a", ..["b", "c"], "d"];
+    io::println(names[1] + names[3]);
+
+    // The spread's operand is untouched.
+    io::println("#{xs[0]} #{list::len(xs)}");
+}
