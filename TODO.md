@@ -382,6 +382,18 @@ did not finish in 400s; the same harness against a static map finished in 0.25s.
 copy-on-write at `rc > 1`. Needs `goto-instrument --restrict-function-pointer` in the model
 pipeline, or types that distinguish a drop from a witness release.
 
+`neon_list_ensure_unique_at` (2026-08-08) hits the same wall from the list side, harder:
+its slot holds a `neon_list*` that round-trips through the byte heap, so every read of it
+is a symbolic pointer over all objects and the row's own clone/drop chains through two
+levels of witness function pointers. Bisected to the floor — one hand-assembled slot, one
+call, one trivial claim — and still no convergence in 400s, so no model ships for it; a
+model that cannot complete proves nothing and burns the pipeline. **Unverified as a
+result:** "the slot's element is sole-owned on return, the outside holder undisturbed."
+Covered instead by `runtime/tests/list_test.c`'s
+`ensure_unique_at_keeps_a_sole_element_and_clones_a_shared_one` (ASan/UBSan) and the
+`nested_write_*` corpus programs run leak-checked by `backend_run`. The fix is the same
+one named above.
+
 ---
 
 ## Later — not now

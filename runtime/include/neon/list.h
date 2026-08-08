@@ -39,6 +39,10 @@ neon_list* neon_list_ensure_unique(neon_list* l);
 // the pointer cannot change, which is exactly what lets the caller keep `data` and its
 // bounds facts live across it. See the precondition on the definition.
 void neon_list_set_scalar_inplace(neon_list* l, int64_t i, const void* elem, size_t sz);
+// Make the `neon_list*` ELEMENT in slot `i` of sole-owned `l` itself sole-owned, and
+// return it borrowed: the slot keeps ownership. The per-level step of the nested
+// in-place write; see the preconditions on the definition.
+neon_list* neon_list_ensure_unique_at(neon_list* l, int64_t i);
 
 // `neon_list_at` with the element width supplied by the caller instead of read from the
 // witness.

@@ -122,6 +122,29 @@ void neon_list_set_scalar_inplace(neon_list* l, int64_t i, const void* elem, siz
     memcpy(l->data + (size_t)i * sz, elem, sz);
 }
 
+// Establish sole ownership of the LIST ELEMENT in slot `i` of `l`, and hand it back
+// borrowed -- the slot keeps its reference, and the caller must not release what it got.
+//
+// PRECONDITIONS, both the optimiser's to keep, exactly as for `set_scalar_inplace`:
+// `l` itself is sole-owned (so its slot may be overwritten), and its elements are
+// `neon_list*` -- this is the per-level step of `ir::unique`'s nested-write rewrite,
+// which only fires on `List[List[...]]` reprs. The bounds check traps with the same
+// message as a read, because in the rewritten program this call stands where an
+// element read stood.
+//
+// The body is `ensure_unique` aimed at a slot: the slot's reference is consumed by the
+// clone-or-keep and the resulting sole reference is stored back, so ownership never
+// changes hands and a shared element is cloned exactly once -- the next write through
+// this slot sees `rc == 1` and pays a pointer test.
+neon_list* neon_list_ensure_unique_at(neon_list* l, int64_t i) {
+    if (i < 0 || (size_t)i >= l->len) {
+        neon_trap("list index out of range");
+    }
+    neon_list** slot = (neon_list**)(l->data + (size_t)i * sizeof(neon_list*));
+    *slot = neon_list_ensure_unique(*slot);
+    return *slot;
+}
+
 neon_list* neon_list_set_scalar(neon_list* l, int64_t i, const void* elem, size_t sz) {
     if (i < 0 || (size_t)i >= l->len) {
         neon_trap("list index out of range");

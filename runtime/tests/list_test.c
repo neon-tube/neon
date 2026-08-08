@@ -215,3 +215,51 @@ TEST(set_scalar_inplace_overwrites_the_slot_and_traps_out_of_bounds) {
     EXPECT_TRAP(neon_list_set_scalar_inplace(l, -1, &seven, sizeof(int64_t)));
     neon_release((neon_header*)l);
 }
+
+// The witness a `List[List[i64]]`'s outer list carries: slots hold `neon_list*` and
+// retain/release the pointed-at list, exactly as codegen's generated witnesses do.
+static void nt_listptr_retain(void* slot) { neon_retain(*(neon_header**)slot); }
+static void nt_listptr_release(void* slot) { neon_release(*(neon_header**)slot); }
+static const neon_witness nt_listptr_w = {sizeof(neon_list*), nt_listptr_retain,
+                                          nt_listptr_release, NULL, NULL};
+
+TEST(ensure_unique_at_keeps_a_sole_element_and_clones_a_shared_one) {
+    // Outer list of two rows; row 0 is shared with an outside holder, row 1 is not.
+    neon_list* row0 = neon_list_new(&nt_i64_w);
+    int64_t ten = 10;
+    row0 = neon_list_push(row0, &ten);
+    neon_list* row1 = neon_list_new(&nt_i64_w);
+    int64_t twenty = 20;
+    row1 = neon_list_push(row1, &twenty);
+
+    // `push` moves the element's bytes in and CONSUMES the reference: after these, each
+    // slot alone owns its row and the local names are borrows.
+    neon_list* outer = neon_list_new(&nt_listptr_w);
+    outer = neon_list_push(outer, &row0);
+    outer = neon_list_push(outer, &row1);
+    neon_retain((neon_header*)row0); // an outside holder: row0 rc == 2, row1 stays 1
+
+    // A sole-owned element is handed back as-is: no clone, same pointer in the slot.
+    neon_list* got1 = neon_list_ensure_unique_at(outer, 1);
+    EXPECT(got1 == row1);
+    EXPECT_EQ(got1->header.rc, 1u);
+
+    // A shared element is cloned into the slot; the outside holder keeps the original,
+    // sole-owned again, with its contents intact.
+    neon_list* got0 = neon_list_ensure_unique_at(outer, 0);
+    EXPECT(got0 != row0);
+    EXPECT_EQ(got0->header.rc, 1u);
+    EXPECT_EQ(row0->header.rc, 1u);
+    EXPECT_EQ(*(int64_t*)neon_list_at(got0, 0), 10);
+
+    // The clone is what the slot now holds, so a write through it stays private.
+    int64_t eleven = 11;
+    neon_list_set_scalar_inplace(got0, 0, &eleven, sizeof(int64_t));
+    EXPECT_EQ(*(int64_t*)neon_list_at(row0, 0), 10);
+
+    EXPECT_TRAP(neon_list_ensure_unique_at(outer, 2));
+    EXPECT_TRAP(neon_list_ensure_unique_at(outer, -1));
+
+    neon_release((neon_header*)row0);
+    neon_release((neon_header*)outer); // releases both slots through the witness
+}
