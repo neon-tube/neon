@@ -1603,6 +1603,23 @@ impl Lower<'_> {
     /// emitting an instruction and set `terminated`, so nothing downstream is lowered and
     /// the value is never read.
     fn lower_expr(&mut self, e: &Expr) -> Value {
+        let v = self.lower_expr_value(e);
+        // An expression typed `never` produced no value — the type is empty — so
+        // nothing after it in this block can run, and above all its phantom result
+        // must not ride a CFG edge: `if c { 5 } else { boom() }` used to carry the
+        // never-repr'd call result into an i64 join parameter, which C read as a
+        // pointer stuffed into an integer. `throw`, `return` and `TODO` already
+        // terminate themselves; this is the same rule for everything else that the
+        // checker typed empty — a call to a `-> never` function, most usefully
+        // `os::exit`.
+        if !self.terminated && matches!(self.b.value_repr(v), Repr::Never) {
+            self.b.terminate(Term::Unreachable);
+            self.terminated = true;
+        }
+        v
+    }
+
+    fn lower_expr_value(&mut self, e: &Expr) -> Value {
         let repr = self.repr(e);
         let ty = self.ty(e);
         match &e.kind {

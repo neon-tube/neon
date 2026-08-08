@@ -163,6 +163,7 @@ functions/instance_identity_spells_its_arguments.neon
 functions/lambda_in_generic.neon
 functions/mutual_recursion.neon
 functions/named_function_as_value.neon
+functions/never_return.neon
 functions/optional_params_are_records.neon
 functions/pipe_operator.neon
 functions/record_arg_duplicate_field.neon

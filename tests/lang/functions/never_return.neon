@@ -1,0 +1,28 @@
+// `-> never` is spellable, and a call typed `never` terminates its block: the type is
+// empty, so no value can come back, and nothing after the call in that path can run.
+// `choose` is the shape that used to miscompile — the never-typed call's phantom
+// result rode the CFG edge into an i64 join parameter, which C read as a pointer
+// stuffed into an integer. Diverging here via a throw keeps the program observable:
+// the assertion proves the never-arm genuinely never produced a value.
+
+use std::io;
+
+type Gone = { message: str }
+impl Error for Gone {
+    fn message(g: Gone) -> str { g.message }
+}
+
+fn bail() throws Gone -> never {
+    throw Gone { message: "bailed" }
+}
+
+fn choose(c: bool) throws Gone -> i64 {
+    if c { 5 } else { try bail() }
+}
+
+fn main() {
+    let ok = try choose(true) catch (e) { 0 - 1 };
+    io::println("#{ok}");
+    let caught = try choose(false) catch (e) { 0 - 1 };
+    io::println("#{caught}");
+}
