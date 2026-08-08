@@ -140,9 +140,11 @@ enum Command {
         #[arg(long = "cfg", value_name = "KEY")]
         cfg: Vec<String>,
     },
-    /// Format a source file. Prints the result to stdout by default.
+    /// Format a source file, or the whole project when no file is named.
     Fmt {
-        file: OsString,
+        /// A `.neon` file; absent means every file under the project's `src/`
+        /// (which then requires `--write` or `--check`).
+        file: Option<OsString>,
         /// Write the result back to the file instead of printing it.
         #[arg(long, conflicts_with = "check")]
         write: bool,
@@ -191,7 +193,8 @@ enum Command {
     },
     /// Run a file's `test` blocks, one per line of output, and exit non-zero if any failed.
     Test {
-        file: OsString,
+        /// A `.neon` file; absent means the current project's entry point.
+        file: Option<OsString>,
         /// Re-run on every source change.
         #[arg(long)]
         watch: bool,
@@ -256,7 +259,7 @@ fn main() -> Result<()> {
         Command::Lex { file, spans } => cmd::lex::run(&file, spans),
         Command::Parse { file } => cmd::parse::run(&file),
         Command::Check { file, lib, cfg } => cmd::check::run(&file, lib, &cfg),
-        Command::Fmt { file, write, check } => cmd::fmt::run(&file, write, check),
+        Command::Fmt { file, write, check } => cmd::fmt::run(file.as_ref(), write, check),
         Command::Ir { file, stage } => cmd::ir::run(&file, stage.into()),
         Command::Init { name } => cmd::init::run(name),
         Command::Compile {
@@ -283,8 +286,14 @@ fn main() -> Result<()> {
             build,
         } => {
             if watch {
-                return cmd::watch::rerun_on_change(cmd::watch::watch_set(Some(&file)));
+                return cmd::watch::rerun_on_change(cmd::watch::watch_set(file.as_ref()));
             }
+            let file = match file {
+                Some(f) => f,
+                None => crate::project::Project::find(std::path::Path::new("."))?
+                    .entry()
+                    .into_os_string(),
+            };
             cmd::test::run(&file, filter, build.into())
         }
         Command::Doc { target } => cmd::doc::run(target.as_ref()),
