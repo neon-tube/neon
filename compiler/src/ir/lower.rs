@@ -2030,12 +2030,19 @@ impl Lower<'_> {
 
     /// `[a, b, c]` — one `MakeList` with the elements already lowered, left to right.
     fn lower_list(&mut self, elems: &[ast::Elem], repr: Repr, ty: TyId) -> Value {
+        // A literal with a spread is a concatenation, folded left to right in source
+        // order: runs of plain values become `MakeList`s and each `..xs` contributes
+        // the list itself, all joined with `neon_list_concat` (which consumes both
+        // operands — the refcount pass retains a spread's list when it lives on).
+        // `[..xs]` alone is a copy, the same way `xs` written twice is two references.
+        if elems.iter().any(|e| matches!(e, ast::Elem::Spread(_))) {
+            return self.lower_list_spread(elems, repr, ty);
+        }
         let vs = elems
             .iter()
             .map(|e| match e {
                 ast::Elem::Value(x) => self.lower_expr(x),
-                // The checker rejects a spread (`NotImplemented`), so none reaches here.
-                ast::Elem::Spread(_) => panic!("internal error: list spread reached lowering"),
+                ast::Elem::Spread(_) => unreachable!("guarded above"),
             })
             .collect::<Vec<_>>();
         // The checker adopts an expected type wholesale for a list literal, so
@@ -2058,6 +2065,76 @@ impl Lower<'_> {
         self.b.emit(Op::MakeList(vs), repr, ty)
     }
 
+    /// The spread form of a list literal, as a left-to-right fold of concatenations.
+    /// Evaluation order is the source's: every element expression — spread or not —
+    /// lowers in the order written, and only the JOINING happens on the collected
+    /// segments.
+    fn lower_list_spread(&mut self, elems: &[ast::Elem], repr: Repr, ty: TyId) -> Value {
+        // Lower everything in source order first.
+        enum Part {
+            Value(Value),
+            Spread(Value),
+        }
+        let parts: Vec<Part> = elems
+            .iter()
+            .map(|e| match e {
+                ast::Elem::Value(x) => Part::Value(self.lower_expr(x)),
+                ast::Elem::Spread(x) => Part::Spread(self.lower_expr(x)),
+            })
+            .collect();
+
+        // Group runs of plain values into `MakeList`s, at the literal's own repr so the
+        // builder knows the slot width (the `Any` adoption below the plain path never
+        // applies here: a spread's operand pinned the element type at the check).
+        let mut segments: Vec<Value> = Vec::new();
+        let mut run: Vec<Value> = Vec::new();
+        for p in parts {
+            match p {
+                Part::Value(v) => run.push(v),
+                Part::Spread(s) => {
+                    if !run.is_empty() {
+                        segments.push(self.b.emit(
+                            Op::MakeList(std::mem::take(&mut run)),
+                            repr.clone(),
+                            ty,
+                        ));
+                    }
+                    segments.push(s);
+                }
+            }
+        }
+        if !run.is_empty() {
+            segments.push(self.b.emit(Op::MakeList(run), repr.clone(), ty));
+        }
+
+        let mut acc = segments[0];
+        // A lone `[..xs]` still builds a NEW list: concat with empty rather than
+        // handing back `xs` itself, so the literal's copy semantics match every other
+        // literal's.
+        if segments.len() == 1 {
+            let empty = self.b.emit(Op::MakeList(vec![]), repr.clone(), ty);
+            return self.b.emit(
+                Op::Native {
+                    symbol: "neon_list_concat".into(),
+                    args: vec![acc, empty],
+                },
+                repr,
+                ty,
+            );
+        }
+        for &next in &segments[1..] {
+            acc = self.b.emit(
+                Op::Native {
+                    symbol: "neon_list_concat".into(),
+                    args: vec![acc, next],
+                },
+                repr.clone(),
+                ty,
+            );
+        }
+        acc
+    }
+
     /// A record literal. The literal's *syntactic* field order is discarded: fields are
     /// emitted in the order the repr lists them, so two literals of the same type build the
     /// same struct however they were written.
@@ -2069,22 +2146,49 @@ impl Lower<'_> {
         repr: Repr,
         ty: TyId,
     ) -> Value {
-        // The checker rejects a spread (`NotImplemented`), so none reaches here.
-        if spread.is_some() {
-            panic!("internal error: record spread reached lowering");
-        }
+        // The update form: `Point { x: 9, ..p }` evaluates the base ONCE, then builds a
+        // fresh record — written fields from the literal, the rest read out of the base.
+        // The reads are views; the refcount pass retains each as `MakeRecord` consumes
+        // it and releases the base after its last projection, so the update costs
+        // exactly the retains the new record needs and no clone of anything unwritten.
+        //
+        // The written fields still evaluate FIRST, left to right as spelled — the base
+        // is lowered after them, matching the source order `{ fields, ..base }` reads
+        // in. (This form was a `NotImplemented` rejection for a while: the checker
+        // understood updates and lowering didn't, and a placeholder here once
+        // miscompiled — see the history on `list-in-place-write-...` in the models.)
+        let written: Vec<(String, Value)> = fields
+            .iter()
+            .map(|f| (f.name.clone(), self.lower_expr(&f.value)))
+            .collect();
+        let base = spread.map(|s| self.lower_expr(s));
+
         // Emit fields in the repr's canonical order, so every value of a type is built
-        // the same way. A field the literal omits is a nullable optional -> null.
-        let order: Vec<String> = match &repr {
-            Repr::Record { fields, .. } => fields.iter().map(|(n, _)| n.clone()).collect(),
-            _ => fields.iter().map(|f| f.name.clone()).collect(),
+        // the same way. A field the literal omits comes from the base when there is
+        // one, and is a nullable optional -> null otherwise.
+        let order: Vec<(String, Option<Repr>)> = match &repr {
+            Repr::Record { fields, .. } => fields
+                .iter()
+                .map(|(n, r)| (n.clone(), Some(r.clone())))
+                .collect(),
+            _ => fields.iter().map(|f| (f.name.clone(), None)).collect(),
         };
         let name = path.and_then(|p| p.last().cloned());
         let mut built = Vec::new();
-        for fname in order {
-            let v = match fields.iter().find(|f| f.name == fname) {
-                Some(f) => self.lower_expr(&f.value),
-                None => self.b.emit(Op::ConstNull, Repr::Null, ty),
+        for (fname, frepr) in order {
+            let v = match written.iter().find(|(n, _)| *n == fname) {
+                Some(&(_, v)) => v,
+                None => match (base, &frepr) {
+                    (Some(b), Some(fr)) => self.b.emit(
+                        Op::Field {
+                            base: b,
+                            field: fname.clone(),
+                        },
+                        fr.clone(),
+                        ty,
+                    ),
+                    _ => self.b.emit(Op::ConstNull, Repr::Null, ty),
+                },
             };
             built.push((fname, v));
         }

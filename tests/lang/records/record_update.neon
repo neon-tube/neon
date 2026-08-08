@@ -1,0 +1,26 @@
+// `Point { x: 9, ..p }` — the update form: written fields win, everything else is read
+// out of the base, which is evaluated once and untouched. The build is a fresh record
+// (fields in the repr's canonical order, like every literal), so the cost is the
+// retains the new record needs and no clone of anything unwritten.
+//
+// This form spent a while as a compile error: the checker always understood updates,
+// lowering did not, and before the rejection a placeholder value silently miscompiled
+// it. The values below pin all three states it passed through ending here.
+
+use std::io;
+
+type Point = { x: i64, y: i64, label: str }
+
+fn main() {
+    let p = Point { x: 1, y: 2, label: "origin-ish" };
+
+    let q = Point { x: 9, ..p };
+    io::println("#{q.x} #{q.y} " + q.label);
+
+    // The base is untouched — value semantics, not mutation.
+    io::println("#{p.x} #{p.y} " + p.label);
+
+    // Updates chain, and a counted field (the str) survives the trip.
+    let r = Point { label: "moved", ..q };
+    io::println("#{r.x} #{r.y} " + r.label);
+}
