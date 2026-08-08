@@ -11,3 +11,4 @@ pub mod parse;
 pub mod run;
 pub mod sysroot;
 pub mod test;
+pub mod watch;

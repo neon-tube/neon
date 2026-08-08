@@ -180,6 +180,9 @@ enum Command {
     Run {
         /// A `.neon` file, a project directory, or nothing for the current project.
         path: Option<OsString>,
+        /// Re-run on every source change.
+        #[arg(long)]
+        watch: bool,
         #[command(flatten)]
         build: BuildOpts,
         /// Arguments forwarded to the program, after `--`.
@@ -189,6 +192,9 @@ enum Command {
     /// Run a file's `test` blocks, one per line of output, and exit non-zero if any failed.
     Test {
         file: OsString,
+        /// Re-run on every source change.
+        #[arg(long)]
+        watch: bool,
         /// Run only the tests whose name contains this substring.
         #[arg(long)]
         filter: Option<String>,
@@ -259,12 +265,28 @@ fn main() -> Result<()> {
             build,
         } => cmd::compile::run(&file, output, build.into()),
         Command::Build { build } => cmd::build::run(build.into()),
-        Command::Run { path, build, args } => cmd::run::run(path, args, build.into()),
+        Command::Run {
+            path,
+            watch,
+            build,
+            args,
+        } => {
+            if watch {
+                return cmd::watch::rerun_on_change(cmd::watch::watch_set(path.as_ref()));
+            }
+            cmd::run::run(path, args, build.into())
+        }
         Command::Test {
             file,
+            watch,
             filter,
             build,
-        } => cmd::test::run(&file, filter, build.into()),
+        } => {
+            if watch {
+                return cmd::watch::rerun_on_change(cmd::watch::watch_set(Some(&file)));
+            }
+            cmd::test::run(&file, filter, build.into())
+        }
         Command::Doc { target } => cmd::doc::run(target.as_ref()),
         Command::Sysroot { stdlib } => cmd::sysroot::run(stdlib),
         Command::Doctor => cmd::doctor::run(),
