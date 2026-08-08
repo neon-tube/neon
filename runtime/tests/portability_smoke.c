@@ -92,7 +92,7 @@ static long on_disk_size(const char* path) {
 }
 
 int main(void) {
-    neon_rt_init();
+    neon_rt_init(0, NULL);
 
     // ---- the bytes on disk are the bytes that were written ----
     if (write_two_lines(neon_str_lit(SMOKE_ASCII_PATH, SMOKE_ASCII_PATH_LEN)) != 0) {

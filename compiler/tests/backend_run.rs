@@ -208,13 +208,19 @@ fn run_one(dir: &Path, rel: &str) -> Result<(), Failed> {
 
     // Bound the run: a backend bug can emit a program that never terminates, and a hung
     // child would otherwise stall the whole suite. `timeout` SIGKILLs after 10s.
-    let run = Command::new("timeout")
-        .args(["-k", "1", "30"])
+    let (extra_args, extra_env) = run_directives(&src);
+    let mut cmd = Command::new("timeout");
+    cmd.args(["-k", "1", "30"])
         .arg(&exe)
+        .args(&extra_args)
         .env("ASAN_OPTIONS", "detect_leaks=1:abort_on_error=0")
-        .env("UBSAN_OPTIONS", "print_stacktrace=1")
-        .output()
-        .expect("run exe");
+        .env("UBSAN_OPTIONS", "print_stacktrace=1");
+    for (k, v) in &extra_env {
+        cmd.env(k, v);
+    }
+    // `output()` gives the child a null stdin, so `io::read_line` in a corpus program
+    // reads end-of-input immediately and deterministically.
+    let run = cmd.output().expect("run exe");
     let code = run.status.code();
     if code == Some(124) || code == Some(137) {
         return Err(Failed::from("timed out"));
@@ -266,6 +272,28 @@ fn sanitizer_report(stderr: &str) -> Option<String> {
                 .collect::<Vec<_>>()
                 .join("\n")
         })
+}
+
+/// The command line and environment a corpus program runs with, from `//@ args:`
+/// (whitespace-separated, appended after the program path) and `//@ env: KEY=value`
+/// (repeatable) in the leading comment block. `corpus_check` validates the spelling;
+/// this only has to read it.
+fn run_directives(src: &str) -> (Vec<String>, Vec<(String, String)>) {
+    let mut args = Vec::new();
+    let mut env = Vec::new();
+    for l in src.lines().map_while(|l| {
+        let t = l.trim_start();
+        (t.starts_with("//") || t.is_empty()).then_some(t)
+    }) {
+        if let Some(a) = l.strip_prefix("//@ args:") {
+            args.extend(a.split_whitespace().map(String::from));
+        } else if let Some(e) = l.strip_prefix("//@ env:") {
+            if let Some((k, v)) = e.trim().split_once('=') {
+                env.push((k.to_string(), v.to_string()));
+            }
+        }
+    }
+    (args, env)
 }
 
 /// The exit code a program is expected to end with, from a `//@ exit: N` directive; 0 when

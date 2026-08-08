@@ -6,7 +6,11 @@
 
 // ---- lifecycle ----
 
-void neon_rt_init(void) {
+void neon_rt_init(int argc, char** argv) {
+    // Arguments are initialization state, not a separate registration step: taking them
+    // here makes "initialized but argless" unrepresentable. A caller with no command
+    // line — the C test suites — passes (0, NULL) and `os::args()` reads as empty.
+    neon_os_set_args(argc, argv);
     // The standard streams, unmodified. A Windows CRT opens them in text mode, so every
     // `\n` `println` writes would leave the process as `\r\n` -- one more byte than the
     // program produced, which changes what a pipe reads and what a golden file matches.

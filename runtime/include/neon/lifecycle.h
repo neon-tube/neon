@@ -7,7 +7,7 @@
 
 #include "neon/core.h"
 
-void neon_rt_init(void);
+void neon_rt_init(int argc, char** argv); // (0, NULL) when there is no command line
 void neon_retain(neon_header* h);
 void neon_release(neon_header* h);
 void* neon_alloc(size_t bytes, void (*drop)(void*));

@@ -1,0 +1,17 @@
+//@ args: alpha beta
+// `os::args()` is argv whole: index 0 is the program path, the arguments proper start
+// at 1. The path varies by machine, so this asserts everything about it that is stable —
+// that it exists and is not empty — and exact values for the rest.
+
+use std::os;
+use std::io;
+use std::collections::list;
+use std::string;
+
+fn main() {
+    let a = os::args();
+    io::println("#{list::len(a)}");
+    io::println("#{!string::is_empty(a[0])}");
+    io::println(a[1]);
+    io::println(a[2]);
+}

@@ -41,9 +41,10 @@ pub fn emit(program: &Program) -> String {
 /// runner report the second test after the first one has died, and it contains a crash or a
 /// leaked global as well as it contains an assertion.
 ///
-/// The selector is an environment variable rather than `argv` because the generated entry
-/// point is `int main(void)` for every Neon program; reading `getenv` reaches the same
-/// information without giving test binaries a different entry signature from real ones.
+/// The selector is an environment variable rather than `argv` because argv belongs to the
+/// program under test: `os::args()` inside a test block must see the real command line,
+/// not a harness selector pretending to be one. `getenv` reaches the same information
+/// without stealing from that namespace.
 pub fn emit_tests(program: &Program, tests: &[crate::ir::lower::TestEntry]) -> String {
     emit_with(program, Some(tests))
 }
@@ -94,7 +95,7 @@ fn emit_with(program: &Program, tests: Option<&[crate::ir::lower::TestEntry]>) -
         None => {
             if program.funcs.iter().any(|f| f.name == "main") {
                 out.push_str(
-                    "int main(void) {\n    neon_rt_init();\n    nl_main();\n    return 0;\n}\n",
+                    "int main(int argc, char** argv) {\n    neon_rt_init(argc, argv);\n    nl_main();\n    return 0;\n}\n",
                 );
             }
         }
@@ -111,14 +112,14 @@ fn emit_with(program: &Program, tests: Option<&[crate::ir::lower::TestEntry]>) -
 fn emit_test_entry(out: &mut String, tests: &[crate::ir::lower::TestEntry]) {
     // `getenv`/`strtol` and `fputs`; the runtime header does not promise either.
     out.push_str("#include <stdlib.h>\n#include <stdio.h>\n\n");
-    out.push_str("int main(void) {\n");
+    out.push_str("int main(int argc, char** argv) {\n");
     out.push_str("    const char *which = getenv(\"NEON_TEST\");\n");
     out.push_str("    if (which == NULL) {\n");
     out.push_str(
         "        fputs(\"neon: this is a test binary; set NEON_TEST to a test index\\n\", stderr);\n",
     );
     out.push_str("        return 2;\n    }\n");
-    out.push_str("    neon_rt_init();\n");
+    out.push_str("    neon_rt_init(argc, argv);\n");
     out.push_str("    switch (strtol(which, NULL, 10)) {\n");
     for (i, t) in tests.iter().enumerate() {
         let _ = writeln!(out, "    case {i}: {}(); return 0;", mangle(&t.symbol));
@@ -325,8 +326,10 @@ fn emit_inst(out: &mut String, types: &TypeTable, f: &Func, inst: &crate::ir::ss
         _ => {
             let rhs = op_rhs(types, f, inst.result, &inst.op);
             match inst.result {
-                // A void-typed result (a unit-returning call) is a bare statement.
-                Some(v) if !matches!(f.value_repr(v), Repr::Unit) => {
+                // A void-typed result is a bare statement: a unit-returning call, or a
+                // `never` one — `neon_os_exit` is C `void`, and its "result" is never
+                // read because the lowerer terminates the block right after the call.
+                Some(v) if !matches!(f.value_repr(v), Repr::Unit | Repr::Never) => {
                     let _ = writeln!(out, "{} = {};", var(v), rhs);
                 }
                 _ => {

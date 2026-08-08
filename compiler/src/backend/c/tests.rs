@@ -32,8 +32,8 @@ fn a_native_call_and_main_entry_emit() {
     );
     assert!(c.contains("neon_i64_to_string(_0)"), "{c}");
     assert!(c.contains("neon_io_println(_1)"), "{c}");
-    assert!(c.contains("int main(void)"), "{c}");
-    assert!(c.contains("neon_rt_init();"), "{c}");
+    assert!(c.contains("int main(int argc, char** argv)"), "{c}");
+    assert!(c.contains("neon_rt_init(argc, argv);"), "{c}");
     assert!(c.contains("nl_main();"), "{c}");
 }
 

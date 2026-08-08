@@ -1,0 +1,27 @@
+//@ env: NEON_CORPUS_SET=marker
+//@ env: NEON_CORPUS_EMPTY=
+// `os::env` answers `str | null`: a variable set to the empty string is `""`, a variable
+// not set at all is `null`. The OS keeps those states distinct and so does the API.
+
+use std::os;
+use std::io;
+use std::string;
+
+fn show(name: str) {
+    let v = os::env(name);
+    if v is str {
+        if string::is_empty(v) {
+            io::println("empty");
+        } else {
+            io::println(v);
+        };
+    } else {
+        io::println("unset");
+    };
+}
+
+fn main() {
+    show("NEON_CORPUS_SET");
+    show("NEON_CORPUS_EMPTY");
+    show("NEON_CORPUS_NOBODY_SETS_THIS_A9F2");
+}

@@ -795,9 +795,11 @@ segfault or a corrupted heap exactly as well as it contains an assertion.
 It also settles `main`: the entry point of a test build is generated, so a file holding only
 tests compiles and runs. A `main` that *is* present is compiled and never called.
 
-The selector is an environment variable rather than `argv` because every Neon program's
-entry point is `int main(void)`; `getenv` reaches the same information without giving test
-binaries a different entry signature from real ones.
+The selector is an environment variable rather than `argv` because `argv` belongs to the
+program under test: `os::args()` inside a test block must see the process's real command
+line, not a harness selector pretending to be one. `getenv` reaches the same information
+without stealing from that namespace. (Both entry points are `int main(int argc, char**
+argv)` and hand argv to the runtime — see "The process interface" under Values.)
 
 `assert_throws` works the way the earlier note here said it would have to: the checker
 treats it as a throw sink. Its argument is checked with the assertion as its handler — a
@@ -944,6 +946,49 @@ one — and `verify/src/fold.rs` proves the new arms match the emitted C for eve
 
 A `const` that refers to itself, directly or through others, is rejected before lowering.
 It has to be: lowering inlines initialisers, so a cycle would not terminate.
+
+### The process interface
+
+`std::os` is `args() -> List[str]`, `env(name) -> str | null`, and `exit(code) -> never`;
+`std::io` grew `read_line() -> str | null` and `read_all() -> str`. Both entry points are
+`int main(int argc, char** argv)`, and argv rides into the runtime through
+`neon_rt_init(argc, argv)` — arguments are initialization state, so "initialized but
+argless" is unrepresentable, and a caller with no command line (the C unit suites) passes
+`(0, NULL)`.
+
+**`args()[0]` is the program path.** That is what argv has meant since C, and every
+language that "fixed" it ships an `arg0` API to undo the fix. The arguments proper start
+at 1.
+
+**The boundary is lossy, and it is the only door.** A `str` is UTF-8 by decree; argv,
+`getenv` and stdin are bytes with no promises. Every byte string crossing over goes
+through one strict validator (overlongs, surrogates and beyond-U+10FFFF are as invalid as
+a stray `0xFF`), and each rejected byte becomes U+FFFD. Throwing was rejected because
+`args()` in a `try` is a tax on every CLI's first line for a case that is nearly always a
+filename; trapping was rejected because a weird inherited environment would kill the
+process before its first statement. Lossy is total, and never lets invalid bytes wear the
+`str` type. Valid argv converts zero-copy — an immortal literal over storage that lives
+as long as the process; env values are copied, because `getenv`'s buffer promises
+nothing.
+
+**`env` answers `str | null`, and empty is not unset.** The OS keeps "set to `""`" and
+"not set" distinct, so the API does; the runtime's `has_env`/`env_get` native pair is how
+a C `NULL` becomes a Neon `null` without the native needing to build a union.
+
+**`exit` is typed `never`** — the checker knows code after it is unreachable and joins
+need no value from an exiting branch. It flushes stdout and stderr, then ends the process
+with no teardown, exactly as a trap does: `exit` is the program ending on purpose, and
+the OS reclaims memory either way.
+
+**stdin never throws.** `read_line` strips `\n` and `\r\n` and answers `null` at end of
+input — EOF is the ordinary fate of piped input, not a fault. A genuine mid-read error
+also reads as end of input; that is the one lie `std::io` tells to stay total, and files,
+which must report their failures, are `std::fs`'s job. The natives hand values over one
+at a time (`argc`/`arg(i)`) and the stdlib assembles the `List[str]`, because building a
+list takes an element witness only compiled code has.
+
+The corpus pins this behind `//@ args:` and `//@ env: KEY=value` directives; the harness
+runs every corpus binary with null stdin, so EOF behaviour is testable too.
 
 ---
 

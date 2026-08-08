@@ -15,4 +15,4 @@
 
 #include "libneon_rt.h"
 
-__attribute__((constructor)) static void neon_rt_test_init(void) { neon_rt_init(); }
+__attribute__((constructor)) static void neon_rt_test_init(void) { neon_rt_init(0, NULL); }

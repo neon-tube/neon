@@ -20,6 +20,7 @@ set(NEON_RT_SOURCES
     src/list.c
     src/any.c
     src/map.c
+    src/os.c
 )
 
 # The runtime ships as prebuilt archives, one per build shape the CLI can ask for, so a
@@ -255,6 +256,7 @@ if(NEON_RT_TESTS)
         tests/file_test.c
         tests/trap_test.c
         tests/core_test.c
+        tests/os_test.c
     )
     # The rich assertion and TEST macros use GNU C (__auto_type, constructors, _Generic).
     set_target_properties(neon_rt_tests PROPERTIES C_STANDARD 11 C_EXTENSIONS ON)

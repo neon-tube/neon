@@ -1,0 +1,49 @@
+// The process: the arguments it was started with, the environment it inherited, and the
+// way out.
+//
+// Everything here crosses the boundary where text stops being `str` and becomes whatever
+// bytes the OS had. The runtime converts LOSSILY: a byte sequence that is not UTF-8
+// arrives with each offending byte replaced by U+FFFD. A throwing `args()` would put a
+// `try` in every CLI's first line, and a trapping one would make a weird inherited
+// environment fatal before `main`'s first statement runs -- replacement keeps these
+// functions total without ever letting invalid bytes pretend to be a `str`. See "The
+// process interface" in docs/decisions.md.
+
+use std::collections::list;
+
+internal mod raw {
+    @native("neon_os_argc") fn argc() -> i64
+    /// Traps out of range. `args` below is the only caller and loops to `argc`.
+    @native("neon_os_arg") fn arg(i: i64) -> str
+    @native("neon_os_has_env") fn has_env(name: str) -> bool
+    /// `""` when unset. `env` below asks `has_env` first, which is what keeps a variable
+    /// set to the empty string distinguishable from one that is not set at all.
+    @native("neon_os_env_get") fn env_get(name: str) -> str
+}
+
+/// The command line, program path first: `args()[0]` is how the program was invoked and
+/// the arguments proper start at 1, which is what argv has meant everywhere since C.
+/// Dropping the path here would only force the runtime to keep a second, shifted view of
+/// the same array, and every language that "fixed" this ships an `arg0` API to undo it.
+fn args() -> List[str] {
+    let n = raw::argc();
+    let out: List[str] = list::new_with_capacity(n);
+    let i = 0;
+    while i < n {
+        out = list::push(out, raw::arg(i));
+        i = i + 1;
+    };
+    out
+}
+
+/// The environment variable, or `null` when unset. A variable set to the empty string is
+/// `""`, not `null`: the OS keeps the two states distinct and so does this.
+fn env(name: str) -> str | null {
+    if raw::has_env(name) { raw::env_get(name) } else { null }
+}
+
+/// Ends the process now, with `code` as its exit status. Buffered output is flushed;
+/// nothing else runs -- no cleanup, no resource drops, exactly as a trap leaves. Typed
+/// `never` because no call to this returns, and the checker should know it: code after
+/// `os::exit(1)` is unreachable, and a branch that exits needs no value for the join.
+@native("neon_os_exit") fn exit(code: i64) -> never

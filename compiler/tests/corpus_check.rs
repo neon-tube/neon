@@ -73,6 +73,7 @@ fn directives(path: &Path, src: &str) -> Result<Directives, String> {
         error_contains: Vec::new(),
     };
     let mut exit = false;
+    let mut runs_with = false; // any `//@ args:` or `//@ env:`
 
     // Only the leading comment block: the one ending at the first line that is
     // neither blank nor a `//` comment. A `//@` later in the file is prose.
@@ -105,6 +106,28 @@ fn directives(path: &Path, src: &str) -> Result<Directives, String> {
                 ));
             }
             exit = true;
+        } else if let Some(s) = rest.strip_prefix("args:") {
+            // Whitespace-separated, no quoting: an argument with a space in it has no
+            // spelling here, and the corpus has yet to need one.
+            if s.trim().is_empty() {
+                return Err(format!("{}: `//@ args:` with no arguments", name(path)));
+            }
+            runs_with = true;
+        } else if let Some(s) = rest.strip_prefix("env:") {
+            // KEY=value, one per directive. An empty value is legal — `KEY=` sets the
+            // variable to "" and the unset/empty distinction is exactly what
+            // `os::env` tests need to pin.
+            match s.trim().split_once('=') {
+                Some((k, _)) if !k.trim().is_empty() => {}
+                _ => {
+                    return Err(format!(
+                        "{}: `//@ env: {}` is not KEY=value",
+                        name(path),
+                        s.trim()
+                    ));
+                }
+            }
+            runs_with = true;
         } else {
             return Err(format!("{}: unknown directive `//@ {rest}`", name(path)));
         }
@@ -121,6 +144,12 @@ fn directives(path: &Path, src: &str) -> Result<Directives, String> {
         if stdout {
             return Err(format!(
                 "{}: compile-fail file has a .stdout; it never runs",
+                name(path)
+            ));
+        }
+        if runs_with {
+            return Err(format!(
+                "{}: `//@ args:`/`//@ env:` on a compile-fail file; it never runs",
                 name(path)
             ));
         }

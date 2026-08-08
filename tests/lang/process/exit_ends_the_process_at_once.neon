@@ -1,0 +1,13 @@
+//@ exit: 7
+// `os::exit` is typed `never`: the process ends at the call, buffered output already
+// flushed, and nothing after it runs. The line after the exit is the assertion — if it
+// were reached, stdout would have a second line and the diff would say so.
+
+use std::os;
+use std::io;
+
+fn main() {
+    io::println("before");
+    os::exit(7);
+    io::println("after");
+}

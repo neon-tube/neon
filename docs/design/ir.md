@@ -576,10 +576,10 @@ first, because retrofitting SSA or effects later is a rewrite. What is deferred 
   would be a test aid, not a supported input.
 - **A threading story.** Single-threaded v1 with non-atomic counts; a `shared` bit in the
   header's `flags` is the room left for atomic counts later without an ABI break.
-- **Program-level teardown.** The C entry point is `int main(void) { neon_rt_init();
-  nl_main(); return 0; }`. There are no globals to release, `neon_rt_init` is an empty hook
-  for allocator setup, and there is no `atexit` teardown; `argc`/`argv` are not packed,
-  because `fn main()` takes none. Earlier drafts of this document described all four as
-  built. They are not.
+- **Program-level teardown.** The C entry point is `int main(int argc, char** argv) {
+  neon_rt_init(argc, argv); nl_main(); return 0; }`. There are no globals to release and
+  no `atexit` teardown; `neon_rt_init` stashes argv for `std::os` and sets stream modes,
+  nothing more. `fn main()` still takes no parameters — the command line is `os::args()`,
+  read on demand. Earlier drafts of this document described teardown as built. It is not.
 
 There is **no cycle collector, ever** — immutability makes it unnecessary, not deferred.

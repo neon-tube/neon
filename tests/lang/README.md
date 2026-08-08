@@ -22,6 +22,16 @@ behaviour, not send you spelunking.
 neither blank nor a `//` comment. Anything later is ignored.
 
     //@ exit: <n>                expected exit code of the binary. Default 0.
+    //@ args: <a> <b> ...        command-line arguments for the run, whitespace-separated
+                                 (no quoting; an argument with a space has no spelling
+                                 here). They appear from `os::args()[1]` on — index 0 is
+                                 the program path, which varies and must not be asserted.
+    //@ env: KEY=value           set one environment variable for the run. Repeatable.
+                                 `KEY=` sets the empty string, which `os::env` keeps
+                                 distinct from unset. The parent environment is inherited
+                                 too, so test names should be obscure enough not to
+                                 collide with it. stdin is always null: `io::read_line()`
+                                 answers `null` immediately.
     //@ compile-fail             compilation must fail. No .stdout needed; binary never run.
     //@ error-contains: <substr> checked against the diagnostic MESSAGES. Repeatable; all
                                  must match. ANSI codes are stripped first. Only with

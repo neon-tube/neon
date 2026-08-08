@@ -1,14 +1,45 @@
-// Console output. There are no bodies here: each `@native` names a symbol in libneon_rt,
-// and this file is only the signature the checker resolves against.
+// The standard streams: console output, and stdin as either lines or one string.
 //
 // Output is C stdio, so stdout is line-buffered to a terminal and block-buffered to a
 // pipe, while stderr is not. Redirect a program that uses both and its interleaving will
 // not match what the terminal showed you.
 //
-// Only `println` is implemented. `print` and `eprintln` name symbols libneon_rt does not
-// define, so a program that calls either fails at link time rather than at compile time --
-// the checker sees a well-formed native declaration and has nothing to object to.
+// Nothing here throws. stdin ending is the ordinary fate of every piped input, not a
+// fault, so `read_line` answers `null` rather than putting a `try` on every prompt; a
+// genuine read error (a descriptor closed mid-read) reads as end of input too, which is
+// the one lie this module tells to stay total. Files, which can fail in ways a caller
+// must hear about, are `std::fs`.
+
+use std::string;
 
 @native("neon_io_println") fn println(s: str)
 @native("neon_io_print") fn print(s: str)
 @native("neon_io_eprintln") fn eprintln(s: str)
+
+internal mod raw {
+    /// The line with its newline still on, `""` only at end of input: the newline is
+    /// what keeps a blank line distinguishable from EOF.
+    @native("neon_io_read_line_raw") fn read_line() -> str
+    @native("neon_io_read_all_stdin") fn read_all() -> str
+}
+
+/// One line from stdin, without its line ending; `null` at end of input.
+///
+/// Both `\n` and `\r\n` are stripped, so a file written on Windows reads the same lines
+/// everywhere. Invalid UTF-8 arrives as U+FFFD, the same lossy boundary as `os::args` --
+/// see std/os.neon.
+fn read_line() -> str | null {
+    let line = raw::read_line();
+    if string::is_empty(line) {
+        null
+    } else {
+        string::trim_end_of(string::trim_end_of(line, "\n"), "\r")
+    }
+}
+
+/// All of stdin, to end of input. `""` for empty input; line endings untouched, because
+/// "the whole input" is a promise about bytes, and `string::lines` already owns the
+/// splitting policy for callers who want lines.
+fn read_all() -> str {
+    raw::read_all()
+}

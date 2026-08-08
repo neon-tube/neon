@@ -245,6 +245,10 @@ paths/join.neon
 paths/normalize.neon
 paths/parent_and_file_name.neon
 paths/starts_with.neon
+process/args_start_after_the_program_path.neon
+process/env_keeps_empty_distinct_from_unset.neon
+process/exit_ends_the_process_at_once.neon
+process/read_line_is_null_at_end_of_input.neon
 protocols/a_marker_cannot_be_implemented.neon
 protocols/a_user_marker_named_ord_is_not_the_marker.neon
 protocols/a_variable_union_receiver_is_not_rigid.neon

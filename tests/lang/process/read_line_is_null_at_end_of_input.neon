@@ -1,0 +1,17 @@
+// The harness runs every corpus program with a null stdin, so end of input is
+// immediate: `read_line` is `null` on the first ask, and `read_all` is the empty
+// string. This is the EOF contract — `null` means the input ended, not that a line
+// was blank (a blank line is `""` after its newline is stripped, still a `str`).
+
+use std::io;
+use std::string;
+
+fn main() {
+    let line = io::read_line();
+    if line is null {
+        io::println("eof");
+    } else {
+        io::println("read something");
+    };
+    io::println("#{string::byte_len(io::read_all())}");
+}
