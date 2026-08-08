@@ -1064,6 +1064,33 @@ one renderer holding one file, and `TypeError` needed a file id. **Fixed:** it c
 `module`, so a stdlib mistake is rendered against the stdlib source rather than underlining
 an arbitrary token of the user's program.
 
+### A project is `src/**/*.neon`, and every file but the entry is a module
+
+`src/main.neon` is the program, at the root module path. Every other `.neon` under `src/`
+is a module named by its path — `src/util.neon` is `util`, `src/net/http.neon` is
+`net::http` — by exactly the rule the stdlib's files already follow, because it IS the
+same mechanism: project modules ride through the front end beside the stdlib's, get
+checked into the same `TypecheckResult`, and lower like any other code. There is no
+manifest listing of modules, no `mod` declaration ceremony, and nothing new to learn: one
+path-to-module rule covers `std/io.neon` and `src/util.neon` alike.
+
+The entry is not importable. It has no module name — the root path is anonymous on
+purpose — so `main.neon` can reach every module and no module can reach back. Anything
+two modules both want lives in a third; the entry stays a consumer, which is the
+direction dependencies should flow anyway.
+
+`neon check` (no file) checks the whole project through the same front end `build`
+compiles it with — the two verbs cannot disagree about what a project is — and it sees
+every module, referenced or not, so a broken file nobody imports yet still fails the
+check. `neon test` (no file) runs `test` blocks from every module, not just the entry:
+tests live next to the code they test. Diagnostics land on the owning file (`src/util.neon`,
+not the entry, not a fabricated span), and runtime `try!` prefixes name the module's file
+the same way. `fmt` and `--watch` already walked `src/` recursively; nothing changed there.
+
+A file's *content* decides nothing about its module identity — only its path does. A
+module named like a stdlib module (`src/string.neon`) is `string`, distinct from
+`std::string`, and both are usable in one program because the full paths never collided.
+
 ### `Error` owns `message`; `Display` is a separate concern
 
 `protocol Error for T where T: Display {}` welded two unrelated jobs together. `Display`

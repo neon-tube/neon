@@ -21,7 +21,7 @@
 use crate::buildcfg::{BuildConfig, BuildFlags};
 use crate::{emit, frontend};
 use color_eyre::eyre::{eyre, Result};
-use neon_compiler::ir::lower::test_entries;
+use neon_compiler::ir::lower::test_entries_with;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Command;
@@ -30,13 +30,27 @@ use std::process::Command;
 /// failure reads as an assertion failure and not as a runtime error.
 const PANIC_PREFIX: &str = "neon: uncaught error: ";
 
-pub fn run(file: &OsString, filter: Option<String>, flags: BuildFlags) -> Result<()> {
-    let path = PathBuf::from(file);
-    let checked = frontend::check(&path, false, &[])?;
-    let all = test_entries(&checked.module);
+pub fn run(file: Option<&OsString>, filter: Option<String>, flags: BuildFlags) -> Result<()> {
+    // A named file runs alone; no file means the whole project — the entry plus every
+    // `src/**/*.neon` module, so a test lives next to the code it tests and still runs.
+    let (path, checked) = match file {
+        Some(f) => {
+            let path = PathBuf::from(f);
+            let checked = frontend::check(&path, false, &[])?;
+            (path, checked)
+        }
+        None => {
+            let project = crate::project::Project::find(std::path::Path::new("."))?;
+            let modules = project.modules()?;
+            let checked = frontend::check_project(&project.entry(), &modules, false, &[])?;
+            (project.entry(), checked)
+        }
+    };
+    let libs: Vec<(Vec<String>, &_)> = checked.libs.iter().map(|(p, m)| (p.clone(), m)).collect();
+    let all = test_entries_with(&checked.module, &libs);
 
     // Filtering selects which tests to *run*, never which to compile: the indices the
-    // binary dispatches on are positions in the whole module, so they stay stable.
+    // binary dispatches on are positions in the whole program, so they stay stable.
     let selected: Vec<(usize, _)> = all
         .iter()
         .enumerate()

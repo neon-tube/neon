@@ -123,9 +123,12 @@ enum Command {
     },
     /// Parse a source file and print its syntax tree.
     Parse { file: OsString },
-    /// Type-check a source file. Prints nothing and exits 0 when it is well typed.
+    /// Type-check a source file, or the whole project when no file is named. Prints
+    /// nothing and exits 0 when it is well typed.
     Check {
-        file: OsString,
+        /// A `.neon` file; absent means the current project — the entry plus every
+        /// module under `src/`.
+        file: Option<OsString>,
         /// Check as something other programs may depend on, rather than as the
         /// root application. An `orphan impl` is rejected here: a library
         /// carrying one imposes its choice on every dependent.
@@ -191,9 +194,10 @@ enum Command {
         #[arg(last = true)]
         args: Vec<OsString>,
     },
-    /// Run a file's `test` blocks, one per line of output, and exit non-zero if any failed.
+    /// Run `test` blocks, one per line of output, and exit non-zero if any failed.
     Test {
-        /// A `.neon` file; absent means the current project's entry point.
+        /// A `.neon` file; absent means the current project — the entry plus every
+        /// module under `src/`, so tests live next to the code they test.
         file: Option<OsString>,
         /// Re-run on every source change.
         #[arg(long)]
@@ -258,7 +262,7 @@ fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Lex { file, spans } => cmd::lex::run(&file, spans),
         Command::Parse { file } => cmd::parse::run(&file),
-        Command::Check { file, lib, cfg } => cmd::check::run(&file, lib, &cfg),
+        Command::Check { file, lib, cfg } => cmd::check::run(file.as_ref(), lib, &cfg),
         Command::Fmt { file, write, check } => cmd::fmt::run(file.as_ref(), write, check),
         Command::Ir { file, stage } => cmd::ir::run(&file, stage.into()),
         Command::Init { name } => cmd::init::run(name),
@@ -288,13 +292,7 @@ fn main() -> Result<()> {
             if watch {
                 return cmd::watch::rerun_on_change(cmd::watch::watch_set(file.as_ref()));
             }
-            let file = match file {
-                Some(f) => f,
-                None => crate::project::Project::find(std::path::Path::new("."))?
-                    .entry()
-                    .into_os_string(),
-            };
-            cmd::test::run(&file, filter, build.into())
+            cmd::test::run(file.as_ref(), filter, build.into())
         }
         Command::Doc { target } => cmd::doc::run(target.as_ref()),
         Command::Sysroot { stdlib } => cmd::sysroot::run(stdlib),

@@ -58,6 +58,22 @@ impl Project {
         self.root.join("src/main.neon")
     }
 
+    /// Every project source EXCEPT the entry, as `(src-relative path, absolute path)`,
+    /// sorted for a stable module order. The relative path names the module exactly as a
+    /// stdlib file's does — `src/util.neon` is `util`, `src/net/http.neon` is
+    /// `net::http` — so one rule covers both and there is nothing new to learn.
+    /// `main.neon` is not a module: it is the program, at the root path, and other
+    /// modules cannot import it.
+    pub fn modules(&self) -> Result<Vec<(String, PathBuf)>> {
+        let src = self.root.join("src");
+        let mut out = Vec::new();
+        if src.is_dir() {
+            collect_modules(&src, &src, &mut out)?;
+        }
+        out.sort();
+        Ok(out)
+    }
+
     /// The build output directory, created on demand. Named `_neon` — a leading
     /// underscore sorts it aside and reads as "tooling, not source".
     pub fn target_dir(&self) -> PathBuf {
@@ -69,4 +85,24 @@ impl Project {
     pub fn executable(&self) -> PathBuf {
         crate::emit::executable_path(self.target_dir().join(&self.name))
     }
+}
+
+fn collect_modules(src_root: &Path, dir: &Path, out: &mut Vec<(String, PathBuf)>) -> Result<()> {
+    for entry in std::fs::read_dir(dir).map_err(|e| eyre!("reading '{}': {e}", dir.display()))? {
+        let path = entry?.path();
+        if path.is_dir() {
+            collect_modules(src_root, &path, out)?;
+        } else if path.extension().is_some_and(|e| e == "neon") {
+            let rel = path
+                .strip_prefix(src_root)
+                .expect("collected under src")
+                .to_string_lossy()
+                .replace('\\', "/");
+            if rel == "main.neon" {
+                continue;
+            }
+            out.push((rel, path));
+        }
+    }
+    Ok(())
 }

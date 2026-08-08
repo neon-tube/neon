@@ -26,10 +26,21 @@ pub struct Checked {
     pub libs: Vec<(Vec<String>, ast::Module)>,
 }
 
+/// How a non-root module's source is labelled in a diagnostic: a stdlib file behind its
+/// `<stdlib>/` veil (its absolute path is a machine detail), a project module by where
+/// it actually is.
+fn shown_path(rel: &str) -> std::path::PathBuf {
+    if rel.starts_with("std/") || rel == "prelude.neon" {
+        std::path::PathBuf::from(format!("<stdlib>/{rel}"))
+    } else {
+        std::path::PathBuf::from(format!("src/{rel}"))
+    }
+}
+
 /// Render a type error against the file its span actually indexes: the user's program
-/// when the error's module is the root, the owning stdlib source otherwise. Before
-/// this, a stdlib mistake rendered with the user's path and underlined whatever token
-/// sat at that byte offset in the user's file.
+/// when the error's module is the root, the owning stdlib or project-module source
+/// otherwise. Before this, a stdlib mistake rendered with the user's path and underlined
+/// whatever token sat at that byte offset in the user's file.
 pub fn eprint_type_error(
     e: &neon_compiler::typecheck::env::TypeError,
     user_path: &Path,
@@ -45,7 +56,7 @@ pub fn eprint_type_error(
         .flatten();
     match stdlib {
         Some((rel, src)) => {
-            let shown = std::path::PathBuf::from(format!("<stdlib>/{rel}"));
+            let shown = shown_path(rel);
             let mut r = Renderer::for_stderr(&shown, src);
             r.eprint_full(
                 e.span.clone(),
@@ -85,7 +96,7 @@ pub fn eprint_warnings(
             .flatten();
         match stdlib {
             Some((rel, wsrc)) => {
-                let shown = std::path::PathBuf::from(format!("<stdlib>/{rel}"));
+                let shown = shown_path(rel);
                 let mut r = Renderer::for_stderr(&shown, wsrc);
                 r.eprint_warning(w.span.clone(), &w.message);
             }
@@ -102,10 +113,14 @@ pub fn eprint_warnings(
 /// the checker, so without this the branch for another platform can be neither checked nor
 /// built here — see `Config::for_host`.
 pub fn check(path: &Path, lib: bool, cfg: &[String]) -> Result<Checked> {
-    let src = source::read(path)?;
-    let mut r = Renderer::for_stderr(path, &src);
+    check_project(path, &[], lib, cfg)
+}
 
-    let tokens = match lexer::lex(&src) {
+/// Lex, parse and expand one source, rendering diagnostics against its own file and
+/// exiting on any. The front half every module goes through, entry or extra.
+fn parse_one(path: &Path, src: &str, config: &neon_compiler::expand::Config) -> ast::Module {
+    let mut r = Renderer::for_stderr(path, src);
+    let tokens = match lexer::lex(src) {
         Ok(t) => t,
         Err(errors) => {
             for e in &errors {
@@ -122,27 +137,65 @@ pub fn check(path: &Path, lib: bool, cfg: &[String]) -> Result<Checked> {
         std::process::exit(1);
     }
     let module = module.expect("no errors means a module");
-
-    let config = neon_compiler::expand::Config::for_host(cfg.iter().cloned());
-    let (module, _meta, expand_errors) = neon_compiler::expand::expand(module, &config);
+    let (module, _meta, expand_errors) = neon_compiler::expand::expand(module, config);
     if !expand_errors.is_empty() {
         for e in &expand_errors {
             r.eprint(e.span.clone(), &e.message);
         }
         std::process::exit(1);
     }
+    module
+}
 
-    // The stdlib is numbered first and the program after it, so every `ExprId` in the
-    // compilation is unique — one `TypecheckResult` covers both, and stdlib bodies can be
-    // checked and lowered like any other code.
+/// Type-check a project: the entry at the root path plus `extras` — the other
+/// `src/**/*.neon` files as `(src-relative path, absolute path)` — each becoming the
+/// module its path names, by the same rule the stdlib's files follow. A lone file is a
+/// project with no extras.
+pub fn check_project(
+    path: &Path,
+    extras: &[(String, std::path::PathBuf)],
+    lib: bool,
+    cfg: &[String],
+) -> Result<Checked> {
+    let config = neon_compiler::expand::Config::for_host(cfg.iter().cloned());
+    let src = source::read(path)?;
+    let module = parse_one(path, &src, &config);
+
+    // The other project files, each rendered against its own path on error.
+    let mut extra_sources: Vec<(String, String)> = Vec::new();
+    let mut extra_modules: Vec<ast::Module> = Vec::new();
+    for (rel, abs) in extras {
+        let esrc = source::read(abs)?;
+        extra_modules.push(parse_one(abs, &esrc, &config));
+        extra_sources.push((rel.clone(), esrc));
+    }
+
+    // The stdlib is numbered first, project modules after it, the entry last, so every
+    // `ExprId` in the compilation is unique — one `TypecheckResult` covers all of it,
+    // and every body can be checked and lowered like any other code.
     let std_sources = crate::stdlib::sources()?;
-    let (std_modules, next_id) = neon_compiler::stdlib::parse_from_with(&std_sources, 0, &config)
-        .map_err(|e| eyre!("{e}"))?;
+    let (std_modules, mut next_id) =
+        neon_compiler::stdlib::parse_from_with(&std_sources, 0, &config)
+            .map_err(|e| eyre!("{e}"))?;
+    for m in &mut extra_modules {
+        next_id = neon_compiler::ast::number_exprs_from(m, next_id);
+    }
     let mut module = module;
     neon_compiler::ast::number_exprs_from(&mut module, next_id);
 
-    let mut modules: Vec<(Vec<String>, &_)> =
-        std_modules.iter().map(|(p, m)| (p.clone(), m)).collect();
+    // Project modules ride in `libs` beside the stdlib's: they are exactly that — modules
+    // whose bodies get checked and lowered, distinguished only by who wrote them.
+    let mut libs = std_modules;
+    for ((rel, _), m) in extras.iter().zip(extra_modules) {
+        libs.push((neon_compiler::stdlib::module_path(rel), m));
+    }
+
+    // One list for diagnostics: an error's module path finds its file here whether it
+    // is the stdlib's or the project's.
+    let mut all_sources = std_sources;
+    all_sources.extend(extra_sources);
+
+    let mut modules: Vec<(Vec<String>, &_)> = libs.iter().map(|(p, m)| (p.clone(), m)).collect();
     modules.push((Vec::new(), &module));
 
     let unit = if lib {
@@ -153,7 +206,7 @@ pub fn check(path: &Path, lib: bool, cfg: &[String]) -> Result<Checked> {
     let mut env = Env::build_with(&modules, unit);
     if !env.errors().is_empty() {
         for e in env.errors() {
-            eprint_type_error(e, path, &src, &std_sources);
+            eprint_type_error(e, path, &src, &all_sources);
         }
         std::process::exit(1);
     }
@@ -162,19 +215,19 @@ pub fn check(path: &Path, lib: bool, cfg: &[String]) -> Result<Checked> {
     let (result, errs) = neon_compiler::typecheck::check::check_all(&mut env, &modules);
     if !errs.is_empty() {
         for e in &errs {
-            eprint_type_error(e, path, &src, &std_sources);
+            eprint_type_error(e, path, &src, &all_sources);
         }
         std::process::exit(1);
     }
-    // Warnings render like errors — against the owning source, stdlib or user — and
-    // change nothing else: the compile continues.
-    eprint_warnings(&result.warnings, path, &src, &std_sources);
+    // Warnings render like errors — against the owning source, stdlib, project module or
+    // entry — and change nothing else: the compile continues.
+    eprint_warnings(&result.warnings, path, &src, &all_sources);
     Ok(Checked {
         env,
         result,
         source: neon_compiler::ir::lower::SourceMap::new(
             neon_compiler::ir::lower::SourceInfo::new(&path.display().to_string(), &src),
-            std_sources
+            all_sources
                 .iter()
                 .map(|(rel, text)| {
                     (
@@ -185,6 +238,6 @@ pub fn check(path: &Path, lib: bool, cfg: &[String]) -> Result<Checked> {
                 .collect(),
         ),
         module,
-        libs: std_modules,
+        libs,
     })
 }

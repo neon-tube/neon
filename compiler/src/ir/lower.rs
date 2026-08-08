@@ -531,6 +531,17 @@ pub struct TestEntry {
 /// exists — `neon test` calls this to learn the names, and lowering calls it to decide what
 /// to emit, so an index means the same block on both sides.
 pub fn test_entries(module: &ast::Module) -> Vec<TestEntry> {
+    test_entries_with(module, &[])
+}
+
+/// `test_entries` over a whole program: the root module, then each lib in order — the
+/// order lowering collects blocks in, so the runner's index N and the binary's
+/// `__neon_test_N` are the same block. Project modules carry tests like any file; the
+/// stdlib contributes none today, and would be walked the same way if it ever did.
+pub fn test_entries_with(
+    module: &ast::Module,
+    libs: &[(Vec<String>, &ast::Module)],
+) -> Vec<TestEntry> {
     fn walk(decls: &[Decl], out: &mut Vec<TestEntry>) {
         for d in decls {
             match &d.kind {
@@ -548,6 +559,9 @@ pub fn test_entries(module: &ast::Module) -> Vec<TestEntry> {
     }
     let mut out = Vec::new();
     walk(&module.decls, &mut out);
+    for (_, m) in libs {
+        walk(&m.decls, &mut out);
+    }
     out
 }
 
@@ -597,11 +611,15 @@ pub fn lower_module_with<'a>(
     }
 
     // `test` blocks, in test mode only. Each is a nullary unit function; the entry point
-    // the backend emits is the only caller.
+    // the backend emits is the only caller. Root first, then libs, in the same order
+    // `test_entries_with` numbers them — index N here IS `__neon_test_N` there.
     if tests {
         let mut blocks: Vec<(Vec<String>, &'a ast::TestBlock)> = Vec::new();
         collect_test_blocks(&[], &module.decls, &mut blocks);
-        for (entry, (m, t)) in test_entries(module).into_iter().zip(blocks) {
+        for (path, m) in libs {
+            collect_test_blocks(path, &m.decls, &mut blocks);
+        }
+        for (entry, (m, t)) in test_entries_with(module, libs).into_iter().zip(blocks) {
             let (func, l, i) = lower_test_block(env, result, source, &m, t, entry.symbol);
             lowered.insert(func.name.clone());
             funcs.push(func);

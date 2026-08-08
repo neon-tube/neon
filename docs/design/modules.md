@@ -1,7 +1,10 @@
 # Modules and visibility
 
-Module paths come from file paths (`stdlib/std/io.neon` is `std::io`) and from inline
-`mod` blocks, which nest inside the module that contains them.
+Module paths come from file paths (`stdlib/std/io.neon` is `std::io`; a project's
+`src/util.neon` is `util` and `src/net/http.neon` is `net::http`, by the same rule) and
+from inline `mod` blocks, which nest inside the module that contains them. The entry
+`src/main.neon` is the root module, whose path is anonymous: it can import every module
+and no module can import it.
 
 A module path is not just a namespace. It is the **identity** two other rules are decided
 against: whether an `internal mod`'s contents are reachable, and whether an `opaque`

@@ -7,7 +7,16 @@ use neon_compiler::{lexer, parser};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-pub fn run(file: &OsString, lib: bool, cfg: &[String]) -> Result<()> {
+pub fn run(file: Option<&OsString>, lib: bool, cfg: &[String]) -> Result<()> {
+    // No file: check the whole project — the entry plus every `src/**/*.neon` module —
+    // through the same front end `build` uses, so the two verbs cannot disagree about
+    // what a project is. It exits with rendered diagnostics on any error.
+    let Some(file) = file else {
+        let project = crate::project::Project::find(std::path::Path::new("."))?;
+        let modules = project.modules()?;
+        crate::frontend::check_project(&project.entry(), &modules, lib, cfg)?;
+        return Ok(());
+    };
     let path = PathBuf::from(file);
     let src = source::read(&path)?;
     let mut r = Renderer::for_stderr(&path, &src);
