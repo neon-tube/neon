@@ -43,6 +43,7 @@ pub fn to_executable(checked: &Checked, out: &Path, cfg: &BuildConfig) -> Result
         &checked.module,
         &libs,
         Stage::Final,
+        Some(&checked.source),
     );
     link(&c::emit(&program), out, cfg)
 }
@@ -58,7 +59,13 @@ pub fn to_test_executable(
     cfg: &BuildConfig,
 ) -> Result<()> {
     let libs: Vec<(Vec<String>, &_)> = checked.libs.iter().map(|(p, m)| (p.clone(), m)).collect();
-    let program = ir::compile_tests(&checked.env, &checked.result, &checked.module, &libs);
+    let program = ir::compile_tests(
+        &checked.env,
+        &checked.result,
+        &checked.module,
+        &libs,
+        Some(&checked.source),
+    );
     link(&c::emit_tests(&program, tests), out, cfg)
 }
 

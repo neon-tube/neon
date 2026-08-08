@@ -98,7 +98,7 @@ fn expected_pass() -> Vec<String> {
 }
 
 /// The C source for a corpus file, or an error string if it does not check clean.
-fn emit_c(src: &str) -> Result<String, String> {
+fn emit_c(name: &str, src: &str) -> Result<String, String> {
     let tokens = lexer::lex(src).map_err(|_| "lex error".to_string())?;
     let (module, perrs) = parser::parse(&tokens, src.len());
     if !perrs.is_empty() {
@@ -133,19 +133,39 @@ fn emit_c(src: &str) -> Result<String, String> {
         return Err(format!("type errors: {errs:?}"));
     }
     let libs: Vec<(Vec<String>, &_)> = std_owned.iter().map(|(p, m)| (p.clone(), m)).collect();
+    // The same SourceMap the CLI hands lowering, so an assertion's file:line in a
+    // corpus binary matches what `neon run` would print — stdlib modules included.
+    let source = neon_compiler::ir::lower::SourceMap::new(
+        neon_compiler::ir::lower::SourceInfo::new(name, src),
+        {
+            let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../stdlib");
+            let mut sources = Vec::new();
+            collect_neon(&root, &root, &mut sources);
+            sources
+        }
+        .iter()
+        .map(|(rel, text)| {
+            (
+                neon_compiler::stdlib::module_path(rel),
+                neon_compiler::ir::lower::SourceInfo::new(rel, text),
+            )
+        })
+        .collect(),
+    );
     Ok(c::emit(&ir::compile(
         &env,
         &result,
         &module,
         &libs,
         Stage::Final,
+        Some(&source),
     )))
 }
 
 /// Compile a corpus program to C, build it with `cc`, run it, and diff against `.stdout`.
 fn run_one(dir: &Path, rel: &str) -> Result<(), Failed> {
     let src = std::fs::read_to_string(lang_root().join(rel)).expect("readable");
-    let c = emit_c(&src).map_err(|e| Failed::from(format!("emit: {e}")))?;
+    let c = emit_c(rel, &src).map_err(|e| Failed::from(format!("emit: {e}")))?;
 
     let stem = rel.replace(['/', '.'], "_");
     let c_file = dir.join(format!("{stem}.c"));

@@ -103,7 +103,7 @@ fn report() {
         // a second live reference -- and no sound reading of a bare `Op::Retain` can tell
         // the two apart. Asking at `Stage::Optimised` means the question is put to the IR
         // that still describes ownership rather than its accounting.
-        let program = ir::compile(&env, &result, &module, &libs, Stage::Optimised);
+        let program = ir::compile(&env, &result, &module, &libs, Stage::Optimised, None);
         let found = ir::unique::candidates(&program);
         if std::env::var("UNIQ_DEBUG").is_ok() {
             for f in &program.funcs {

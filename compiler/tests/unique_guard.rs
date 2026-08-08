@@ -53,7 +53,7 @@ fn compile(src: &str, stage: Stage) -> ir::ssa::Program {
     let (result, errs) = check_all(&mut env, &modules);
     assert!(errs.is_empty(), "checks: {errs:?}");
     let libs: Vec<(Vec<String>, &_)> = std_owned.iter().map(|(p, m)| (p.clone(), m)).collect();
-    ir::compile(&env, &result, &module, &libs, stage)
+    ir::compile(&env, &result, &module, &libs, stage, None)
 }
 
 /// The candidates the analysis reports for one function of a program, asked — as the

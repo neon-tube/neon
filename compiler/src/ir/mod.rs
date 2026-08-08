@@ -48,8 +48,9 @@ pub fn compile(
     module: &Module,
     libs: &[(Vec<String>, &Module)],
     stage: Stage,
+    source: Option<&lower::SourceMap>,
 ) -> Program {
-    compile_with(env, result, module, libs, stage, false)
+    compile_with(env, result, module, libs, stage, false, source)
 }
 
 /// `compile`, for `neon test`: `test` blocks are lowered as functions instead of stripped.
@@ -62,8 +63,9 @@ pub fn compile_tests(
     result: &TypecheckResult,
     module: &Module,
     libs: &[(Vec<String>, &Module)],
+    source: Option<&lower::SourceMap>,
 ) -> Program {
-    compile_with(env, result, module, libs, Stage::Final, true)
+    compile_with(env, result, module, libs, Stage::Final, true, source)
 }
 
 fn compile_with(
@@ -73,8 +75,9 @@ fn compile_with(
     libs: &[(Vec<String>, &Module)],
     stage: Stage,
     tests: bool,
+    source: Option<&lower::SourceMap>,
 ) -> Program {
-    let mut program = lower::lower_module_with(env, result, module, libs, tests);
+    let mut program = lower::lower_module_with(env, result, module, libs, tests, source);
     if stage == Stage::Lowered {
         return program;
     }

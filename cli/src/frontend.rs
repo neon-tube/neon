@@ -16,6 +16,10 @@ use std::path::Path;
 pub struct Checked {
     pub env: Env,
     pub result: TypecheckResult,
+    /// For the `file:line:` prefixes lowering bakes into panic messages: the user's
+    /// file plus every stdlib module's, each by basename so no checkout path reaches a
+    /// binary — and a stdlib `try!` reports the stdlib file, not a bogus user line.
+    pub source: neon_compiler::ir::lower::SourceMap,
     pub module: ast::Module,
     /// The stdlib, by module path. Kept because its function *bodies* have to be lowered:
     /// the stdlib is real Neon code now, not only `@native` signatures.
@@ -168,6 +172,18 @@ pub fn check(path: &Path, lib: bool, cfg: &[String]) -> Result<Checked> {
     Ok(Checked {
         env,
         result,
+        source: neon_compiler::ir::lower::SourceMap::new(
+            neon_compiler::ir::lower::SourceInfo::new(&path.display().to_string(), &src),
+            std_sources
+                .iter()
+                .map(|(rel, text)| {
+                    (
+                        neon_compiler::stdlib::module_path(rel),
+                        neon_compiler::ir::lower::SourceInfo::new(rel, text),
+                    )
+                })
+                .collect(),
+        ),
         module,
         libs: std_modules,
     })

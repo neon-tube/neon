@@ -58,6 +58,65 @@ struct Handler {
     mutated: Vec<String>,
 }
 
+/// Where a compilation's text came from, for the `file:line:` prefixes baked into
+/// panic messages — an assertion, a `TODO`, a `try!` — at compile time. Per MODULE,
+/// because stdlib bodies lower into every program and their spans index the stdlib's
+/// own files: looking a stdlib `try!` up in the user's line table would print a
+/// confidently wrong location.
+///
+/// `None` throughout lowering (the unit tests, `effects`' harness) simply omits the
+/// prefixes; the real front ends all pass one.
+pub struct SourceMap {
+    /// The user's program — the module at the root path.
+    user: SourceInfo,
+    /// Each stdlib module's file, by module path.
+    libs: Vec<(Vec<String>, SourceInfo)>,
+}
+
+impl SourceMap {
+    pub fn new(user: SourceInfo, libs: Vec<(Vec<String>, SourceInfo)>) -> SourceMap {
+        SourceMap { user, libs }
+    }
+
+    fn for_module(&self, module: &[String]) -> Option<&SourceInfo> {
+        if module.is_empty() {
+            return Some(&self.user);
+        }
+        self.libs.iter().find(|(m, _)| m == module).map(|(_, s)| s)
+    }
+}
+
+/// One file's name and line table. The name is the BASENAME of what the driver was
+/// handed, deliberately: an absolute path would embed the checkout into every binary
+/// and make two builds of one program differ.
+pub struct SourceInfo {
+    file: String,
+    /// Byte offset of each line start, for offset -> 1-based line.
+    line_starts: Vec<usize>,
+}
+
+impl SourceInfo {
+    pub fn new(path: &str, src: &str) -> SourceInfo {
+        let file = std::path::Path::new(path)
+            .file_name()
+            .map(|f| f.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.to_string());
+        let mut line_starts = vec![0];
+        line_starts.extend(
+            src.char_indices()
+                .filter(|&(_, c)| c == '\n')
+                .map(|(i, _)| i + 1),
+        );
+        SourceInfo { file, line_starts }
+    }
+
+    /// `file:line` for a byte offset, the spelling every location prefix uses.
+    fn at(&self, offset: usize) -> String {
+        let line = self.line_starts.partition_point(|&s| s <= offset);
+        format!("{}:{line}", self.file)
+    }
+}
+
 /// A concrete instance of a generic function, discovered at a call site. Monomorphisation
 /// specialises the generic body under `subst`, mapping each generic parameter name to the
 /// concrete `Repr` it was called with.
@@ -453,7 +512,7 @@ pub fn lower_module<'a>(
     module: &'a ast::Module,
     libs: &[(Vec<String>, &'a ast::Module)],
 ) -> Program {
-    lower_module_with(env, result, module, libs, false)
+    lower_module_with(env, result, module, libs, false, None)
 }
 
 /// One `test "name" { .. }` block, in the order `lower_module_with` emits them.
@@ -503,6 +562,7 @@ pub fn lower_module_with<'a>(
     module: &'a ast::Module,
     libs: &[(Vec<String>, &'a ast::Module)],
     tests: bool,
+    source: Option<&SourceMap>,
 ) -> Program {
     let mut funcs = Vec::new();
     let mut lambda_jobs: Vec<LambdaJob> = Vec::new();
@@ -529,7 +589,7 @@ pub fn lower_module_with<'a>(
         if !f.generics.is_empty() {
             continue;
         }
-        let (func, l, i) = lower_fn(env, result, &m, f);
+        let (func, l, i) = lower_fn(env, result, source, &m, f);
         lowered.insert(func.name.clone());
         funcs.push(func);
         lambda_jobs.extend(l);
@@ -542,7 +602,7 @@ pub fn lower_module_with<'a>(
         let mut blocks: Vec<(Vec<String>, &'a ast::TestBlock)> = Vec::new();
         collect_test_blocks(&[], &module.decls, &mut blocks);
         for (entry, (m, t)) in test_entries(module).into_iter().zip(blocks) {
-            let (func, l, i) = lower_test_block(env, result, &m, t, entry.symbol);
+            let (func, l, i) = lower_test_block(env, result, source, &m, t, entry.symbol);
             lowered.insert(func.name.clone());
             funcs.push(func);
             lambda_jobs.extend(l);
@@ -573,7 +633,7 @@ pub fn lower_module_with<'a>(
             }
             let name = mangle_impl(&proto, &head, &m.name);
             if let Some(fd) = impl_bodies.get(&name) {
-                let (func, l, i) = lower_method(env, result, &impl_def.module, fd, m, name);
+                let (func, l, i) = lower_method(env, result, source, &impl_def.module, fd, m, name);
                 lowered.insert(func.name.clone());
                 funcs.push(func);
                 lambda_jobs.extend(l);
@@ -588,7 +648,7 @@ pub fn lower_module_with<'a>(
             if !lowered.insert(job.name.clone()) {
                 continue;
             }
-            let (func, l, i) = lower_lambda_job(env, result, job);
+            let (func, l, i) = lower_lambda_job(env, result, source, job);
             funcs.push(func);
             lambda_jobs.extend(l);
             instance_jobs.extend(i);
@@ -598,7 +658,9 @@ pub fn lower_module_with<'a>(
             if !lowered.insert(job.mangled.clone()) {
                 continue;
             }
-            if let Some((func, l, i)) = lower_instance(env, result, &all_fns, &impl_bodies, job) {
+            if let Some((func, l, i)) =
+                lower_instance(env, result, source, &all_fns, &impl_bodies, job)
+            {
                 funcs.push(func);
                 lambda_jobs.extend(l);
                 instance_jobs.extend(i);
@@ -683,6 +745,7 @@ fn collect_all_fns(
 fn lower_instance(
     env: &Env,
     result: &TypecheckResult,
+    source: Option<&SourceMap>,
     all_fns: &std::collections::HashMap<(Vec<String>, String), ast::FnDecl>,
     impl_bodies: &std::collections::HashMap<String, &ast::FnDecl>,
     job: InstanceJob,
@@ -709,6 +772,7 @@ fn lower_instance(
     let mut lo = Lower::with_subst(
         env,
         result,
+        source,
         job.module.clone(),
         job.mangled.clone(),
         ret_repr.clone(),
@@ -1009,13 +1073,14 @@ fn default_bodies<'a>(
 fn lower_method(
     env: &Env,
     result: &TypecheckResult,
+    source: Option<&SourceMap>,
     module: &[String],
     f: &ast::FnDecl,
     sig: &crate::typecheck::env::FnSig,
     name: String,
 ) -> (Func, Vec<LambdaJob>, Vec<InstanceJob>) {
     let ret_repr = repr_of(&env.solver.t, sig.ret);
-    let mut lo = Lower::new(env, result, module.to_vec(), name, ret_repr.clone());
+    let mut lo = Lower::new(env, result, source, module.to_vec(), name, ret_repr.clone());
     set_throws(&mut lo.b, env, sig.throws, &Default::default());
     let mut params = Vec::new();
     for (i, p) in f.params.iter().enumerate() {
@@ -1059,6 +1124,7 @@ fn lower_method(
 fn lower_fn(
     env: &Env,
     result: &TypecheckResult,
+    source: Option<&SourceMap>,
     module: &[String],
     f: &ast::FnDecl,
 ) -> (Func, Vec<LambdaJob>, Vec<InstanceJob>) {
@@ -1074,6 +1140,7 @@ fn lower_fn(
     let mut lo = Lower::new(
         env,
         result,
+        source,
         module.to_vec(),
         mangle(module, &f.name),
         ret_repr.clone(),
@@ -1143,11 +1210,12 @@ fn collect_test_blocks<'a>(
 fn lower_test_block(
     env: &Env,
     result: &TypecheckResult,
+    source: Option<&SourceMap>,
     module: &[String],
     t: &ast::TestBlock,
     symbol: String,
 ) -> (Func, Vec<LambdaJob>, Vec<InstanceJob>) {
-    let mut lo = Lower::new(env, result, module.to_vec(), symbol, Repr::Unit);
+    let mut lo = Lower::new(env, result, source, module.to_vec(), symbol, Repr::Unit);
     lo.b.switch_to(BlockId(0));
     lo.lower_block(&t.body);
     if !lo.terminated {
@@ -1165,6 +1233,7 @@ fn lower_test_block(
 fn lower_lambda_job(
     env: &Env,
     result: &TypecheckResult,
+    source: Option<&SourceMap>,
     job: LambdaJob,
 ) -> (Func, Vec<LambdaJob>, Vec<InstanceJob>) {
     let ExprKind::Lambda {
@@ -1202,6 +1271,7 @@ fn lower_lambda_job(
     let mut lo = Lower::with_subst(
         env,
         result,
+        source,
         job.module.clone(),
         job.name.clone(),
         ret_repr.clone(),
@@ -1268,6 +1338,8 @@ fn lower_lambda_job(
 struct Lower<'a> {
     env: &'a Env,
     result: &'a TypecheckResult,
+    /// For `file:line` prefixes on compile-time-built panic messages; `None` omits them.
+    source: Option<&'a SourceMap>,
     /// The module the current function is in, for resolving call targets.
     module: Vec<String>,
     b: Builder,
@@ -1295,11 +1367,20 @@ impl<'a> Lower<'a> {
     fn new(
         env: &'a Env,
         result: &'a TypecheckResult,
+        source: Option<&'a SourceMap>,
         module: Vec<String>,
         fn_name: String,
         ret: Repr,
     ) -> Self {
-        Self::with_subst(env, result, module, fn_name, ret, Default::default())
+        Self::with_subst(
+            env,
+            result,
+            source,
+            module,
+            fn_name,
+            ret,
+            Default::default(),
+        )
     }
 
     /// As `new`, for a generic instance: `subst` binds the instance's type parameters and
@@ -1307,6 +1388,7 @@ impl<'a> Lower<'a> {
     fn with_subst(
         env: &'a Env,
         result: &'a TypecheckResult,
+        source: Option<&'a SourceMap>,
         module: Vec<String>,
         fn_name: String,
         ret: Repr,
@@ -1315,6 +1397,7 @@ impl<'a> Lower<'a> {
         Lower {
             env,
             result,
+            source,
             module,
             b: Builder::new(fn_name, ret),
             scope: vec![vec![]],
@@ -1676,10 +1759,11 @@ impl Lower<'_> {
             // `TODO("why")` — panic with the message, then `Unreachable`. Typed `never`, so
             // there is no value to produce and nothing after it runs.
             ExprKind::Todo(msg) => {
+                let at = self.at(&e.span);
                 let text = if msg.is_empty() {
-                    "TODO: this is not implemented".to_string()
+                    format!("{at}TODO: this is not implemented")
                 } else {
-                    format!("TODO: {msg}")
+                    format!("{at}TODO: {msg}")
                 };
                 let m = self.b.emit(Op::ConstStr(text), Repr::Str, ty);
                 self.b.emit_void(Op::Native {
@@ -1747,8 +1831,9 @@ impl Lower<'_> {
 
         self.b.switch_to(fail);
         self.terminated = false;
+        let at = args.first().map(|a| self.at(&a.span)).unwrap_or_default();
         let mut msg = self.b.emit(
-            Op::ConstStr(format!("assertion failed: {text}")),
+            Op::ConstStr(format!("{at}assertion failed: {text}")),
             Repr::Str,
             ty,
         );
@@ -1812,7 +1897,10 @@ impl Lower<'_> {
         // Still running after the argument: nothing threw, and that is the failure.
         if !self.terminated {
             let msg = self.b.emit(
-                Op::ConstStr(format!("assertion failed: expected `{text}` to throw")),
+                Op::ConstStr(format!(
+                    "{}assertion failed: expected `{text}` to throw",
+                    self.at(&arg.span)
+                )),
                 Repr::Str,
                 ty,
             );
@@ -2995,7 +3083,22 @@ impl Lower<'_> {
                     self.b.terminate(Term::Jump(Target { to: join, args }));
                 }
                 ast::TryForm::Assert => {
+                    // The error's own text, prefixed with where the `try!` stands — the
+                    // location is compile-time, the message runtime, so they meet in a
+                    // concat on the (already-fatal) failure path.
                     let msg = self.error_message(err_param, ty);
+                    let msg = match self.source {
+                        Some(_) => {
+                            let at = self.at(&body.span);
+                            let prefix = self.b.emit(
+                                Op::ConstStr(format!("{at}try! failed: ")),
+                                Repr::Str,
+                                ty,
+                            );
+                            self.concat_str(prefix, msg, ty)
+                        }
+                        None => msg,
+                    };
                     self.b.emit_void(Op::Native {
                         symbol: "neon_panic".into(),
                         args: vec![msg],
@@ -3912,6 +4015,15 @@ impl Lower<'_> {
 
     fn unit(&mut self, ty: TyId) -> Value {
         self.b.emit(Op::ConstUnit, Repr::Unit, ty)
+    }
+
+    /// The `file:line: ` prefix a compile-time panic message carries, or nothing when
+    /// lowering runs without a source (the unit tests).
+    fn at(&self, span: &crate::lexer::Span) -> String {
+        self.source
+            .and_then(|m| m.for_module(&self.module))
+            .map(|s| format!("{}: ", s.at(span.start)))
+            .unwrap_or_default()
     }
 }
 
