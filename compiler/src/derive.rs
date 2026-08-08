@@ -230,6 +230,7 @@ impl Derivable for Display {
             .collect();
 
         Decl {
+            docs: Vec::new(),
             kind: DeclKind::Impl(ImplDecl {
                 orphan: false,
                 protocol: protocol.to_vec(),
@@ -373,6 +374,7 @@ impl Derivable for ToJson {
             .collect();
 
         Decl {
+            docs: Vec::new(),
             kind: DeclKind::Impl(ImplDecl {
                 orphan: false,
                 protocol: protocol.to_vec(),
@@ -516,6 +518,7 @@ impl Derivable for FromJson {
             .collect();
 
         Decl {
+            docs: Vec::new(),
             kind: DeclKind::Impl(ImplDecl {
                 orphan: false,
                 protocol: protocol.to_vec(),

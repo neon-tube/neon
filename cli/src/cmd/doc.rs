@@ -55,11 +55,14 @@ pub fn run(target: Option<&OsString>) -> Result<()> {
             "{name}: did not parse; run `neon check` for the diagnostics"
         ));
     }
-    let module = module.ok_or_else(|| eyre!("{name}: no module"))?;
+    let mut module = module.ok_or_else(|| eyre!("{name}: no module"))?;
+    // Attachment happens once, by the grammar's one adjacency rule; everything below
+    // just reads the field.
+    neon_compiler::ast::attach_docs(&mut module, &text, &lexed.trivia);
 
     println!("{name}\n");
     for d in &module.decls {
-        print_decl(&text, &lexed.trivia, d, 0);
+        print_decl(&text, d, 0);
     }
     Ok(())
 }
@@ -74,7 +77,7 @@ fn first_module_doc(text: &str) -> Option<String> {
     (first.span.start == 0).then(|| first.text.trim().to_string())
 }
 
-fn print_decl(text: &str, trivia: &[lexer::Trivia], d: &Decl, indent: usize) {
+fn print_decl(text: &str, d: &Decl, indent: usize) {
     let pad = "    ".repeat(indent);
     match &d.kind {
         // Imports are plumbing, not interface.
@@ -83,16 +86,16 @@ fn print_decl(text: &str, trivia: &[lexer::Trivia], d: &Decl, indent: usize) {
             if m.internal {
                 return;
             }
-            print_doc(text, trivia, d, &pad);
+            print_doc(d, &pad);
             println!("{pad}mod {} {{", m.name);
             for inner in &m.decls {
-                print_decl(text, trivia, inner, indent + 1);
+                print_decl(text, inner, indent + 1);
             }
             println!("{pad}}}\n");
         }
         // A fn's interface is its signature: the slice stops where the body opens.
         DeclKind::Fn(f) => {
-            print_doc(text, trivia, d, &pad);
+            print_doc(d, &pad);
             let end = f.body.as_ref().map(|b| b.span.start).unwrap_or(d.span.end);
             print_slice(text, d.span.start, end, &pad);
         }
@@ -100,7 +103,7 @@ fn print_decl(text: &str, trivia: &[lexer::Trivia], d: &Decl, indent: usize) {
         // methods' signatures are the protocol's to document; repeating them per impl
         // is noise, and a method has no span of its own to slice by anyway.
         DeclKind::Impl(_) => {
-            print_doc(text, trivia, d, &pad);
+            print_doc(d, &pad);
             let header_end = text[d.span.start..d.span.end]
                 .find('{')
                 .map(|i| d.span.start + i)
@@ -110,17 +113,15 @@ fn print_decl(text: &str, trivia: &[lexer::Trivia], d: &Decl, indent: usize) {
         // Everything else IS its source: a record's fields, a protocol's methods, an
         // alias's right-hand side are the interface, whole.
         _ => {
-            print_doc(text, trivia, d, &pad);
+            print_doc(d, &pad);
             print_slice(text, d.span.start, d.span.end, &pad);
         }
     }
 }
 
-fn print_doc(text: &str, trivia: &[lexer::Trivia], d: &Decl, pad: &str) {
-    if let Some(doc) = lexer::doc_above(text, trivia, &d.span) {
-        for line in doc.lines() {
-            println!("{pad}/// {line}");
-        }
+fn print_doc(d: &Decl, pad: &str) {
+    for line in &d.docs {
+        println!("{pad}/// {line}");
     }
 }
 

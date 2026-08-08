@@ -685,13 +685,13 @@ collide; `"#{area(q)}"` on a `Sq { side: 3 }` prints `9`.
     @native("neon_str_len") fn len(s: str) -> i64
     @cfg(not(windows)) fn spawn(...)
     @derive(Display) record Point { x: i64, y: i64 }
-    @doc("Adds two numbers.") fn add(a: i64, b: i64) -> i64
+    @runtime("neon_file") record File { .. }
 
 `@name`, or `@name(arg, ..)` where an arg is a path, a path applied to more args, or a
 string literal. **Quoted iff it is not a Neon name.** `Display` is a protocol and `windows`
 is a config key — both are things the language could in principle resolve, so both are
-written as names. `neon_str_len` is a C symbol and `Adds two numbers.` is prose; neither is
-a name Neon has any claim on. A string is where the language stops.
+written as names. `neon_str_len` and `neon_file` are C-side names Neon has no
+claim on. A string is where the language stops.
 
 *This replaces the original rule*, which was that the argument is always an opaque string
 and a processor brings its own parser: `@cfg("not(windows)")`, on the reasoning that the
@@ -709,6 +709,30 @@ caught by the same machinery as every other unbalanced `)`, with a span on the t
 broke it. The one thing given up: a config key must be an identifier, so a target-shaped
 `x86_64-unknown-linux` has to be spelled `x86_64_unknown_linux`. Nothing sets a hyphenated
 key today, and a key that is a name in the source should be a name.
+
+
+### Documentation is `///`, attached by the parser's rule — not an annotation
+
+    /// The element at `i`, or throws IndexError.
+    fn get[T](xs: List[T], i: i64) throws IndexError -> T
+
+Docs are prose, and prose in a string literal is the mistake `@cfg` already un-made once
+(above): escaping, no blank lines, no natural multiline flow — and in this language a
+string *interpolates*, so `@doc("returns #{i}")` either means nothing or demands a
+special non-interpolating string context for one annotation. `///` sidesteps all of it
+because comments were never strings.
+
+The annotation camp's one real point is ATTACHMENT: trivia binds by adjacency, and an
+adjacency heuristic implemented per tool eventually shows two answers for one decl. So
+the rule lives in exactly one place — `lexer::doc_above`, applied by `ast::attach_docs`,
+which fills `Decl::docs` for the tools that read documentation (`neon doc`, hover). The
+comment is the syntax; the AST field is the structure. This is Rust's shape: `///` is
+surface, `#[doc]` is what it means — minus actually keeping the annotation.
+
+*`@doc("...")` existed and is gone.* It collected text into a metadata table that no
+tool ever read, while `///` fed hover — a live mechanism and a dead one for the same
+job. Writing `@doc` is now an unknown-annotation error, which is what keeps a stale one
+from silently documenting nothing.
 
 ### Comments and blank lines survive lexing
 

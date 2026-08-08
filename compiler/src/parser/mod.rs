@@ -239,6 +239,7 @@ where
             enum_decl(),
         ))
         .map_with(|kind, e| Decl {
+            docs: Vec::new(),
             kind,
             span: e.span(),
         })
@@ -261,6 +262,7 @@ where
         let recovery = none_of([Token::RBrace])
             .then(choice((nested_braces(), none_of(DECL_STOP).ignored())).repeated())
             .map_with(|_, e| Decl {
+                docs: Vec::new(),
                 kind: DeclKind::Error,
                 span: e.span(),
             })

@@ -33,10 +33,50 @@ pub struct Module {
     pub decls: Vec<Decl>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Decl {
     pub kind: DeclKind,
     pub span: Span,
+    /// The `///` run immediately above this declaration, one entry per line. EMPTY
+    /// straight out of the parser: the lexer keeps doc comments as trivia the parser
+    /// never sees, and `attach_docs` fills this in for the tools that read
+    /// documentation — `neon doc`, hover. The checker never looks.
+    ///
+    /// A field rather than each tool re-walking the trivia, because attachment is the
+    /// part that must not be implemented twice: docs bind by adjacency, and two tools
+    /// with two adjacency rules eventually show two different answers for one decl.
+    pub docs: Vec<String>,
+}
+
+/// Hand-written so `docs: []` — the state of every AST that never called
+/// `attach_docs` — prints nothing: `neon parse` dumps this Debug form, and 378 corpus
+/// observables should not change because a field exists that holds no information.
+impl std::fmt::Debug for Decl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut d = f.debug_struct("Decl");
+        d.field("kind", &self.kind).field("span", &self.span);
+        if !self.docs.is_empty() {
+            d.field("docs", &self.docs);
+        }
+        d.finish()
+    }
+}
+
+/// Fill every declaration's `docs` from the `///` trivia above it, recursing into
+/// modules. The adjacency rule lives in `lexer::doc_above` — the one implementation —
+/// and this is the one place it is applied to an AST.
+pub fn attach_docs(module: &mut Module, text: &str, trivia: &[crate::lexer::Trivia]) {
+    fn walk(decls: &mut [Decl], text: &str, trivia: &[crate::lexer::Trivia]) {
+        for d in decls {
+            if let Some(doc) = crate::lexer::doc_above(text, trivia, &d.span) {
+                d.docs = doc.lines().map(str::to_string).collect();
+            }
+            if let DeclKind::Mod(m) = &mut d.kind {
+                walk(&mut m.decls, text, trivia);
+            }
+        }
+    }
+    walk(&mut module.decls, text, trivia);
 }
 
 #[derive(Debug, Clone, PartialEq)]

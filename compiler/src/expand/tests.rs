@@ -37,7 +37,7 @@ fn an_unknown_annotation_is_an_error() {
 
 #[test]
 fn a_known_annotation_is_not_unknown() {
-    let (_, _, errs) = run(r#"@doc("ok") fn f() {}"#, Config::default());
+    let (_, _, errs) = run("@inline fn f() {}", Config::default());
     assert!(errs.is_empty(), "{errs:?}");
 }
 
@@ -70,17 +70,19 @@ fn native_is_only_for_a_fn() {
 }
 
 #[test]
-fn doc_pulls_text_into_metadata_and_keeps_the_node() {
-    let (m, meta, errs) = run(
+fn doc_is_an_unknown_annotation() {
+    // `@doc` existed once, collected into a table nothing read; docs are `///`
+    // comments attached to the AST now, and the annotation erroring is what keeps a
+    // stale `@doc` from silently documenting nothing.
+    let (_, _, errs) = run(
         r#"@doc("a thing") record Thing { a: i64 }"#,
         Config::default(),
     );
-    assert!(errs.is_empty(), "{errs:?}");
-    assert_eq!(
-        meta.docs,
-        vec![("Thing".to_string(), "a thing".to_string())]
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("unknown annotation `@doc`")),
+        "{errs:?}"
     );
-    assert_eq!(survivors(&m), vec!["Thing"]);
 }
 
 #[test]

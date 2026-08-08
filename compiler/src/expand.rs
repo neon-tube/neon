@@ -28,11 +28,13 @@ pub struct Error {
     pub message: String,
 }
 
-/// Metadata a processor pulls off the AST without changing its meaning — today just
-/// the `@doc` text, keyed by the name of the thing it documents.
+/// Metadata a processor pulls off the AST without changing its meaning.
+///
+/// `@doc` used to live here too, collected into a table nothing ever read: docs are
+/// `///` comments attached to the AST by `ast::attach_docs` now, one mechanism instead
+/// of a live one and a dead one. See decisions.md.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Meta {
-    pub docs: Vec<(String, String)>,
     /// `@runtime("neon_file")` — record name to the C type the backend must use for it.
     /// This is what lets a runtime-backed type be declared in a stdlib module instead of
     /// being a name the compiler recognises.
@@ -147,7 +149,6 @@ trait Processor {
 fn lookup(name: &str) -> Option<&'static dyn Processor> {
     static NATIVE: Native = Native;
     static CFG: Cfg = Cfg;
-    static DOC: Doc = Doc;
     static RUNTIME: Runtime = Runtime;
     static PURE: Pure = Pure;
     static INLINE: Inline = Inline;
@@ -157,7 +158,6 @@ fn lookup(name: &str) -> Option<&'static dyn Processor> {
         "native" => Some(&NATIVE),
         "cfg" => Some(&CFG),
         "derive" => Some(&DERIVE),
-        "doc" => Some(&DOC),
         "runtime" => Some(&RUNTIME),
         "pure" => Some(&PURE),
         "inline" => Some(&INLINE),
@@ -243,6 +243,7 @@ fn expand_decl(decl: Decl, cx: &mut Context) -> Option<Decl> {
         DeclKind::Mod(mut m) => {
             m.decls = expand_decls(m.decls, cx);
             Decl {
+                docs: Vec::new(),
                 kind: DeclKind::Mod(m),
                 ..decl
             }
@@ -250,6 +251,7 @@ fn expand_decl(decl: Decl, cx: &mut Context) -> Option<Decl> {
         DeclKind::Protocol(mut p) => {
             p.methods = expand_methods(p.methods, cx);
             Decl {
+                docs: Vec::new(),
                 kind: DeclKind::Protocol(p),
                 ..decl
             }
@@ -257,6 +259,7 @@ fn expand_decl(decl: Decl, cx: &mut Context) -> Option<Decl> {
         DeclKind::Impl(mut i) => {
             i.methods = expand_methods(i.methods, cx);
             Decl {
+                docs: Vec::new(),
                 kind: DeclKind::Impl(i),
                 ..decl
             }
@@ -526,17 +529,6 @@ impl Processor for Inline {
     }
 }
 
-/// `@doc("text")` — pull the text into the metadata table, keep the node. Any target.
-struct Doc;
-impl Processor for Doc {
-    fn run(&self, ann: &Annotation, target: &Target, cx: &mut Context) -> Decision {
-        if let Some(text) = one_str(ann, cx, "its text", "@doc(\"what this is\")") {
-            cx.meta.docs.push((target_name(target), text.to_string()));
-        }
-        Decision::Keep
-    }
-}
-
 /// `@derive(Display)` — the record gets an impl the author could have written.
 ///
 /// This processor only VALIDATES. The impl is written by `crate::derive`, a pass that runs
@@ -616,26 +608,6 @@ impl Processor for Cfg {
                 Decision::Keep
             }
         }
-    }
-}
-
-/// The key `@doc` files its text under.
-///
-/// Not a resolved path — a bare declared name, so two same-named items in different modules
-/// collide in the table. That is tolerable only because `Meta::docs` is a `Vec` of pairs
-/// that nothing looks up by key yet; a doc tool that wants to index by name will need the
-/// module path threaded through here.
-///
-/// An `impl` has no name of its own, so one is synthesised from the protocol path and the
-/// target's `Debug` formatting. The result is a Rust-shaped string, not Neon source, and is
-/// not fit to show a user.
-fn target_name(target: &Target) -> String {
-    match target {
-        Target::Fn(f) => f.name.clone(),
-        Target::Record(r) => r.name.clone(),
-        Target::Protocol(p) => p.name.clone(),
-        Target::Impl(i) => format!("{} for {:?}", i.protocol.join("::"), i.target.kind),
-        Target::Mod(m) => m.name.clone(),
     }
 }
 
