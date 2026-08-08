@@ -141,7 +141,9 @@ fn find(f: &Func) -> Vec<Site> {
     let mut out = Vec::new();
     for b in &f.blocks {
         for (at, inst) in b.insts.iter().enumerate() {
-            let Op::Native { symbol, args } = &inst.op else { continue };
+            let Op::Native { symbol, args } = &inst.op else {
+                continue;
+            };
             if symbol != SET_INPLACE || args.len() != 3 {
                 continue;
             }
@@ -188,7 +190,13 @@ fn find(f: &Func) -> Vec<Site> {
             if !blocking.iter().all(|&w| provably_distinct(f, w, index)) {
                 continue;
             }
-            out.push(Site { block: b.id, at, list, index, changed });
+            out.push(Site {
+                block: b.id,
+                at,
+                list,
+                index,
+                changed,
+            });
         }
     }
     out
@@ -271,8 +279,11 @@ fn intervening_writes(
 
 /// Blocks reachable from `start`'s successors without re-entering `start` itself.
 fn reachable_without(f: &Func, start: BlockId) -> HashSet<BlockId> {
-    let succ: HashMap<BlockId, Vec<BlockId>> =
-        f.blocks.iter().map(|b| (b.id, successors(&b.term))).collect();
+    let succ: HashMap<BlockId, Vec<BlockId>> = f
+        .blocks
+        .iter()
+        .map(|b| (b.id, successors(&b.term)))
+        .collect();
     let mut seen = HashSet::new();
     let mut stack: Vec<BlockId> = succ.get(&start).cloned().unwrap_or_default();
     while let Some(b) = stack.pop() {
@@ -312,9 +323,11 @@ fn successors(t: &Term) -> Vec<BlockId> {
     match t {
         Term::Jump(tg) => vec![tg.to],
         Term::Branch { then, els, .. } => vec![then.to, els.to],
-        Term::Switch { arms, default, .. } => {
-            arms.iter().map(|(_, t)| t.to).chain(std::iter::once(default.to)).collect()
-        }
+        Term::Switch { arms, default, .. } => arms
+            .iter()
+            .map(|(_, t)| t.to)
+            .chain(std::iter::once(default.to))
+            .collect(),
         Term::Ret(_) | Term::Throw(_) | Term::Unreachable => vec![],
     }
 }
@@ -338,13 +351,21 @@ fn rewrite(f: &mut Func, block: BlockId, s: &Site) {
     // Mint the position constants first: `new_value` borrows the function mutably, and the
     // block does too.
     let ty = f.value_ty(s.index);
-    let positions: Vec<Value> =
-        s.changed.iter().map(|_| f.new_value(Repr::I64, ty)).collect();
+    let positions: Vec<Value> = s
+        .changed
+        .iter()
+        .map(|_| f.new_value(Repr::I64, ty))
+        .collect();
 
-    let Some(b) = f.blocks.iter_mut().find(|b| b.id == block) else { return };
+    let Some(b) = f.blocks.iter_mut().find(|b| b.id == block) else {
+        return;
+    };
     let mut replacement = Vec::with_capacity(s.changed.len() * 2);
     for ((pos, v), posv) in s.changed.iter().zip(positions) {
-        replacement.push(Inst { result: Some(posv), op: Op::ConstI64(*pos as i64) });
+        replacement.push(Inst {
+            result: Some(posv),
+            op: Op::ConstI64(*pos as i64),
+        });
         replacement.push(Inst {
             result: None,
             op: Op::Native {
@@ -393,8 +414,12 @@ fn provably_distinct(f: &Func, a: Value, b: Value) -> bool {
 ///    write. A stride of 1 is what every real counting loop uses and is n-body's; a wider or
 ///    variable stride is declined rather than reasoned about.
 fn climbs_away_from(f: &Func, p: Value, q: Value) -> bool {
-    let Some((header, pos)) = param_position(f, p) else { return false };
-    let Some(guard) = loop_guard(f, header, p) else { return false };
+    let Some((header, pos)) = param_position(f, p) else {
+        return false;
+    };
+    let Some(guard) = loop_guard(f, header, p) else {
+        return false;
+    };
 
     let body = loop_body(f, header);
     // (2) `q` must be fixed for the duration.
@@ -402,7 +427,9 @@ fn climbs_away_from(f: &Func, p: Value, q: Value) -> bool {
         return false;
     }
     // (3) `q`'s own loop must be bounded by the same length value.
-    let Some((q_header, _)) = param_position(f, q) else { return false };
+    let Some((q_header, _)) = param_position(f, q) else {
+        return false;
+    };
     if loop_guard(f, q_header, q) != Some(guard) {
         return false;
     }
@@ -416,7 +443,9 @@ fn climbs_away_from(f: &Func, p: Value, q: Value) -> bool {
                 continue;
             }
             edges += 1;
-            let Some(&arg) = tgt.args.get(pos) else { return false };
+            let Some(&arg) = tgt.args.get(pos) else {
+                return false;
+            };
             match add_of_one(f, arg) {
                 // Loop entry: `p = q + 1`.
                 Some(base) if base == q => saw_entry = true,
@@ -431,21 +460,25 @@ fn climbs_away_from(f: &Func, p: Value, q: Value) -> bool {
 
 /// The block and parameter position `v` is bound at, if it is a block parameter.
 fn param_position(f: &Func, v: Value) -> Option<(BlockId, usize)> {
-    f.blocks.iter().find_map(|b| b.params.iter().position(|&x| x == v).map(|i| (b.id, i)))
+    f.blocks
+        .iter()
+        .find_map(|b| b.params.iter().position(|&x| x == v).map(|i| (b.id, i)))
 }
 
 /// The value a header's loop is bounded by: `branch (prim.lt v, L)` gives `L`.
 fn loop_guard(f: &Func, header: BlockId, v: Value) -> Option<Value> {
     let b = f.blocks.iter().find(|b| b.id == header)?;
-    let Term::Branch { cond, .. } = &b.term else { return None };
-    b.insts.iter().find_map(|inst| match (&inst.op, inst.result) {
-        (Op::Prim(PrimOp::Lt, args), Some(r))
-            if r == *cond && args.first() == Some(&v) =>
-        {
-            args.get(1).copied()
-        }
-        _ => None,
-    })
+    let Term::Branch { cond, .. } = &b.term else {
+        return None;
+    };
+    b.insts
+        .iter()
+        .find_map(|inst| match (&inst.op, inst.result) {
+            (Op::Prim(PrimOp::Lt, args), Some(r)) if r == *cond && args.first() == Some(&v) => {
+                args.get(1).copied()
+            }
+            _ => None,
+        })
 }
 
 /// `Some(base)` when `v` is `base + 1`. Exactly one, not any positive constant: see
@@ -456,7 +489,9 @@ fn add_of_one(f: &Func, v: Value) -> Option<Value> {
             if inst.result != Some(v) {
                 continue;
             }
-            let Op::Prim(PrimOp::Add, args) = &inst.op else { return None };
+            let Op::Prim(PrimOp::Add, args) = &inst.op else {
+                return None;
+            };
             let (&x, &y) = (args.first()?, args.get(1)?);
             // Either operand may be the constant `1`.
             if const_i64(f, y) == Some(1) {
@@ -472,10 +507,13 @@ fn add_of_one(f: &Func, v: Value) -> Option<Value> {
 }
 
 fn const_i64(f: &Func, v: Value) -> Option<i64> {
-    f.blocks.iter().flat_map(|b| b.insts.iter()).find_map(|inst| match (&inst.op, inst.result) {
-        (Op::ConstI64(n), Some(r)) if r == v => Some(*n),
-        _ => None,
-    })
+    f.blocks
+        .iter()
+        .flat_map(|b| b.insts.iter())
+        .find_map(|inst| match (&inst.op, inst.result) {
+            (Op::ConstI64(n), Some(r)) if r == v => Some(*n),
+            _ => None,
+        })
 }
 
 /// The *natural* loop `header` heads: the header, plus every block that can reach one of its
@@ -523,7 +561,11 @@ fn dominators(f: &Func) -> HashMap<BlockId, HashSet<BlockId>> {
         .blocks
         .iter()
         .map(|b| {
-            let set = if b.id == f.entry { std::iter::once(b.id).collect() } else { all.clone() };
+            let set = if b.id == f.entry {
+                std::iter::once(b.id).collect()
+            } else {
+                all.clone()
+            };
             (b.id, set)
         })
         .collect();
@@ -566,18 +608,21 @@ fn predecessors(f: &Func) -> HashMap<BlockId, Vec<BlockId>> {
 /// Whether `v` is bound anywhere inside `body` -- as an instruction result or a block
 /// parameter. A value bound inside the loop takes a fresh value each iteration.
 fn defined_inside(f: &Func, body: &HashSet<BlockId>, v: Value) -> bool {
-    f.blocks.iter().filter(|b| body.contains(&b.id)).any(|b| {
-        b.params.contains(&v) || b.insts.iter().any(|i| i.result == Some(v))
-    })
+    f.blocks
+        .iter()
+        .filter(|b| body.contains(&b.id))
+        .any(|b| b.params.contains(&v) || b.insts.iter().any(|i| i.result == Some(v)))
 }
 
 fn targets(t: &Term) -> Vec<&super::ssa::Target> {
     match t {
         Term::Jump(tg) => vec![tg],
         Term::Branch { then, els, .. } => vec![then, els],
-        Term::Switch { arms, default, .. } => {
-            arms.iter().map(|(_, t)| t).chain(std::iter::once(default)).collect()
-        }
+        Term::Switch { arms, default, .. } => arms
+            .iter()
+            .map(|(_, t)| t)
+            .chain(std::iter::once(default))
+            .collect(),
         Term::Ret(_) | Term::Throw(_) | Term::Unreachable => vec![],
     }
 }

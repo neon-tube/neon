@@ -43,7 +43,10 @@ pub struct ParseError {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParseErrorKind {
     /// Raised by the combinator machinery when nothing matched.
-    Expected { expected: Vec<Expected>, found: Option<Token> },
+    Expected {
+        expected: Vec<Expected>,
+        found: Option<Token>,
+    },
     /// `enum Color { ... }` — not a keyword; sum types are unions of records.
     /// People will type it, so it gets a real diagnostic rather than a
     /// confusing cascade from `enum` lexing as an identifier.
@@ -209,7 +212,10 @@ where
         // "expected `)` or `,`" rather than whichever alternative was tried last.
         // A deliberate diagnostic always wins over a generic one.
         match (&mut self.kind, &other.kind) {
-            (ParseErrorKind::Expected { expected, .. }, ParseErrorKind::Expected { expected: b, .. }) => {
+            (
+                ParseErrorKind::Expected { expected, .. },
+                ParseErrorKind::Expected { expected: b, .. },
+            ) => {
                 expected.extend(b.iter().cloned());
                 self
             }

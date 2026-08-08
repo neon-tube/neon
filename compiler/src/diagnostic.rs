@@ -29,7 +29,11 @@ impl<'a> Renderer<'a> {
     }
 
     fn new(path: &Path, src: &'a str, color: bool) -> Self {
-        Renderer { cache: (path.display().to_string(), Source::from(src)), src, color }
+        Renderer {
+            cache: (path.display().to_string(), Source::from(src)),
+            src,
+            color,
+        }
     }
 
     pub fn render(&mut self, span: Range<usize>, msg: &str) -> String {
@@ -54,7 +58,9 @@ impl<'a> Renderer<'a> {
         // The message goes on the report, not the label: it is the only string an
         // error carries, and ariadne would print it twice. An empty label message is
         // what earns the underline — ariadne draws none without one.
-        let mut primary = Label::new((id.clone(), span.clone())).with_message("").with_order(0);
+        let mut primary = Label::new((id.clone(), span.clone()))
+            .with_message("")
+            .with_order(0);
         if self.color {
             primary = primary.with_color(Color::Red);
         }
@@ -64,8 +70,9 @@ impl<'a> Renderer<'a> {
             let s = self.underline(s.clone());
             // A later order draws below the primary; a cooler colour reads as context
             // rather than as a second fault.
-            let mut label =
-                Label::new((id.clone(), s)).with_message(text).with_order(i as i32 + 1);
+            let mut label = Label::new((id.clone(), s))
+                .with_message(text)
+                .with_order(i as i32 + 1);
             if self.color {
                 label = label.with_color(Color::Cyan);
             }
@@ -76,7 +83,9 @@ impl<'a> Renderer<'a> {
             .with_config(
                 // Spans are byte offsets. Ariadne counts characters unless told
                 // otherwise, which puts the underline inside an `é`.
-                Config::default().with_index_type(IndexType::Byte).with_color(self.color),
+                Config::default()
+                    .with_index_type(IndexType::Byte)
+                    .with_color(self.color),
             )
             .with_message(msg)
             .with_labels(labels);
@@ -85,7 +94,10 @@ impl<'a> Renderer<'a> {
         }
 
         let mut out = Vec::new();
-        report.finish().write(&mut self.cache, &mut out).expect("a Vec cannot fail to be written to");
+        report
+            .finish()
+            .write(&mut self.cache, &mut out)
+            .expect("a Vec cannot fail to be written to");
         String::from_utf8(out).expect("ariadne emits UTF-8")
     }
 
@@ -113,7 +125,13 @@ impl<'a> Renderer<'a> {
         }
         match self.src[start..].chars().next() {
             Some(c) => start..start + c.len_utf8(),
-            None => start - self.src[..start].chars().next_back().map_or(0, char::len_utf8)..start,
+            None => {
+                start
+                    - self.src[..start]
+                        .chars()
+                        .next_back()
+                        .map_or(0, char::len_utf8)..start
+            }
         }
     }
 }

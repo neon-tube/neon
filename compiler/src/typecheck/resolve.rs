@@ -31,7 +31,10 @@ impl Scope {
     /// *written*, not from wherever it is being used: a record's field annotations mean
     /// what they meant in the declaring module, however the record is later named.
     pub fn new(module: &[String]) -> Self {
-        Scope { module: module.to_vec(), vars: vec![] }
+        Scope {
+            module: module.to_vec(),
+            vars: vec![],
+        }
     }
 
     /// Bind `names` as rigid variables — the once-with-`T`-opaque reading of a
@@ -40,7 +43,11 @@ impl Scope {
         for n in names {
             let id = env.solver.t.name(n);
             let ty = env.solver.t.var(id);
-            self.vars.push(ScopeVar { name: n.clone(), ty, arity: 0 });
+            self.vars.push(ScopeVar {
+                name: n.clone(),
+                ty,
+                arity: 0,
+            });
         }
         self
     }
@@ -104,7 +111,11 @@ pub fn resolve(env: &mut Env, scope: &Scope, spec: &TypeSpec) -> TyId {
             let ts = resolve_all(env, scope, xs);
             or_poison(env, &ts, |e| e.solver.t.tuple(ts.clone()))
         }
-        TypeSpecKind::Fn { params, throws, ret } => {
+        TypeSpecKind::Fn {
+            params,
+            throws,
+            ret,
+        } => {
             let ps = resolve_all(env, scope, params);
             // No `throws` clause is `never` — a function that throws nothing. `any`
             // would make every arrow a supertype of every other.
@@ -137,7 +148,10 @@ pub fn resolve(env: &mut Env, scope: &Scope, spec: &TypeSpec) -> TyId {
                 };
                 let l = env.solver.t.name(&f.name);
                 if labels.iter().any(|(seen, _)| *seen == l) {
-                    env.error(f.span.clone(), TypeErrorKind::DuplicateField(f.name.clone()));
+                    env.error(
+                        f.span.clone(),
+                        TypeErrorKind::DuplicateField(f.name.clone()),
+                    );
                     return env.error_ty();
                 }
                 labels.push((l, field));
@@ -189,7 +203,11 @@ fn named(
             if arity != args.len() {
                 env.error(
                     spec.span.clone(),
-                    TypeErrorKind::Arity { name: only.clone(), expected: arity, found: args.len() },
+                    TypeErrorKind::Arity {
+                        name: only.clone(),
+                        expected: arity,
+                        found: args.len(),
+                    },
                 );
                 return env.error_ty();
             }
@@ -208,7 +226,11 @@ fn named(
             if !args.is_empty() {
                 env.error(
                     spec.span.clone(),
-                    TypeErrorKind::Arity { name: only.clone(), expected: 0, found: args.len() },
+                    TypeErrorKind::Arity {
+                        name: only.clone(),
+                        expected: 0,
+                        found: args.len(),
+                    },
                 );
                 return env.error_ty();
             }

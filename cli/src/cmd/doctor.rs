@@ -32,7 +32,10 @@ impl Report {
 }
 
 pub fn run() -> Result<()> {
-    let mut r = Report { warnings: 0, failures: 0 };
+    let mut r = Report {
+        warnings: 0,
+        failures: 0,
+    };
 
     println!("toolchain");
     let via = if std::env::var_os("NEON_SYSROOT").is_some() {
@@ -53,7 +56,10 @@ pub fn run() -> Result<()> {
 
     if let Some(s) = &sysroot {
         if s.include().join("libneon_rt.h").is_file() {
-            r.ok(&format!("include: {} (umbrella header present)", s.include().display()));
+            r.ok(&format!(
+                "include: {} (umbrella header present)",
+                s.include().display()
+            ));
         } else {
             r.fail(&format!(
                 "include: {} has no libneon_rt.h — emitted C cannot compile",
@@ -63,14 +69,23 @@ pub fn run() -> Result<()> {
         let stdlib = s.stdlib();
         let count = count_neon_files(&stdlib);
         if count > 0 {
-            r.ok(&format!("stdlib:  {} ({count} source files)", stdlib.display()));
+            r.ok(&format!(
+                "stdlib:  {} ({count} source files)",
+                stdlib.display()
+            ));
         } else {
-            r.fail(&format!("stdlib:  {} is missing or empty", stdlib.display()));
+            r.fail(&format!(
+                "stdlib:  {} is missing or empty",
+                stdlib.display()
+            ));
         }
 
         println!("runtime archives");
-        let variants =
-            [RuntimeVariant::Release, RuntimeVariant::Debug, RuntimeVariant::Sanitized];
+        let variants = [
+            RuntimeVariant::Release,
+            RuntimeVariant::Debug,
+            RuntimeVariant::Sanitized,
+        ];
         for flavor in ["gcc", "clang"] {
             let dir = s.lib_dir().join(flavor);
             let missing: Vec<&str> = variants
@@ -87,7 +102,10 @@ pub fn run() -> Result<()> {
                 // bitcode member at all. Report whichever of the two this toolchain is —
                 // "loses LTO" and "cannot build" are very different things to plan around.
                 let other = if flavor == "gcc" { "clang" } else { "gcc" };
-                let stand_in = s.lib_dir().join(other).join(RuntimeVariant::Release.archive());
+                let stand_in = s
+                    .lib_dir()
+                    .join(other)
+                    .join(RuntimeVariant::Release.archive());
                 let linkable =
                     crate::sysroot::inspect_archive(&stand_in).is_none_or(|c| c.native_code);
                 r.warn(&format!(
@@ -130,7 +148,11 @@ pub fn run() -> Result<()> {
                     .as_ref()
                     .is_some_and(|s| s.flavors_present().contains(&flavor.dir()));
                 if has_archives {
-                    r.ok(&format!("cc = `{}` -> {} ({version}); archives present", cfg.cc, flavor.dir()));
+                    r.ok(&format!(
+                        "cc = `{}` -> {} ({version}); archives present",
+                        cfg.cc,
+                        flavor.dir()
+                    ));
                 } else {
                     r.warn(&format!(
                         "cc = `{}` -> {} ({version}); no {} archives staged — release \
@@ -171,12 +193,21 @@ pub fn run() -> Result<()> {
             Ok(())
         }
         (0, w) => {
-            println!("verdict: working, {w} warning{}", if w == 1 { "" } else { "s" });
+            println!(
+                "verdict: working, {w} warning{}",
+                if w == 1 { "" } else { "s" }
+            );
             Ok(())
         }
         (f, _) => {
-            println!("verdict: broken, {f} failure{}", if f == 1 { "" } else { "s" });
-            Err(eyre!("`neon doctor` found {f} failure{}", if f == 1 { "" } else { "s" }))
+            println!(
+                "verdict: broken, {f} failure{}",
+                if f == 1 { "" } else { "s" }
+            );
+            Err(eyre!(
+                "`neon doctor` found {f} failure{}",
+                if f == 1 { "" } else { "s" }
+            ))
         }
     }
 }
@@ -186,7 +217,11 @@ pub fn run() -> Result<()> {
 /// surrounding project's `neon.toml` cannot leak into what was diagnosed above; the
 /// resolved `cc` is passed explicitly for the same reason.
 fn smoke(r: &mut Report, cc: &str, extra: &[&str]) {
-    let label = if extra.is_empty() { "release" } else { "sanitized" };
+    let label = if extra.is_empty() {
+        "release"
+    } else {
+        "sanitized"
+    };
     let dir = std::env::temp_dir().join(format!("neon-doctor-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let src = dir.join("main.neon");
@@ -229,7 +264,9 @@ fn smoke(r: &mut Report, cc: &str, extra: &[&str]) {
     }
     match Command::new(&bin).output() {
         Ok(out) if out.status.success() && out.stdout == b"doctor ok\n" => {
-            r.ok(&format!("{label}: compiled, linked, ran, and printed what it should"));
+            r.ok(&format!(
+                "{label}: compiled, linked, ran, and printed what it should"
+            ));
         }
         Ok(out) => r.fail(&format!(
             "{label}: the compiled program misbehaved (exit {:?}, stdout {:?})",
@@ -246,12 +283,17 @@ fn version_line(cc: &str) -> Option<String> {
     if !out.status.success() {
         return None;
     }
-    String::from_utf8_lossy(&out.stdout).lines().next().map(str::to_string)
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .next()
+        .map(str::to_string)
 }
 
 fn count_neon_files(dir: &Path) -> usize {
     let mut n = 0;
-    let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
     for e in entries.flatten() {
         let p = e.path();
         if p.is_dir() {

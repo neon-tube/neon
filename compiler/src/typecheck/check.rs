@@ -82,8 +82,16 @@ fn const_refs(e: &Expr, out: &mut Vec<Vec<String>>) {
 fn mentions_var(c: &mut Checker, t: TyId, var: super::types::NameId) -> bool {
     let a = c.env.solver.t.null();
     let b = c.env.solver.t.bool();
-    let sub_a = c.env.solver.t.substitute(t, &std::collections::HashMap::from([(var, a)]));
-    let sub_b = c.env.solver.t.substitute(t, &std::collections::HashMap::from([(var, b)]));
+    let sub_a = c
+        .env
+        .solver
+        .t
+        .substitute(t, &std::collections::HashMap::from([(var, a)]));
+    let sub_b = c
+        .env
+        .solver
+        .t
+        .substitute(t, &std::collections::HashMap::from([(var, b)]));
     sub_a != sub_b
 }
 
@@ -127,8 +135,10 @@ pub fn check_all(
         // in the recorded solution — rather than mentions in the final type — is what
         // covers a parameter mentioned only in `throws`, whose variable propagates
         // through the throw channel and not the expression's recorded type.
-        let solved =
-            c.result.generics(id).is_some_and(|g| g.iter().any(|(n, _)| *n == param));
+        let solved = c
+            .result
+            .generics(id)
+            .is_some_and(|g| g.iter().any(|(n, _)| *n == param));
         if !solved {
             c.errors.push(TypeError {
                 span,
@@ -235,7 +245,14 @@ struct Checker<'a> {
     /// Candidates, not errors — the probing pass legitimately fails to solve what the
     /// second pass then solves. `check_all` promotes the ones whose final recorded
     /// type still carries the variable.
-    pending_infer: Vec<(ast::ExprId, super::types::NameId, String, String, Span, Vec<String>)>,
+    pending_infer: Vec<(
+        ast::ExprId,
+        super::types::NameId,
+        String,
+        String,
+        Span,
+        Vec<String>,
+    )>,
 }
 
 impl Checker<'_> {
@@ -503,9 +520,7 @@ impl Checker<'_> {
         let Some(i) = sel.receiver_pos else { return };
         let Some(&recv) = args.get(i) else { return };
         let targets: Vec<TyId> = match &sel.resolution {
-            dispatch::Resolution::Direct(id) => {
-                self.env.impls()[id.0].target.into_iter().collect()
-            }
+            dispatch::Resolution::Direct(id) => self.env.impls()[id.0].target.into_iter().collect(),
             dispatch::Resolution::Switch(arms) => arms
                 .iter()
                 .filter_map(|&(_, id)| self.env.impls()[id.0].target)
@@ -533,8 +548,11 @@ impl Checker<'_> {
         concrete: TyId,
         pid: super::env::ProtocolId,
     ) {
-        let targets: Vec<TyId> =
-            self.env.impls_of(pid).filter_map(|(_, i)| i.target).collect();
+        let targets: Vec<TyId> = self
+            .env
+            .impls_of(pid)
+            .filter_map(|(_, i)| i.target)
+            .collect();
         for target in targets {
             self.member_gate(
                 module,
@@ -557,14 +575,7 @@ impl Checker<'_> {
     /// in `value`'s leaves as the full type it denotes, and require that member, sealed,
     /// to still fit the sealed view. `Secret` fits `Secret`, `any`, and `Secret | X`;
     /// it does not fit `{code: i64}` once its contents are erased.
-    fn member_gate(
-        &mut self,
-        module: &[String],
-        span: &Span,
-        value: TyId,
-        view: TyId,
-        what: &str,
-    ) {
+    fn member_gate(&mut self, module: &[String], span: &Span, value: TyId, view: TyId, what: &str) {
         let hidden = self.hidden(module);
         if hidden.is_empty() {
             return;
@@ -617,7 +628,8 @@ impl Checker<'_> {
             .into_iter()
             .map(|i| {
                 let a = self.env.solver.t.rec_atoms[i as usize].clone();
-                let tag = self.env.solver.t.rec_atoms[i as usize].get(self.env.solver.t.nominal_label);
+                let tag =
+                    self.env.solver.t.rec_atoms[i as usize].get(self.env.solver.t.nominal_label);
                 let name = {
                     let t = &self.env.solver.t;
                     t.atomset_of(t.data(tag).atoms).names[0]
@@ -704,8 +716,9 @@ impl Checker<'_> {
                     // A constructor subject (`for C[_]`) is not a plain rigid and
                     // stays unbound — no stdlib protocol with one has default bodies.
                     let mut extra: Vec<(String, super::env::ProtocolId)> = vec![];
-                    if let Some(pid) =
-                        self.env.lookup_protocol(module, std::slice::from_ref(&p.name))
+                    if let Some(pid) = self
+                        .env
+                        .lookup_protocol(module, std::slice::from_ref(&p.name))
                     {
                         extra.push((p.subject.clone(), pid));
                     }
@@ -716,8 +729,11 @@ impl Checker<'_> {
                             }
                         }
                     }
-                    let outer: Vec<String> =
-                        if p.subject_arity == 0 { vec![p.subject.clone()] } else { vec![] };
+                    let outer: Vec<String> = if p.subject_arity == 0 {
+                        vec![p.subject.clone()]
+                    } else {
+                        vec![]
+                    };
                     for m in &p.methods {
                         if m.body.is_some() {
                             self.fn_body_with_bounds(module, m, &outer, extra.clone());
@@ -770,7 +786,14 @@ impl Checker<'_> {
             .env
             .consts()
             .iter()
-            .map(|c| (c.module.clone(), c.name.clone(), c.value.clone(), c.span.clone()))
+            .map(|c| {
+                (
+                    c.module.clone(),
+                    c.name.clone(),
+                    c.value.clone(),
+                    c.span.clone(),
+                )
+            })
             .collect();
         let mut done: Vec<String> = Vec::new();
         for (module, name, _, span) in &consts {
@@ -813,7 +836,9 @@ impl Checker<'_> {
         for r in refs {
             // Resolved through the same rule a use site would use, so an imported or
             // qualified reference is followed rather than missed.
-            let Some(target) = self.env.const_named(module, &r) else { continue };
+            let Some(target) = self.env.const_named(module, &r) else {
+                continue;
+            };
             let (tm, tn) = (target.module.clone(), target.name.clone());
             if let Some(chain) = self.walk_const(consts, &tm, &tn, stack, done) {
                 found = Some(chain);
@@ -845,7 +870,13 @@ impl Checker<'_> {
         self.locals.pop();
         self.assignable(module, &c.value.span, found, want);
         if let Err(what) = self.const_expr(module, &c.value) {
-            self.error(span.clone(), TypeErrorKind::ConstNotConstant { name: c.name.clone(), what });
+            self.error(
+                span.clone(),
+                TypeErrorKind::ConstNotConstant {
+                    name: c.name.clone(),
+                    what,
+                },
+            );
         }
     }
 
@@ -865,20 +896,28 @@ impl Checker<'_> {
     ///   `to_string` plus a concat, neither of which folds.
     fn const_expr(&mut self, module: &[String], e: &Expr) -> Result<(), String> {
         let foldable = |c: &mut Self, e: &Expr| -> bool {
-            let Some(t) = c.result.ty(e.id) else { return false };
+            let Some(t) = c.result.ty(e.id) else {
+                return false;
+            };
             let i = c.env.solver.t.i64();
             let b = c.env.solver.t.bool();
             t == i || t == b
         };
         match &e.kind {
-            ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Rune(_)
-            | ExprKind::Atom(_) | ExprKind::Null => Ok(()),
+            ExprKind::Int(_)
+            | ExprKind::Float(_)
+            | ExprKind::Bool(_)
+            | ExprKind::Rune(_)
+            | ExprKind::Atom(_)
+            | ExprKind::Null => Ok(()),
             // A bare literal only. One `Text` part is `"abc"`; anything else has a hole.
             ExprKind::Str(parts) => match parts.as_slice() {
                 [] | [ast::StrPart::Text(_)] => Ok(()),
-                _ => Err("a string interpolation runs `to_string` and a concatenation, \
+                _ => Err(
+                    "a string interpolation runs `to_string` and a concatenation, \
                           neither of which the compiler can fold"
-                    .into()),
+                        .into(),
+                ),
             },
             ExprKind::Path(p) => {
                 if self.env.const_named(module, p).is_some() {
@@ -906,9 +945,11 @@ impl Checker<'_> {
             ExprKind::List(_) | ExprKind::RecordLit { .. } | ExprKind::Tuple(_) => {
                 Err("a list, record or tuple is built at run time and refcounted".into())
             }
-            _ => Err("only literals, other `const`s, and integer and boolean arithmetic \
+            _ => Err(
+                "only literals, other `const`s, and integer and boolean arithmetic \
                       over those are constant"
-                .into()),
+                    .into(),
+            ),
         }
     }
 
@@ -959,9 +1000,10 @@ impl Checker<'_> {
             .wheres
             .iter()
             .filter_map(|w| match &w.bound.kind {
-                ast::TypeSpecKind::Named { path, .. } => {
-                    self.env.lookup_protocol(module, path).map(|p| (w.param.clone(), p))
-                }
+                ast::TypeSpecKind::Named { path, .. } => self
+                    .env
+                    .lookup_protocol(module, path)
+                    .map(|p| (w.param.clone(), p)),
                 _ => None,
             })
             .collect();
@@ -1001,7 +1043,12 @@ impl Checker<'_> {
     /// order between the two is decided at each use site (`call` and `path` both try the
     /// local first, so a local shadows a fn).
     fn lookup(&self, name: &str) -> Option<TyId> {
-        self.locals.iter().rev().flat_map(|s| s.iter().rev()).find(|(n, ..)| n == name).map(|(_, t, ..)| *t)
+        self.locals
+            .iter()
+            .rev()
+            .flat_map(|s| s.iter().rev())
+            .find(|(n, ..)| n == name)
+            .map(|(_, t, ..)| *t)
     }
 
     /// The index of the innermost `locals` frame that binds `name`, for deciding
@@ -1013,7 +1060,10 @@ impl Checker<'_> {
             .iter()
             .enumerate()
             .rev()
-            .find(|(_, s)| s.iter().any(|(n, _, _, k)| n == name && *k != DefKind::Refinement))
+            .find(|(_, s)| {
+                s.iter()
+                    .any(|(n, _, _, k)| n == name && *k != DefKind::Refinement)
+            })
             .map(|(i, _)| i)
     }
 
@@ -1159,13 +1209,17 @@ impl Checker<'_> {
                 };
                 // A capture is immutable inside the closure: assigning to it would
                 // write to the closure's private copy, invisible to everyone else.
-                if let (Some(&floor), Some(frame)) = (self.capture_floors.last(), self.frame_of(name))
+                if let (Some(&floor), Some(frame)) =
+                    (self.capture_floors.last(), self.frame_of(name))
                 {
                     if frame < floor {
                         let origin = self.origin_of(name);
                         self.error(
                             s.span.clone(),
-                            TypeErrorKind::RebindCapture { name: name.clone(), origin },
+                            TypeErrorKind::RebindCapture {
+                                name: name.clone(),
+                                origin,
+                            },
                         );
                     }
                 }
@@ -1215,15 +1269,22 @@ impl Checker<'_> {
                     }
                 }
                 match path {
-                    Some(q) => self.check_opaque_path(
-                        module, p.span.clone(), q, "it can be destructured"),
+                    Some(q) => {
+                        self.check_opaque_path(module, p.span.clone(), q, "it can be destructured")
+                    }
                     // Every nominal leaf, not just the single-atom case: destructuring
                     // a union or a narrowed intersection projects fields across all of
                     // its record leaves, exactly like a field read.
-                    None => for n in self.nominal_leaves(t) {
-                        self.check_opaque_name(
-                            module, p.span.clone(), &n, "it can be destructured")
-                    },
+                    None => {
+                        for n in self.nominal_leaves(t) {
+                            self.check_opaque_name(
+                                module,
+                                p.span.clone(),
+                                &n,
+                                "it can be destructured",
+                            )
+                        }
+                    }
                 }
                 for f in fields {
                     let label = self.env.solver.t.name(&f.name);
@@ -1265,7 +1326,10 @@ impl Checker<'_> {
     fn record_tested_path(&mut self, module: &[String], p: &ast::Pattern, path: &[String]) {
         let scope = self.type_scope(module);
         let spec = ast::TypeSpec {
-            kind: ast::TypeSpecKind::Named { path: path.to_vec(), args: vec![] },
+            kind: ast::TypeSpecKind::Named {
+                path: path.to_vec(),
+                args: vec![],
+            },
             span: p.span.clone(),
         };
         let tested = self.env.resolve(&scope, &spec);
@@ -1287,7 +1351,13 @@ impl Checker<'_> {
             Projected::Absent => {
                 if !self.env.is_error(base) {
                     let on = self.show(base);
-                    self.error(span, TypeErrorKind::NoField { field: label.to_string(), on });
+                    self.error(
+                        span,
+                        TypeErrorKind::NoField {
+                            field: label.to_string(),
+                            on,
+                        },
+                    );
                 }
                 self.poison()
             }
@@ -1312,7 +1382,13 @@ impl Checker<'_> {
         if let Some(want) = expected {
             if !self.assignable(module, &e.span, t, want) {
                 let (found, expect) = (self.show(t), self.show(want));
-                self.error(e.span.clone(), TypeErrorKind::Mismatch { expected: expect, found });
+                self.error(
+                    e.span.clone(),
+                    TypeErrorKind::Mismatch {
+                        expected: expect,
+                        found,
+                    },
+                );
             } else if let (Some(a), Some(w)) = (
                 self.env.solver.t.as_arrow(t),
                 self.env.solver.t.as_arrow(want),
@@ -1454,9 +1530,13 @@ impl Checker<'_> {
                 }
             }
 
-            ExprKind::If { cond, then, else_ } => self.if_expr(module, e, cond, then, else_, expected),
+            ExprKind::If { cond, then, else_ } => {
+                self.if_expr(module, e, cond, then, else_, expected)
+            }
 
-            ExprKind::Match { scrutinee, arms } => self.match_expr(module, e, scrutinee, arms, expected),
+            ExprKind::Match { scrutinee, arms } => {
+                self.match_expr(module, e, scrutinee, arms, expected)
+            }
 
             ExprKind::Block(b) => self.block(module, b, expected),
 
@@ -1503,7 +1583,10 @@ impl Checker<'_> {
                 let ok = !self.env.solver.is_empty(meet) || bridges;
                 if !self.env.is_error(from) && !ok {
                     let (f, t) = (self.show(from), self.show(to));
-                    self.error(e.span.clone(), TypeErrorKind::ImpossibleCast { from: f, to: t });
+                    self.error(
+                        e.span.clone(),
+                        TypeErrorKind::ImpossibleCast { from: f, to: t },
+                    );
                     return self.poison();
                 }
                 // A cast is a flow like any other, but `expr`'s gate never sees it: the
@@ -1624,7 +1707,10 @@ impl Checker<'_> {
             }
             ExprKind::Continue => {
                 if self.loop_breaks.is_empty() {
-                    self.error(e.span.clone(), TypeErrorKind::OutsideLoop("continue".into()));
+                    self.error(
+                        e.span.clone(),
+                        TypeErrorKind::OutsideLoop("continue".into()),
+                    );
                 }
                 self.env.solver.t.never()
             }
@@ -1720,9 +1806,11 @@ impl Checker<'_> {
             // a whole body, one match arm, an argument.
             ExprKind::Todo(_) => self.env.solver.t.never(),
 
-            ExprKind::Call { callee, generics, args } => {
-                self.call(module, e, callee, generics, args, expected)
-            }
+            ExprKind::Call {
+                callee,
+                generics,
+                args,
+            } => self.call(module, e, callee, generics, args, expected),
 
             ExprKind::Field { base, name } => {
                 let t = self.expr(module, base, None);
@@ -1744,9 +1832,11 @@ impl Checker<'_> {
 
             ExprKind::Lambda { params, body } => self.lambda(module, e, params, body, expected),
 
-            ExprKind::RecordLit { path, fields, spread } => {
-                self.record_lit(module, e, path, fields, spread, expected)
-            }
+            ExprKind::RecordLit {
+                path,
+                fields,
+                spread,
+            } => self.record_lit(module, e, path, fields, spread, expected),
 
             ExprKind::Index { base, index } => {
                 let t = self.expr(module, base, None);
@@ -1806,7 +1896,10 @@ impl Checker<'_> {
                 (Some(spec), _) => self.env.resolve(&scope, spec),
                 (None, Some(&pt)) => pt,
                 (None, None) => {
-                    self.error(e.span.clone(), TypeErrorKind::LambdaParamNeedsType(p.name.clone()));
+                    self.error(
+                        e.span.clone(),
+                        TypeErrorKind::LambdaParamNeedsType(p.name.clone()),
+                    );
                     self.poison()
                 }
             };
@@ -1853,7 +1946,9 @@ impl Checker<'_> {
         self.capture_floors.pop();
 
         // The lambda's return type is its tail unioned with whatever its `return`s give.
-        let ret = returned.into_iter().fold(tail, |acc, t| self.union_branches(acc, t));
+        let ret = returned
+            .into_iter()
+            .fold(tail, |acc, t| self.union_branches(acc, t));
 
         // Its `throws` is what the body propagates — plus the expected arrow's clause,
         // when one flows in. Adopting the clause matters beyond subtyping: the clause is
@@ -1861,7 +1956,9 @@ impl Checker<'_> {
         // a lambda filling a `(i64) throws E -> i64` slot must *be* one, even when its
         // own body cannot fail. Widening the throws is free at creation and the body's
         // errors still have to fit the clause, checked by `expr`'s assignability.
-        let mut throws = thrown.into_iter().fold(never, |acc, t| self.union_branches(acc, t));
+        let mut throws = thrown
+            .into_iter()
+            .fold(never, |acc, t| self.union_branches(acc, t));
         if let Some(a) = &want {
             throws = self.union_branches(throws, a.throws);
         }
@@ -1916,7 +2013,11 @@ impl Checker<'_> {
         if let Some(p) = path {
             // Building one — with or without a spread, which is an update and so equally
             // a way to set a field the module means to control.
-            let what = if spread.is_some() { "it can be updated" } else { "it can be built" };
+            let what = if spread.is_some() {
+                "it can be updated"
+            } else {
+                "it can be built"
+            };
             self.check_opaque_path(module, e.span.clone(), p, what);
             let key = self.env.lookup(module, p);
             if let Some(key) = &key {
@@ -1925,7 +2026,10 @@ impl Checker<'_> {
                 }
                 let scope = self.type_scope(module);
                 let spec = ast::TypeSpec {
-                    kind: ast::TypeSpecKind::Named { path: p.clone(), args: vec![] },
+                    kind: ast::TypeSpecKind::Named {
+                        path: p.clone(),
+                        args: vec![],
+                    },
                     span: e.span.clone(),
                 };
                 let record_ty = self.env.resolve(&scope, &spec);
@@ -1969,7 +2073,10 @@ impl Checker<'_> {
         let mut field_tys: Vec<(super::types::NameId, TyId)> = Vec::new();
         for f in fields {
             if seen.contains(&f.name) {
-                self.error(f.span.clone(), TypeErrorKind::DuplicateField(f.name.clone()));
+                self.error(
+                    f.span.clone(),
+                    TypeErrorKind::DuplicateField(f.name.clone()),
+                );
             }
             seen.push(f.name.clone());
             let t = self.expr(module, &f.value, None);
@@ -1995,7 +2102,10 @@ impl Checker<'_> {
         let mut seen: Vec<String> = Vec::new();
         for f in fields {
             if seen.contains(&f.name) {
-                self.error(f.span.clone(), TypeErrorKind::DuplicateField(f.name.clone()));
+                self.error(
+                    f.span.clone(),
+                    TypeErrorKind::DuplicateField(f.name.clone()),
+                );
             }
             seen.push(f.name.clone());
             match target.iter().find(|(n, _)| *n == f.name) {
@@ -2009,14 +2119,24 @@ impl Checker<'_> {
                         let (expected, found) = (self.show(want), self.show(got));
                         self.error(
                             f.value.span.clone(),
-                            TypeErrorKind::FieldTypeMismatch { field: f.name.clone(), expected, found },
+                            TypeErrorKind::FieldTypeMismatch {
+                                field: f.name.clone(),
+                                expected,
+                                found,
+                            },
                         );
                     }
                 }
                 None => {
                     self.expr(module, &f.value, None);
                     let on = self.record_name(target);
-                    self.error(f.span.clone(), TypeErrorKind::NoField { field: f.name.clone(), on });
+                    self.error(
+                        f.span.clone(),
+                        TypeErrorKind::NoField {
+                            field: f.name.clone(),
+                            on,
+                        },
+                    );
                 }
             }
         }
@@ -2061,18 +2181,33 @@ impl Checker<'_> {
         let mut seen: Vec<String> = Vec::new();
         for f in fields {
             if seen.contains(&f.name) {
-                self.error(f.span.clone(), TypeErrorKind::DuplicateField(f.name.clone()));
+                self.error(
+                    f.span.clone(),
+                    TypeErrorKind::DuplicateField(f.name.clone()),
+                );
             }
             seen.push(f.name.clone());
             let ft = self.expr(module, &f.value, None);
             match tfields.iter().find(|(n, _)| *n == f.name) {
                 Some((_, tmpl)) => {
-                    super::generic::infer(&mut self.env.solver.t, *tmpl, ft, &var_names, &mut subst);
+                    super::generic::infer(
+                        &mut self.env.solver.t,
+                        *tmpl,
+                        ft,
+                        &var_names,
+                        &mut subst,
+                    );
                     given.push((f.name.clone(), ft));
                 }
                 None => {
                     let on = key.rsplit("::").next().unwrap_or(key).to_string();
-                    self.error(f.span.clone(), TypeErrorKind::NoField { field: f.name.clone(), on });
+                    self.error(
+                        f.span.clone(),
+                        TypeErrorKind::NoField {
+                            field: f.name.clone(),
+                            on,
+                        },
+                    );
                 }
             }
         }
@@ -2088,7 +2223,13 @@ impl Checker<'_> {
                 let want = self.env.solver.t.substitute(*tmpl, &subst);
                 if !self.assignable(module, &e.span, *got, want) {
                     let (g, w) = (self.show(*got), self.show(want));
-                    self.error(e.span.clone(), TypeErrorKind::Mismatch { expected: w, found: g });
+                    self.error(
+                        e.span.clone(),
+                        TypeErrorKind::Mismatch {
+                            expected: w,
+                            found: g,
+                        },
+                    );
                 }
             }
         }
@@ -2193,7 +2334,13 @@ impl Checker<'_> {
                     };
                     if !self.assignable(module, &span, throws, want) {
                         let (t, w) = (self.show(throws), self.show(want));
-                        self.error(span, TypeErrorKind::Throws { thrown: t, declared: w });
+                        self.error(
+                            span,
+                            TypeErrorKind::Throws {
+                                thrown: t,
+                                declared: w,
+                            },
+                        );
                     }
                 }
             }
@@ -2333,7 +2480,9 @@ impl Checker<'_> {
     ///
     /// See `opacity_permits` for which modules count as inside.
     fn check_opaque_name(&mut self, module: &[String], span: Span, name: &str, what: &str) {
-        let Some(owner) = self.env.opaque_record_named(module, name) else { return };
+        let Some(owner) = self.env.opaque_record_named(module, name) else {
+            return;
+        };
         let owner = owner.to_vec();
         self.report_opacity(module, span, name, what, owner);
     }
@@ -2341,7 +2490,9 @@ impl Checker<'_> {
     /// The same rule for a record the source *names*, where the written path resolves
     /// unambiguously and no fallback is needed.
     fn check_opaque_path(&mut self, module: &[String], span: Span, path: &[String], what: &str) {
-        let Some(owner) = self.env.opaque_record_at(module, path) else { return };
+        let Some(owner) = self.env.opaque_record_at(module, path) else {
+            return;
+        };
         let owner = owner.to_vec();
         let name = path.last().cloned().unwrap_or_default();
         self.report_opacity(module, span, &name, what, owner);
@@ -2372,7 +2523,11 @@ impl Checker<'_> {
         if super::env::opacity_permits(module, &owner) {
             return;
         }
-        let shown = if owner.is_empty() { "the prelude".to_string() } else { owner.join("::") };
+        let shown = if owner.is_empty() {
+            "the prelude".to_string()
+        } else {
+            owner.join("::")
+        };
         self.error(
             span,
             TypeErrorKind::OpaqueRecord {
@@ -2459,7 +2614,14 @@ impl Checker<'_> {
                 // Recorded rather than recomputed because no later pass can: the frame
                 // that held the binding is popped when the block ends.
                 if let Some((span, kind)) = self.binding_of(one) {
-                    self.result.set_def(e.id, DefSite { module: module.to_vec(), span, kind });
+                    self.result.set_def(
+                        e.id,
+                        DefSite {
+                            module: module.to_vec(),
+                            span,
+                            kind,
+                        },
+                    );
                 }
                 return t;
             }
@@ -2470,8 +2632,11 @@ impl Checker<'_> {
         // should fix rather than one this silently orders.
         if let Some(c) = self.env.const_named(module, p) {
             let ty = c.ty;
-            let site =
-                DefSite { module: c.module.clone(), span: c.span.clone(), kind: DefKind::Const };
+            let site = DefSite {
+                module: c.module.clone(),
+                span: c.span.clone(),
+                kind: DefKind::Const,
+            };
             self.result.set_def(e.id, site);
             return ty;
         }
@@ -2483,14 +2648,23 @@ impl Checker<'_> {
             // The declaring module, not `module`: a `use`d name is defined where it was
             // written, and that is the file the jump has to open.
             let ty = sig.ty;
-            let site =
-                DefSite { module: sig.module.clone(), span: sig.span.clone(), kind: DefKind::Fn };
+            let site = DefSite {
+                module: sig.module.clone(),
+                span: sig.span.clone(),
+                kind: DefKind::Fn,
+            };
             self.result.set_def(e.id, site);
             return ty;
         }
         // A name that exists but is fenced off reports why, rather than "not in scope".
         if let Some(owner) = self.env.hidden_by_internal(module, p) {
-            self.error(e.span.clone(), TypeErrorKind::Internal { name: joined, owner });
+            self.error(
+                e.span.clone(),
+                TypeErrorKind::Internal {
+                    name: joined,
+                    owner,
+                },
+            );
             return self.poison();
         }
         self.error(e.span.clone(), TypeErrorKind::UnknownName(joined));
@@ -2505,7 +2679,15 @@ impl Checker<'_> {
     /// That fallthrough accepts any pair where one side is assignable to the other and
     /// yields the *left* type. It does not consult a numeric protocol, so `str + i64` is
     /// caught only because the two are unrelated, not because addition was checked.
-    fn binary(&mut self, module: &[String], e: &Expr, op: BinOp, lhs: &Expr, rhs: &Expr, expected: Option<TyId>) -> TyId {
+    fn binary(
+        &mut self,
+        module: &[String],
+        e: &Expr,
+        op: BinOp,
+        lhs: &Expr,
+        rhs: &Expr,
+        expected: Option<TyId>,
+    ) -> TyId {
         match op {
             BinOp::And | BinOp::Or => {
                 let b = self.env.solver.t.bool();
@@ -2520,17 +2702,22 @@ impl Checker<'_> {
                 let l = self.expr(module, lhs, None);
                 let r = self.expr(module, rhs, None);
                 let is_null = |e: &Expr| matches!(e.kind, ExprKind::Null);
-                if !is_null(lhs) && !is_null(rhs) && !self.env.is_error(l) && !self.env.is_error(r) {
+                if !is_null(lhs) && !is_null(rhs) && !self.env.is_error(l) && !self.env.is_error(r)
+                {
                     let meet = self.env.solver.t.intersect(l, r);
                     let both_atoms = self.is_atomic(l) && self.is_atomic(r);
                     // One side being a subtype of the other is comparable even when the
                     // meet is empty: `xs == []` compares `List[i64]` with `List[never]`,
                     // and `List[never]` has no *inhabitants* to intersect with, so the
                     // overlap test alone rejected the natural way to ask "is this empty".
-                    let related = self.env.solver.is_subtype(l, r) || self.env.solver.is_subtype(r, l);
+                    let related =
+                        self.env.solver.is_subtype(l, r) || self.env.solver.is_subtype(r, l);
                     if self.env.solver.is_empty(meet) && !both_atoms && !related {
                         let (a, b) = (self.show(l), self.show(r));
-                        self.error(e.span.clone(), TypeErrorKind::Incomparable { left: a, right: b });
+                        self.error(
+                            e.span.clone(),
+                            TypeErrorKind::Incomparable { left: a, right: b },
+                        );
                     } else if !super::ordered::is_equatable(self.env, l)
                         || !super::ordered::is_equatable(self.env, r)
                     {
@@ -2552,7 +2739,10 @@ impl Checker<'_> {
                 if !self.env.is_error(l) && !self.env.is_error(r) {
                     if self.env.solver.is_empty(meet) {
                         let (a, b) = (self.show(l), self.show(r));
-                        self.error(e.span.clone(), TypeErrorKind::Incomparable { left: a, right: b });
+                        self.error(
+                            e.span.clone(),
+                            TypeErrorKind::Incomparable { left: a, right: b },
+                        );
                     } else if !self.is_ordered(meet) {
                         let shown = self.show(meet);
                         self.error(e.span.clone(), TypeErrorKind::Unordered { ty: shown });
@@ -2585,7 +2775,12 @@ impl Checker<'_> {
             }
             BinOp::Pipe => {
                 // `a |> f(b)` is `f(a, b)`: the receiver becomes the first argument.
-                if let ExprKind::Call { callee, generics, args } = &rhs.kind {
+                if let ExprKind::Call {
+                    callee,
+                    generics,
+                    args,
+                } = &rhs.kind
+                {
                     let mut piped = Vec::with_capacity(args.len() + 1);
                     piped.push(lhs.clone());
                     piped.extend(args.iter().cloned());
@@ -2598,9 +2793,17 @@ impl Checker<'_> {
             _ => {
                 let l = self.expr(module, lhs, None);
                 let r = self.expr(module, rhs, None);
-                if !self.assignable(module, &e.span, r, l) && !self.assignable(module, &e.span, l, r) {
+                if !self.assignable(module, &e.span, r, l)
+                    && !self.assignable(module, &e.span, l, r)
+                {
                     let (a, b) = (self.show(l), self.show(r));
-                    self.error(e.span.clone(), TypeErrorKind::Mismatch { expected: a, found: b });
+                    self.error(
+                        e.span.clone(),
+                        TypeErrorKind::Mismatch {
+                            expected: a,
+                            found: b,
+                        },
+                    );
                     return self.poison();
                 }
                 l
@@ -2699,7 +2902,10 @@ impl Checker<'_> {
             if let Some((pattern, names_type)) = swallowed.take() {
                 self.error(
                     arm.pat.span.clone(),
-                    TypeErrorKind::UnreachableArm { pattern, names_type },
+                    TypeErrorKind::UnreachableArm {
+                        pattern,
+                        names_type,
+                    },
                 );
             }
             let test = self.arm_test(module, arm, subject);
@@ -2746,24 +2952,22 @@ impl Checker<'_> {
                 Some(narrow::Refined::Both { then_ty, else_ty }) => (then_ty, else_ty),
                 // The test covers everything still reachable: bind it all, nothing falls
                 // through.
-                Some(narrow::Refined::AlwaysMatches(_)) => {
-                    (remaining, self.env.solver.t.never())
-                }
+                Some(narrow::Refined::AlwaysMatches(_)) => (remaining, self.env.solver.t.never()),
                 // Nothing reachable matches (reported above when it is the subject's
                 // fault); the binding is empty and poisons below.
-                Some(narrow::Refined::NeverMatches(_)) => {
-                    (self.env.solver.t.never(), remaining)
-                }
-                Some(narrow::Refined::Unreachable) => {
-                    (self.env.solver.t.never(), remaining)
-                }
+                Some(narrow::Refined::NeverMatches(_)) => (self.env.solver.t.never(), remaining),
+                Some(narrow::Refined::Unreachable) => (self.env.solver.t.never(), remaining),
             };
             remaining = after;
             // Never hand an arm an empty binding, reported or not. Poison is the checker's
             // "already dealt with" type; `never` is the one that makes the next check
             // succeed for the wrong reason. `Refined::Both` is inhabited on both sides by
             // construction, so this fires only on the constructed `never`s above.
-            let bound = if self.env.solver.is_empty(bound) { self.poison() } else { bound };
+            let bound = if self.env.solver.is_empty(bound) {
+                self.poison()
+            } else {
+                bound
+            };
             if let Some(v) = &scrut_var {
                 self.bind(v, bound, scrutinee.span.clone(), DefKind::Refinement);
             }
@@ -2777,7 +2981,11 @@ impl Checker<'_> {
             result = self.union_branches(result, t);
             if let ast::PatternKind::Literal(lit) = &arm.pat.kind {
                 if let (ExprKind::Bool(b), None) = (&lit.kind, &arm.guard) {
-                    if *b { saw_true = true } else { saw_false = true }
+                    if *b {
+                        saw_true = true
+                    } else {
+                        saw_false = true
+                    }
                 }
             }
             if arm.guard.is_none() {
@@ -2786,8 +2994,7 @@ impl Checker<'_> {
                         // `names_type` drives the "write `is A`" half of the message:
                         // a binder that happens to spell a type name in scope is the
                         // shadowing trap, not a deliberate catch-all.
-                        let names_type =
-                            self.env.lookup(module, std::slice::from_ref(n)).is_some();
+                        let names_type = self.env.lookup(module, std::slice::from_ref(n)).is_some();
                         swallowed = Some((n.clone(), names_type));
                     }
                     ast::PatternKind::Wildcard => swallowed = Some(("_".into(), false)),
@@ -2824,23 +3031,37 @@ impl Checker<'_> {
         let nothing = (vec![], vec![]);
         match &cond.kind {
             ExprKind::Is { lhs, .. } => {
-                let Some(name) = self.scrutinee_var(lhs) else { return nothing };
-                let Some(subject) = self.place_subject(lhs) else { return nothing };
-                let Some(tested) = self.result.tested(cond.id) else { return nothing };
+                let Some(name) = self.scrutinee_var(lhs) else {
+                    return nothing;
+                };
+                let Some(subject) = self.place_subject(lhs) else {
+                    return nothing;
+                };
+                let Some(tested) = self.result.tested(cond.id) else {
+                    return nothing;
+                };
                 if self.env.is_error(subject) {
                     return nothing;
                 }
                 let refined = narrow::narrow_is(&mut self.env.solver, subject, tested);
                 self.refinement_pair(name, subject, refined, false)
             }
-            ExprKind::Binary { op: op @ (BinOp::Eq | BinOp::Ne), lhs, rhs } => {
+            ExprKind::Binary {
+                op: op @ (BinOp::Eq | BinOp::Ne),
+                lhs,
+                rhs,
+            } => {
                 let subject_expr = match (&lhs.kind, &rhs.kind) {
                     (ExprKind::Null, _) => rhs,
                     (_, ExprKind::Null) => lhs,
                     _ => return nothing,
                 };
-                let Some(name) = self.scrutinee_var(subject_expr) else { return nothing };
-                let Some(subject) = self.place_subject(subject_expr) else { return nothing };
+                let Some(name) = self.scrutinee_var(subject_expr) else {
+                    return nothing;
+                };
+                let Some(subject) = self.place_subject(subject_expr) else {
+                    return nothing;
+                };
                 if self.env.is_error(subject) {
                     return nothing;
                 }
@@ -2851,13 +3072,21 @@ impl Checker<'_> {
                 let (t, e) = self.cond_refinements(rhs);
                 (e, t)
             }
-            ExprKind::Binary { op: BinOp::And, lhs, rhs } => {
+            ExprKind::Binary {
+                op: BinOp::And,
+                lhs,
+                rhs,
+            } => {
                 let (mut tl, _) = self.cond_refinements(lhs);
                 let (tr, _) = self.cond_refinements(rhs);
                 tl.extend(tr);
                 (tl, vec![])
             }
-            ExprKind::Binary { op: BinOp::Or, lhs, rhs } => {
+            ExprKind::Binary {
+                op: BinOp::Or,
+                lhs,
+                rhs,
+            } => {
                 let (_, mut el) = self.cond_refinements(lhs);
                 let (_, er) = self.cond_refinements(rhs);
                 el.extend(er);
@@ -2886,11 +3115,17 @@ impl Checker<'_> {
         refined: narrow::Refined,
         flip: bool,
     ) -> Refinements {
-        let Some((then_ty, else_ty)) = refined.both() else { return (vec![], vec![]) };
+        let Some((then_ty, else_ty)) = refined.both() else {
+            return (vec![], vec![]);
+        };
         let top = self.env.solver.t.any();
         let subject_is_top = self.env.solver.is_subtype(top, subject);
         let thens = vec![(name.clone(), then_ty)];
-        let elses = if subject_is_top { vec![] } else { vec![(name, else_ty)] };
+        let elses = if subject_is_top {
+            vec![]
+        } else {
+            vec![(name, else_ty)]
+        };
         if flip {
             (elses, thens)
         } else {
@@ -2993,7 +3228,12 @@ impl Checker<'_> {
 
     /// What an arm tests for, or `None` when it is a plain binding (which admits
     /// everything, and so is not a test at all).
-    fn arm_test(&mut self, module: &[String], arm: &ast::MatchArm, subject: TyId) -> Option<narrow::Test> {
+    fn arm_test(
+        &mut self,
+        module: &[String],
+        arm: &ast::MatchArm,
+        subject: TyId,
+    ) -> Option<narrow::Test> {
         let scope = self.type_scope(module);
         match &arm.pat.kind {
             ast::PatternKind::Wildcard | ast::PatternKind::Bind(_) => {
@@ -3028,15 +3268,26 @@ impl Checker<'_> {
             // `Circle { r }` reads `r` as an `i64`. It covers that member only when
             // every field pattern is irrefutable -- `Circle { r: 0 }` matches one
             // Circle among many, so it covers nothing and needs a fallthrough.
-            ast::PatternKind::Record { path: Some(p), fields, .. } => {
+            ast::PatternKind::Record {
+                path: Some(p),
+                fields,
+                ..
+            } => {
                 let spec = ast::TypeSpec {
-                    kind: ast::TypeSpecKind::Named { path: p.clone(), args: vec![] },
+                    kind: ast::TypeSpecKind::Named {
+                        path: p.clone(),
+                        args: vec![],
+                    },
                     span: arm.pat.span.clone(),
                 };
                 let t = self.env.resolve(&scope, &spec);
                 self.result.set_tested(arm.pat.id, t);
                 let exact = fields.iter().all(Self::field_irrefutable);
-                Some(if exact { narrow::Test::exact(t) } else { narrow::Test::inexact(t) })
+                Some(if exact {
+                    narrow::Test::exact(t)
+                } else {
+                    narrow::Test::inexact(t)
+                })
             }
             _ => None,
         }
@@ -3102,7 +3353,13 @@ impl Checker<'_> {
             let field = narrow::project_field(&mut self.env.solver, base_ty, label);
             if field.ty().is_none() && !self.env.is_error(base_ty) {
                 let on = self.show(base_ty);
-                self.error(callee.span.clone(), TypeErrorKind::DotCall { method: name.clone(), on });
+                self.error(
+                    callee.span.clone(),
+                    TypeErrorKind::DotCall {
+                        method: name.clone(),
+                        on,
+                    },
+                );
                 return self.poison();
             }
         }
@@ -3122,7 +3379,11 @@ impl Checker<'_> {
                 // Keyed on the callee, not the call: the name the user can click is the
                 // callee's span, and `set_call` already covers the call itself.
                 if let Some((span, kind)) = self.binding_of(one) {
-                    let site = DefSite { module: module.to_vec(), span, kind };
+                    let site = DefSite {
+                        module: module.to_vec(),
+                        span,
+                        kind,
+                    };
                     self.result.set_def(callee.id, site);
                 }
                 return self.apply(module, e, one, t, args);
@@ -3146,7 +3407,10 @@ impl Checker<'_> {
         if let Some(owner) = self.env.hidden_by_internal(module, p) {
             self.error(
                 callee.span.clone(),
-                TypeErrorKind::Internal { name: p.join("::"), owner },
+                TypeErrorKind::Internal {
+                    name: p.join("::"),
+                    owner,
+                },
             );
             return self.poison();
         }
@@ -3171,15 +3435,22 @@ impl Checker<'_> {
         match dispatch::resolve(self.env, &name, qualified, &arg_tys, expected) {
             Ok(s) => {
                 self.dispatch_gate(module, &e.span, &s, &arg_tys);
-                if let dispatch::Resolution::Bound { param, protocol, .. } = &s.resolution {
-                    let ok = self.bounds.iter().any(|(n, p)| {
-                        n == param && self.env.protocol_extends(*p, *protocol)
-                    });
+                if let dispatch::Resolution::Bound {
+                    param, protocol, ..
+                } = &s.resolution
+                {
+                    let ok = self
+                        .bounds
+                        .iter()
+                        .any(|(n, p)| n == param && self.env.protocol_extends(*p, *protocol));
                     if !ok {
                         let pname = self.env.protocols()[protocol.0].name.clone();
                         self.error(
                             e.span.clone(),
-                            TypeErrorKind::UnsatisfiedBound { ty: param.clone(), protocol: pname },
+                            TypeErrorKind::UnsatisfiedBound {
+                                ty: param.clone(),
+                                protocol: pname,
+                            },
                         );
                     }
                 }
@@ -3283,11 +3554,15 @@ impl Checker<'_> {
         // Discharge each `where T: P`: the type T was bound to must satisfy P here.
         for (param, proto_path) in &sig.wheres {
             let pn = self.env.solver.t.name(param);
-            let Some(&concrete) = subst.get(&pn) else { continue };
+            let Some(&concrete) = subst.get(&pn) else {
+                continue;
+            };
             if self.env.is_error(concrete) {
                 continue;
             }
-            let Some(pid) = self.env.lookup_protocol(module, proto_path) else { continue };
+            let Some(pid) = self.env.lookup_protocol(module, proto_path) else {
+                continue;
+            };
             // A marker is answered from structure, so it is checked *here* rather than
             // through `type_satisfies`: this is the only place that knows the enclosing
             // signature's own bounds, and they are what make a still-generic argument
@@ -3331,10 +3606,10 @@ impl Checker<'_> {
         // not traced further; the canonical tag check guards that depth at run time.
         for p in &sig.asserts {
             let pn = self.env.solver.t.name(p);
-            let Some(&concrete) = subst.get(&pn) else { continue };
-            if self.env.is_error(concrete)
-                || super::generic::is_var(&self.env.solver.t, concrete)
-            {
+            let Some(&concrete) = subst.get(&pn) else {
+                continue;
+            };
+            if self.env.is_error(concrete) || super::generic::is_var(&self.env.solver.t, concrete) {
                 continue;
             }
             if let Some((record, owner)) = self.sealed_leaf(&sig.module.clone(), concrete) {
@@ -3373,8 +3648,11 @@ impl Checker<'_> {
     ) -> std::collections::HashMap<super::types::NameId, TyId> {
         use std::collections::{HashMap, HashSet};
         let mut subst: HashMap<_, TyId> = HashMap::new();
-        let var_names: HashSet<_> =
-            sig.generics.iter().map(|g| self.env.solver.t.name(g)).collect();
+        let var_names: HashSet<_> = sig
+            .generics
+            .iter()
+            .map(|g| self.env.solver.t.name(g))
+            .collect();
 
         if !generics.is_empty() {
             let scope = self.type_scope(module);
@@ -3395,13 +3673,26 @@ impl Checker<'_> {
         }
         let arg_tys: Vec<TyId> = args.iter().map(|a| self.expr(module, a, None)).collect();
         for ((_, template), &aty) in sig.params.iter().zip(&arg_tys) {
-            super::generic::infer(&mut self.env.solver.t, *template, aty, &var_names, &mut subst);
+            super::generic::infer(
+                &mut self.env.solver.t,
+                *template,
+                aty,
+                &var_names,
+                &mut subst,
+            );
         }
         subst
     }
 
     /// Call a value. `callee_ty` must be an arrow; `what` names it for diagnostics.
-    fn apply(&mut self, module: &[String], e: &Expr, what: &str, callee_ty: TyId, args: &[Expr]) -> TyId {
+    fn apply(
+        &mut self,
+        module: &[String],
+        e: &Expr,
+        what: &str,
+        callee_ty: TyId,
+        args: &[Expr],
+    ) -> TyId {
         if self.env.is_error(callee_ty) {
             for a in args {
                 self.expr(module, a, None);
@@ -3413,7 +3704,13 @@ impl Checker<'_> {
                 self.expr(module, a, None);
             }
             let ty = self.show(callee_ty);
-            self.error(e.span.clone(), TypeErrorKind::NotCallable { what: what.to_string(), ty });
+            self.error(
+                e.span.clone(),
+                TypeErrorKind::NotCallable {
+                    what: what.to_string(),
+                    ty,
+                },
+            );
             return self.poison();
         };
         if arrow.params.len() != args.len() {
@@ -3448,17 +3745,32 @@ impl Checker<'_> {
             DispatchError::Ambiguous { method, protocols } => {
                 TypeErrorKind::AmbiguousCall { method, protocols }
             }
-            DispatchError::NoImpl { protocol, method, uncovered } => {
+            DispatchError::NoImpl {
+                protocol,
+                method,
+                uncovered,
+            } => {
                 let uncovered = self.show(uncovered);
-                TypeErrorKind::NoImpl { protocol, method, uncovered }
+                TypeErrorKind::NoImpl {
+                    protocol,
+                    method,
+                    uncovered,
+                }
             }
             DispatchError::NoReceiver(n) => TypeErrorKind::NoReceiver(n),
-            DispatchError::NoSubjectToSwitch { protocol, method, subject } => {
+            DispatchError::NoSubjectToSwitch {
+                protocol,
+                method,
+                subject,
+            } => {
                 let subject = self.show(subject);
-                TypeErrorKind::NoSubjectToSwitch { protocol, method, subject }
+                TypeErrorKind::NoSubjectToSwitch {
+                    protocol,
+                    method,
+                    subject,
+                }
             }
         };
         self.error(span, kind);
     }
 }
-

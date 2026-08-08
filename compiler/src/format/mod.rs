@@ -217,7 +217,10 @@ impl<'a> Fmt<'a> {
         }
         // An empty group has one gap, and no reason to open for it.
         broken = !items.is_empty() && (broken || self.gap_broken(prev_end, close.start));
-        Layout { broken, close: close.start }
+        Layout {
+            broken,
+            close: close.start,
+        }
     }
 
     /// The span of the first `want` at or after `after`.
@@ -611,7 +614,10 @@ impl<'a> Fmt<'a> {
                 let open = self.token_span_before(first.span.start, &Token::LParen);
                 self.layout(open.start, &Token::LParen, &Token::RParen, &spans)
             }
-            None => Layout { broken: false, close: 0 },
+            None => Layout {
+                broken: false,
+                close: 0,
+            },
         };
         self.push("(");
         self.seq(
@@ -831,7 +837,11 @@ impl<'a> Fmt<'a> {
                 self.push("!");
                 self.ty(inner, TP_NEGATE);
             }
-            TypeSpecKind::Fn { params, throws, ret } => {
+            TypeSpecKind::Fn {
+                params,
+                throws,
+                ret,
+            } => {
                 self.push("(");
                 self.ty_run(params, ", ", TP_ANY);
                 self.push(")");
@@ -1104,7 +1114,11 @@ impl<'a> Fmt<'a> {
                 self.push(" ");
                 self.expr(rhs, op.prec() + 1);
             }
-            ExprKind::Call { callee, generics, args } => {
+            ExprKind::Call {
+                callee,
+                generics,
+                args,
+            } => {
                 self.expr(callee, P_POSTFIX);
                 if !generics.is_empty() {
                     self.grouped(|s| {
@@ -1137,8 +1151,7 @@ impl<'a> Fmt<'a> {
                 self.push(name);
             }
             ExprKind::List(elems) => {
-                let spans: Vec<Span> =
-                    elems.iter().map(|el| elem_expr(el).span.clone()).collect();
+                let spans: Vec<Span> = elems.iter().map(|el| elem_expr(el).span.clone()).collect();
                 let l = self.layout(e.span.start, &Token::LBracket, &Token::RBracket, &spans);
                 self.push("[");
                 self.seq(
@@ -1156,9 +1169,11 @@ impl<'a> Fmt<'a> {
                 );
                 self.push("]");
             }
-            ExprKind::RecordLit { path, fields, spread } => {
-                self.record_lit(path.as_deref(), fields, spread.as_deref(), &e.span)
-            }
+            ExprKind::RecordLit {
+                path,
+                fields,
+                spread,
+            } => self.record_lit(path.as_deref(), fields, spread.as_deref(), &e.span),
             ExprKind::Tuple(v) => {
                 let spans: Vec<Span> = v.iter().map(|e| e.span.clone()).collect();
                 let l = self.layout(e.span.start, &Token::LParen, &Token::RParen, &spans);
@@ -1188,7 +1203,11 @@ impl<'a> Fmt<'a> {
                     s.push(")");
                 });
                 self.push(" => ");
-                let body_prec = if is_block_like(body) { P_BLOCK_LIKE } else { P_UNARY };
+                let body_prec = if is_block_like(body) {
+                    P_BLOCK_LIKE
+                } else {
+                    P_UNARY
+                };
                 self.expr(body, body_prec);
             }
             ExprKind::If { cond, then, else_ } => {
@@ -1296,7 +1315,11 @@ impl<'a> Fmt<'a> {
                     TryForm::Soften => "try? ",
                     TryForm::Assert => "try! ",
                 });
-                let body_prec = if is_block_like(body) { P_BLOCK_LIKE } else { P_UNARY };
+                let body_prec = if is_block_like(body) {
+                    P_BLOCK_LIKE
+                } else {
+                    P_UNARY
+                };
                 self.expr(body, body_prec);
                 if let Some(c) = catch {
                     self.push(" catch (");
@@ -1547,10 +1570,9 @@ fn expr_prec(e: &Expr) -> u8 {
         | ExprKind::As { .. } => P_POSTFIX,
         // `break` and `return` with no value are greedy too: in `break - 1` the
         // `-1` is read as their operand.
-        ExprKind::Return(_)
-        | ExprKind::Break(_)
-        | ExprKind::Throw(_)
-        | ExprKind::Lambda { .. } => P_GREEDY,
+        ExprKind::Return(_) | ExprKind::Break(_) | ExprKind::Throw(_) | ExprKind::Lambda { .. } => {
+            P_GREEDY
+        }
         // `try` is NOT greedy: its body is the unary-level parser, so it binds
         // tighter than every binary operator. `try? get(m, k) orelse 30` is
         // `(try? get(m, k)) orelse 30` and needs no parentheses to say so.

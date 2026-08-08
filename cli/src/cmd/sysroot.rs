@@ -35,7 +35,11 @@ pub fn run(stdlib_only: bool) -> Result<()> {
     println!("  runtime archives in {}:", s.lib_dir().display());
     for flavor in ["gcc", "clang"] {
         println!("    {flavor}/");
-        for v in [RuntimeVariant::Release, RuntimeVariant::Debug, RuntimeVariant::Sanitized] {
+        for v in [
+            RuntimeVariant::Release,
+            RuntimeVariant::Debug,
+            RuntimeVariant::Sanitized,
+        ] {
             let mark = if s.lib_dir().join(flavor).join(v.archive()).is_file() {
                 "present"
             } else {

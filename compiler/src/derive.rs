@@ -179,7 +179,11 @@ impl Derivable for Display {
         } else {
             parts.push(StrPart::Text(format!("{} {{ ", r.name)));
             for (i, f) in r.fields.iter().enumerate() {
-                let lead = if i == 0 { String::new() } else { ", ".to_string() };
+                let lead = if i == 0 {
+                    String::new()
+                } else {
+                    ", ".to_string()
+                };
                 parts.push(StrPart::Text(format!("{lead}{}: ", f.name)));
                 parts.push(StrPart::Interp(field_of("v", &f.name, &sp())));
             }
@@ -195,7 +199,11 @@ impl Derivable for Display {
         let method = FnDecl {
             name: "to_string".to_string(),
             generics: vec![],
-            params: vec![Param { name: "v".to_string(), ty: target.clone(), span: sp() }],
+            params: vec![Param {
+                name: "v".to_string(),
+                ty: target.clone(),
+                span: sp(),
+            }],
             throws: None,
             ret: Some(named("str", vec![], &sp())),
             wheres: vec![],
@@ -205,12 +213,20 @@ impl Derivable for Display {
 
         // The bound is spelled with the author's path too, so `where T: Display` and a qualified
         // `where T: std::fmt::Display` resolve to whatever the impl's own protocol resolved to.
-        let bound =
-            TypeSpec { kind: TypeSpecKind::Named { path: protocol.to_vec(), args: vec![] }, span: sp() };
+        let bound = TypeSpec {
+            kind: TypeSpecKind::Named {
+                path: protocol.to_vec(),
+                args: vec![],
+            },
+            span: sp(),
+        };
         let wheres = r
             .generics
             .iter()
-            .map(|g| WhereClause { param: g.clone(), bound: bound.clone() })
+            .map(|g| WhereClause {
+                param: g.clone(),
+                bound: bound.clone(),
+            })
             .collect();
 
         Decl {
@@ -238,7 +254,10 @@ fn self_type(r: &RecordDecl, span: &Span) -> TypeSpec {
 
 fn named(name: &str, args: Vec<TypeSpec>, span: &Span) -> TypeSpec {
     TypeSpec {
-        kind: TypeSpecKind::Named { path: vec![name.to_string()], args },
+        kind: TypeSpecKind::Named {
+            path: vec![name.to_string()],
+            args,
+        },
         span: span.clone(),
     }
 }
@@ -308,15 +327,26 @@ impl Derivable for ToJson {
             &sp(),
         );
 
-        let body = Block { stmts: vec![], tail: Some(Box::new(call)), span: sp() };
+        let body = Block {
+            stmts: vec![],
+            tail: Some(Box::new(call)),
+            span: sp(),
+        };
 
         let method = FnDecl {
             name: "to_json".to_string(),
             generics: vec![],
-            params: vec![Param { name: "v".to_string(), ty: target.clone(), span: sp() }],
+            params: vec![Param {
+                name: "v".to_string(),
+                ty: target.clone(),
+                span: sp(),
+            }],
             throws: None,
             ret: Some(TypeSpec {
-                kind: TypeSpecKind::Named { path: json_path("Json"), args: vec![] },
+                kind: TypeSpecKind::Named {
+                    path: json_path("Json"),
+                    args: vec![],
+                },
                 span: sp(),
             }),
             wheres: vec![],
@@ -326,12 +356,20 @@ impl Derivable for ToJson {
 
         // As in `display_impl`: the bound carries the author's protocol path, so a qualified
         // `@derive(json::ToJson)` bounds its parameters by the same protocol the impl is for.
-        let bound =
-            TypeSpec { kind: TypeSpecKind::Named { path: protocol.to_vec(), args: vec![] }, span: sp() };
+        let bound = TypeSpec {
+            kind: TypeSpecKind::Named {
+                path: protocol.to_vec(),
+                args: vec![],
+            },
+            span: sp(),
+        };
         let wheres = r
             .generics
             .iter()
-            .map(|g| WhereClause { param: g.clone(), bound: bound.clone() })
+            .map(|g| WhereClause {
+                param: g.clone(),
+                bound: bound.clone(),
+            })
             .collect();
 
         Decl {
@@ -412,15 +450,27 @@ impl Derivable for FromJson {
                     ),
                     &sp(),
                 );
-                crate::ast::FieldInit { name: f.name.clone(), value: decoded, span: sp() }
+                crate::ast::FieldInit {
+                    name: f.name.clone(),
+                    value: decoded,
+                    span: sp(),
+                }
             })
             .collect();
 
         let lit = expr(
-            ExprKind::RecordLit { path: Some(vec![r.name.clone()]), fields, spread: None },
+            ExprKind::RecordLit {
+                path: Some(vec![r.name.clone()]),
+                fields,
+                spread: None,
+            },
             &sp(),
         );
-        let body = Block { stmts: vec![], tail: Some(Box::new(lit)), span: sp() };
+        let body = Block {
+            stmts: vec![],
+            tail: Some(Box::new(lit)),
+            span: sp(),
+        };
 
         let method = FnDecl {
             name: "from_json".to_string(),
@@ -428,13 +478,19 @@ impl Derivable for FromJson {
             params: vec![Param {
                 name: "j".to_string(),
                 ty: TypeSpec {
-                    kind: TypeSpecKind::Named { path: json_path("Json"), args: vec![] },
+                    kind: TypeSpecKind::Named {
+                        path: json_path("Json"),
+                        args: vec![],
+                    },
                     span: sp(),
                 },
                 span: sp(),
             }],
             throws: Some(TypeSpec {
-                kind: TypeSpecKind::Named { path: json_path("JsonError"), args: vec![] },
+                kind: TypeSpecKind::Named {
+                    path: json_path("JsonError"),
+                    args: vec![],
+                },
                 span: sp(),
             }),
             ret: Some(target.clone()),
@@ -443,12 +499,20 @@ impl Derivable for FromJson {
             annotations: vec![],
         };
 
-        let bound =
-            TypeSpec { kind: TypeSpecKind::Named { path: protocol.to_vec(), args: vec![] }, span: sp() };
+        let bound = TypeSpec {
+            kind: TypeSpecKind::Named {
+                path: protocol.to_vec(),
+                args: vec![],
+            },
+            span: sp(),
+        };
         let wheres = r
             .generics
             .iter()
-            .map(|g| WhereClause { param: g.clone(), bound: bound.clone() })
+            .map(|g| WhereClause {
+                param: g.clone(),
+                bound: bound.clone(),
+            })
             .collect();
 
         Decl {
@@ -487,9 +551,19 @@ fn json_path(name: &str) -> Vec<String> {
 
 fn field_of(base: &str, field: &str, span: &Span) -> Expr {
     let b = expr(ExprKind::Path(vec![base.to_string()]), span);
-    expr(ExprKind::Field { base: Box::new(b), name: field.to_string() }, span)
+    expr(
+        ExprKind::Field {
+            base: Box::new(b),
+            name: field.to_string(),
+        },
+        span,
+    )
 }
 
 fn expr(kind: ExprKind, span: &Span) -> Expr {
-    Expr { kind, span: span.clone(), id: ExprId::UNSET }
+    Expr {
+        kind,
+        span: span.clone(),
+        id: ExprId::UNSET,
+    }
 }

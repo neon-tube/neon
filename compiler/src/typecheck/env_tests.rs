@@ -6,7 +6,10 @@ use crate::{ast, lexer, parser};
 fn parse(src: &str) -> ast::Module {
     let tokens = lexer::lex(src).expect("the fixture lexes");
     let (m, errs) = parser::parse(&tokens, src.len());
-    assert!(errs.is_empty(), "parse errors in the fixture {src:?}: {errs:?}");
+    assert!(
+        errs.is_empty(),
+        "parse errors in the fixture {src:?}: {errs:?}"
+    );
     m.expect("the fixture parses")
 }
 
@@ -17,7 +20,9 @@ fn env(src: &str) -> Env {
 /// Resolve a type written as source, in the root module.
 fn ty(e: &mut Env, src: &str) -> TyId {
     let m = parse(&format!("fn probe(x: {src}) {{ }}"));
-    let ast::DeclKind::Fn(f) = &m.decls[0].kind else { unreachable!("the fixture is a fn") };
+    let ast::DeclKind::Fn(f) = &m.decls[0].kind else {
+        unreachable!("the fixture is a fn")
+    };
     let scope = Scope::new(&[]);
     e.resolve(&scope, &f.params[0].ty)
 }
@@ -31,7 +36,11 @@ fn kinds(e: &Env) -> Vec<TypeErrorKind> {
 }
 
 fn assert_clean(e: &Env) {
-    assert!(e.errors().is_empty(), "unexpected diagnostics: {:?}", errors(e));
+    assert!(
+        e.errors().is_empty(),
+        "unexpected diagnostics: {:?}",
+        errors(e)
+    );
 }
 
 // ---- primitives and the obvious constructors ----
@@ -57,7 +66,10 @@ fn any_is_top_not_a_marker() {
     assert_eq!(a, top);
     for src in ["i64", "str", ":ok", "(i64) -> i64", "{ x: i64 }"] {
         let t = ty(&mut e, src);
-        assert!(e.solver.is_subtype(t, a), "`any` is inhabited by every {src}");
+        assert!(
+            e.solver.is_subtype(t, a),
+            "`any` is inhabited by every {src}"
+        );
     }
     assert_clean(&e);
 }
@@ -92,8 +104,14 @@ fn the_poison_satisfies_nothing_and_is_satisfied_by_nothing() {
     assert!(e.is_error(bad));
     for src in ["i64", "str", ":ok", "{ x: i64 }"] {
         let t = ty(&mut e, src);
-        assert!(!e.solver.is_subtype(bad, t), "poison is not a subtype of {src}");
-        assert!(!e.solver.is_subtype(t, bad), "{src} is not a subtype of poison");
+        assert!(
+            !e.solver.is_subtype(bad, t),
+            "poison is not a subtype of {src}"
+        );
+        assert!(
+            !e.solver.is_subtype(t, bad),
+            "{src} is not a subtype of poison"
+        );
     }
     assert!(!e.solver.is_empty(bad), "poison is not `never`");
 }
@@ -112,7 +130,10 @@ fn user_negation_does_not_contain_the_absent_marker() {
     assert!(e.solver.is_empty(leak), "`!i64` must not contain undef");
 
     let any = e.solver.t.any();
-    assert!(e.solver.is_subtype(not_i64, any), "`!T` stays inside the value lattice");
+    assert!(
+        e.solver.is_subtype(not_i64, any),
+        "`!T` stays inside the value lattice"
+    );
     assert_clean(&e);
 }
 
@@ -126,7 +147,10 @@ fn negation_still_complements_within_the_value_lattice() {
 
     let join = e.solver.t.union(i, not_i);
     let any = e.solver.t.any();
-    assert!(e.solver.is_equiv(join, any), "`i64 | !i64` is exactly `any`");
+    assert!(
+        e.solver.is_equiv(join, any),
+        "`i64 | !i64` is exactly `any`"
+    );
 
     let s = ty(&mut e, "str");
     assert!(e.solver.is_subtype(s, not_i));
@@ -141,8 +165,14 @@ fn a_missing_field_does_not_satisfy_a_negated_field_type() {
     let named = ty(&mut e, "Named");
     assert_clean(&e);
 
-    assert!(e.solver.is_subtype(named, wants), "a str name is not an i64");
-    assert!(!e.solver.is_subtype(empty, wants), "an absent name is not a `!i64` name");
+    assert!(
+        e.solver.is_subtype(named, wants),
+        "a str name is not an i64"
+    );
+    assert!(
+        !e.solver.is_subtype(empty, wants),
+        "an absent name is not a `!i64` name"
+    );
 }
 
 // ---- aliases ----
@@ -174,15 +204,23 @@ fn a_generic_alias_substitutes_its_arguments() {
 #[test]
 fn a_recursive_plain_alias_is_rejected_and_points_at_mu() {
     let e = env("record Box[T] { item: T }\ntype Tree = :leaf | Box[Tree]");
-    assert_eq!(kinds(&e), vec![TypeErrorKind::RecursiveAlias("Tree".into())]);
-    assert!(errors(&e)[0].contains("mu type"), "the diagnostic names the binder");
+    assert_eq!(
+        kinds(&e),
+        vec![TypeErrorKind::RecursiveAlias("Tree".into())]
+    );
+    assert!(
+        errors(&e)[0].contains("mu type"),
+        "the diagnostic names the binder"
+    );
 }
 
 #[test]
 fn aliases_that_name_each_other_are_rejected() {
     let e = env("type A = B\ntype B = A");
     assert!(
-        kinds(&e).iter().any(|k| matches!(k, TypeErrorKind::RecursiveAlias(_))),
+        kinds(&e)
+            .iter()
+            .any(|k| matches!(k, TypeErrorKind::RecursiveAlias(_))),
         "{:?}",
         errors(&e)
     );
@@ -234,7 +272,10 @@ fn a_recursive_record_needs_no_binder() {
     // Equi-recursive: `next` holds the record again, with no wrapper. If the
     // recursion were lost, `next` would be `null` alone and this would hold.
     let terminal = ty(&mut e, "{ next: null }");
-    assert!(!e.solver.is_subtype(n, terminal), "a Node's `next` is a Node or null");
+    assert!(
+        !e.solver.is_subtype(n, terminal),
+        "a Node's `next` is a Node or null"
+    );
 }
 
 #[test]
@@ -244,10 +285,16 @@ fn a_nominal_recursive_record_satisfies_a_structural_mu_type() {
     let n = ty(&mut e, "Node");
     let t = ty(&mut e, "T");
     assert_clean(&e);
-    assert!(e.solver.is_subtype(n, t), "a structural mu accepts a family of records");
+    assert!(
+        e.solver.is_subtype(n, t),
+        "a structural mu accepts a family of records"
+    );
 
     let terminal = ty(&mut e, "{ next: null }");
-    assert!(!e.solver.is_subtype(t, terminal), "T's `next` is a T or null");
+    assert!(
+        !e.solver.is_subtype(t, terminal),
+        "T's `next` is a T or null"
+    );
 }
 
 #[test]
@@ -266,12 +313,10 @@ fn a_duplicate_declaration_is_rejected() {
 
 #[test]
 fn generic_arguments_are_covariant() {
-    let mut e = env(
-        "record Circle { radius: i64 }\n\
+    let mut e = env("record Circle { radius: i64 }\n\
          record Square { side: i64 }\n\
          type Shape = Circle | Square\n\
-         record Box[T] { item: T }",
-    );
+         record Box[T] { item: T }");
     let bc = ty(&mut e, "Box[Circle]");
     let bs = ty(&mut e, "Box[Shape]");
     assert_clean(&e);
@@ -306,7 +351,11 @@ fn wrong_generic_arity_is_rejected() {
     assert!(e.is_error(t));
     assert_eq!(
         kinds(&e),
-        vec![TypeErrorKind::Arity { name: "Box".into(), expected: 1, found: 2 }]
+        vec![TypeErrorKind::Arity {
+            name: "Box".into(),
+            expected: 1,
+            found: 2
+        }]
     );
 }
 
@@ -314,7 +363,12 @@ fn wrong_generic_arity_is_rejected() {
 fn a_type_parameter_is_rigid_in_its_own_signature() {
     let mut e = env("record Box[T] { item: T }\nfn unwrap[T](b: Box[T]) -> T { b.item }");
     assert_clean(&e);
-    let sig = e.fns().iter().find(|f| f.name == "unwrap").expect("declared").clone();
+    let sig = e
+        .fns()
+        .iter()
+        .find(|f| f.name == "unwrap")
+        .expect("declared")
+        .clone();
     assert_eq!(sig.generics, vec!["T".to_string()]);
 
     let i = e.solver.t.i64();
@@ -331,10 +385,19 @@ fn a_newtype_is_distinct_from_its_representation_and_its_siblings() {
     let f = ty(&mut e, "f64");
     assert_clean(&e);
 
-    assert!(!e.solver.is_subtype(f, m), "the representation does not flow in");
-    assert!(!e.solver.is_subtype(m, f), "and the newtype does not flow out");
+    assert!(
+        !e.solver.is_subtype(f, m),
+        "the representation does not flow in"
+    );
+    assert!(
+        !e.solver.is_subtype(m, f),
+        "and the newtype does not flow out"
+    );
     let meet = e.solver.t.intersect(m, s);
-    assert!(e.solver.is_empty(meet), "two newtypes over f64 are still different types");
+    assert!(
+        e.solver.is_empty(meet),
+        "two newtypes over f64 are still different types"
+    );
 }
 
 #[test]
@@ -375,16 +438,17 @@ fn a_mu_type_is_equi_recursive() {
     let a = ty(&mut e, "A");
     let unfolded = ty(&mut e, ":ok | Box[A]");
     assert_clean(&e);
-    assert!(e.solver.is_equiv(a, unfolded), "A and its unfolding are one type");
+    assert!(
+        e.solver.is_equiv(a, unfolded),
+        "A and its unfolding are one type"
+    );
 }
 
 #[test]
 fn a_mu_type_may_recurse_through_several_constructors_at_once() {
-    let mut e = env(
-        "record List[T] { head: T | null }\n\
+    let mut e = env("record List[T] { head: T | null }\n\
          record Map[K, V] { key: K, value: V }\n\
-         mu type Json = null | bool | f64 | str | List[Json] | Map[str, Json]",
-    );
+         mu type Json = null | bool | f64 | str | List[Json] | Map[str, Json]");
     assert_clean(&e);
     let j = ty(&mut e, "Json");
     assert_clean(&e);
@@ -393,7 +457,10 @@ fn a_mu_type_may_recurse_through_several_constructors_at_once() {
     let f = ty(&mut e, "f64");
     assert!(e.solver.is_subtype(f, j));
     let nested = ty(&mut e, "List[List[f64]]");
-    assert!(e.solver.is_subtype(nested, j), "the recursion has no fixed depth");
+    assert!(
+        e.solver.is_subtype(nested, j),
+        "the recursion has no fixed depth"
+    );
 }
 
 #[test]
@@ -402,7 +469,11 @@ fn a_mu_that_only_recurses_through_a_record_field_is_rejected() {
     // which recurses without a `mu`. So this is not a recursive `mu` -- `T` does not
     // name itself -- regardless of whether Node's fields are visible.
     let e = env("record Node { next: T | null }\nmu type T = Node");
-    assert!(matches!(kinds(&e).as_slice(), [TypeErrorKind::MuWithoutRecursion(_)]), "{:?}", kinds(&e));
+    assert!(
+        matches!(kinds(&e).as_slice(), [TypeErrorKind::MuWithoutRecursion(_)]),
+        "{:?}",
+        kinds(&e)
+    );
 }
 
 #[test]
@@ -443,7 +514,10 @@ fn a_parameter_is_rejected_even_when_a_return_also_recurses() {
 #[test]
 fn a_mu_type_that_never_names_itself_is_rejected() {
     let e = env("mu type NotRecursive = i64 | str");
-    assert_eq!(kinds(&e), vec![TypeErrorKind::MuWithoutRecursion("NotRecursive".into())]);
+    assert_eq!(
+        kinds(&e),
+        vec![TypeErrorKind::MuWithoutRecursion("NotRecursive".into())]
+    );
     assert!(errors(&e)[0].contains("mu"));
 }
 
@@ -461,7 +535,11 @@ fn a_rejected_mu_poisons_its_uses_without_a_second_complaint() {
     let before = e.errors().len();
     let t = ty(&mut e, "T");
     assert!(e.is_error(t));
-    assert_eq!(e.errors().len(), before, "one bad declaration, one diagnostic");
+    assert_eq!(
+        e.errors().len(),
+        before,
+        "one bad declaration, one diagnostic"
+    );
 }
 
 #[test]
@@ -502,7 +580,11 @@ fn a_mu_that_names_itself_through_a_generic_argument_is_contractive() {
 #[test]
 fn a_mu_with_no_occurrence_at_all_is_rejected() {
     let e = env("mu type A = :ok | :err");
-    assert!(matches!(kinds(&e).as_slice(), [TypeErrorKind::MuWithoutRecursion(_)]), "{:?}", kinds(&e));
+    assert!(
+        matches!(kinds(&e).as_slice(), [TypeErrorKind::MuWithoutRecursion(_)]),
+        "{:?}",
+        kinds(&e)
+    );
 }
 
 #[test]
@@ -522,7 +604,11 @@ fn an_opaque_record_is_an_atom_beyond_its_parent() {
 #[test]
 fn a_mu_through_a_records_field_is_rejected_from_anywhere() {
     let e = env("mod m { record Node { next: T | null } }\nmu type T = m::Node");
-    assert!(matches!(kinds(&e).as_slice(), [TypeErrorKind::MuWithoutRecursion(_)]), "{:?}", kinds(&e));
+    assert!(
+        matches!(kinds(&e).as_slice(), [TypeErrorKind::MuWithoutRecursion(_)]),
+        "{:?}",
+        kinds(&e)
+    );
 }
 
 // ---- modules ----
@@ -540,11 +626,9 @@ fn a_qualified_path_and_a_use_reach_the_same_declaration() {
 
 #[test]
 fn protocols_and_impls_are_registered_with_resolved_signatures() {
-    let mut e = env(
-        "record Circle { radius: i64 }\n\
+    let mut e = env("record Circle { radius: i64 }\n\
          protocol Area for T { fn area(t: T) -> i64 }\n\
-         impl Area for Circle { fn area(t: Circle) -> i64 { t.radius } }",
-    );
+         impl Area for Circle { fn area(t: Circle) -> i64 { t.radius } }");
     assert_clean(&e);
 
     let ps = e.protocols_with_method("area");
@@ -563,11 +647,9 @@ fn protocols_and_impls_are_registered_with_resolved_signatures() {
 
 #[test]
 fn a_constructor_impl_records_the_head_rather_than_a_type() {
-    let e = env(
-        "record Box[T] { item: T }\n\
+    let e = env("record Box[T] { item: T }\n\
          protocol Container for C[_] { fn size[T](c: C[T]) -> i64 }\n\
-         impl Container for Box { fn size[T](c: Box[T]) -> i64 { 1 } }",
-    );
+         impl Container for Box { fn size[T](c: Box[T]) -> i64 { 1 } }");
     assert_clean(&e);
     let i = &e.impls()[0];
     assert_eq!(i.target_head.as_deref(), Some("Box"));
@@ -577,18 +659,24 @@ fn a_constructor_impl_records_the_head_rather_than_a_type() {
 #[test]
 fn an_impl_of_an_unknown_protocol_is_rejected() {
     let e = env("record Circle { radius: i64 }\nimpl Nope for Circle { }");
-    assert_eq!(kinds(&e), vec![TypeErrorKind::UnknownProtocol("Nope".into())]);
+    assert_eq!(
+        kinds(&e),
+        vec![TypeErrorKind::UnknownProtocol("Nope".into())]
+    );
 }
 
 #[test]
 fn a_fn_signature_carries_its_throws_in_its_arrow_and_its_bounds_apart() {
-    let mut e = env(
-        "record IoError { }\n\
+    let mut e = env("record IoError { }\n\
          protocol Display for T { fn show(t: T) -> str }\n\
-         fn dump[T](x: T) throws IoError -> str where T: Display { \"\" }",
-    );
+         fn dump[T](x: T) throws IoError -> str where T: Display { \"\" }");
     assert_clean(&e);
-    let sig = e.fns().iter().find(|f| f.name == "dump").expect("declared").clone();
+    let sig = e
+        .fns()
+        .iter()
+        .find(|f| f.name == "dump")
+        .expect("declared")
+        .clone();
 
     let nothrow = e.solver.t.never();
     assert_ne!(sig.throws, nothrow, "`throws IoError` was resolved");
@@ -597,7 +685,10 @@ fn a_fn_signature_carries_its_throws_in_its_arrow_and_its_bounds_apart() {
     assert_ne!(sig.ty, erased, "`throws` is part of the arrow");
 
     // A bound is a protocol path, not a type: it has nowhere to live in the arrow.
-    assert_eq!(sig.wheres, vec![("T".to_string(), vec!["Display".to_string()])]);
+    assert_eq!(
+        sig.wheres,
+        vec![("T".to_string(), vec!["Display".to_string()])]
+    );
     assert!(sig.has_body);
 }
 
@@ -606,7 +697,12 @@ fn a_fn_with_no_return_type_returns_unit() {
     let mut e = env("fn go() { }");
     assert_clean(&e);
     let unit = e.solver.t.tuple(vec![]);
-    let sig = e.fns().iter().find(|f| f.name == "go").expect("declared").clone();
+    let sig = e
+        .fns()
+        .iter()
+        .find(|f| f.name == "go")
+        .expect("declared")
+        .clone();
     assert_eq!(sig.ret, unit);
 }
 
@@ -616,7 +712,6 @@ fn a_protocol_method_has_no_body() {
     assert_clean(&e);
     assert!(!e.protocols()[0].methods[0].has_body);
 }
-
 
 // ---- orphan impls ----
 
@@ -638,7 +733,11 @@ fn an_orphan_that_fills_a_gap_is_accepted() {
          impl Area for Circle {{ fn area(v: Circle) -> i64 {{ 1 }} }}
          orphan impl Area for Square {{ fn area(v: Square) -> i64 {{ 2 }} }}"
     ));
-    assert_eq!(kinds(&e), vec![], "Square is disjoint from Circle, so nothing is stolen");
+    assert_eq!(
+        kinds(&e),
+        vec![],
+        "Square is disjoint from Circle, so nothing is stolen"
+    );
 }
 
 #[test]
@@ -648,7 +747,10 @@ fn an_orphan_may_not_steal_covered_values() {
          impl Area for Circle {{ fn area(v: Circle) -> i64 {{ 1 }} }}
          orphan impl Area for Circle {{ fn area(v: Circle) -> i64 {{ 2 }} }}"
     ));
-    assert!(matches!(kinds(&e).as_slice(), [TypeErrorKind::OrphanOverlaps { .. }]));
+    assert!(matches!(
+        kinds(&e).as_slice(),
+        [TypeErrorKind::OrphanOverlaps { .. }]
+    ));
     assert!(errors(&e)[0].contains("gap"));
     // The intersection IS the diagnostic: it names the values, not just the protocol.
     assert!(errors(&e)[0].contains("Circle"), "{}", errors(&e)[0]);
@@ -665,8 +767,15 @@ fn an_orphan_may_not_specialize_a_wider_impl() {
          impl Area for Shape {{ fn area(v: Shape) -> i64 {{ 1 }} }}
          orphan impl Area for Circle {{ fn area(v: Circle) -> i64 {{ 2 }} }}"
     ));
-    assert!(matches!(kinds(&e).as_slice(), [TypeErrorKind::OrphanOverlaps { .. }]));
-    assert!(errors(&e)[0].contains("Circle"), "the stolen values are named: {}", errors(&e)[0]);
+    assert!(matches!(
+        kinds(&e).as_slice(),
+        [TypeErrorKind::OrphanOverlaps { .. }]
+    ));
+    assert!(
+        errors(&e)[0].contains("Circle"),
+        "the stolen values are named: {}",
+        errors(&e)[0]
+    );
 }
 
 #[test]
@@ -689,7 +798,10 @@ fn a_library_may_not_carry_an_orphan() {
         ),
         super::env::Unit::Library,
     );
-    assert_eq!(kinds(&e), vec![TypeErrorKind::OrphanInLibrary("Area".into())]);
+    assert_eq!(
+        kinds(&e),
+        vec![TypeErrorKind::OrphanInLibrary("Area".into())]
+    );
     assert!(errors(&e)[0].contains("root application"));
 }
 
@@ -702,7 +814,11 @@ fn the_root_application_may_carry_the_same_orphan() {
         ),
         super::env::Unit::RootApplication,
     );
-    assert_eq!(kinds(&e), vec![], "exactly one root, so it cannot disagree with itself");
+    assert_eq!(
+        kinds(&e),
+        vec![],
+        "exactly one root, so it cannot disagree with itself"
+    );
 }
 
 #[test]
@@ -741,7 +857,10 @@ fn a_generic_alias_is_not_recorded_under_its_bare_name() {
     let a = super::print::print(&mut e.solver.t, pi);
     let b = super::print::print(&mut e.solver.t, ps);
     assert_ne!(a, b, "two instantiations must not print alike: {a} vs {b}");
-    assert!(!a.contains("Pair"), "no name is better than the wrong name: {a}");
+    assert!(
+        !a.contains("Pair"),
+        "no name is better than the wrong name: {a}"
+    );
 }
 
 // ---- multi-module build ----
@@ -831,7 +950,11 @@ fn an_explicit_binding_beats_a_glob() {
     let b = parse("@native(\"bf\") fn f() -> str");
     let user = parse("use a::*\nuse b::f\nfn top() -> str { f() }");
     let mut env = Env::build_with(
-        &[(vec!["a".into()], &a), (vec!["b".into()], &b), (vec![], &user)],
+        &[
+            (vec!["a".into()], &a),
+            (vec!["b".into()], &b),
+            (vec![], &user),
+        ],
         super::env::Unit::RootApplication,
     );
     let (_r, errs) = super::check::check_module(&mut env, &user);
@@ -871,7 +994,8 @@ fn without_the_import_the_ambiguous_call_still_errors() {
     let mut env = Env::build(&m);
     let (_r, errs) = super::check::check_module(&mut env, &m);
     assert!(
-        errs.iter().any(|e| matches!(e.kind, TypeErrorKind::AmbiguousCall { .. })),
+        errs.iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::AmbiguousCall { .. })),
         "{errs:?}"
     );
 }
@@ -880,14 +1004,15 @@ fn without_the_import_the_ambiguous_call_still_errors() {
 
 #[test]
 fn a_supertrait_obliges_the_type_to_implement_the_super() {
-    let e = env(
-        "record V { n: i64 }
+    let e = env("record V { n: i64 }
          protocol Eq for T { fn eq(a: T, b: T) -> bool }
          protocol Ord for T where T: Eq { fn cmp(a: T, b: T) -> i64 }
-         impl Ord for V { fn cmp(a: V, b: V) -> i64 { 0 } }",
-    );
+         impl Ord for V { fn cmp(a: V, b: V) -> i64 { 0 } }");
     assert!(
-        matches!(kinds(&e).as_slice(), [TypeErrorKind::MissingSupertrait { .. }]),
+        matches!(
+            kinds(&e).as_slice(),
+            [TypeErrorKind::MissingSupertrait { .. }]
+        ),
         "{:?}",
         kinds(&e)
     );
@@ -895,22 +1020,18 @@ fn a_supertrait_obliges_the_type_to_implement_the_super() {
 
 #[test]
 fn a_supertrait_is_satisfied_when_both_are_implemented() {
-    let e = env(
-        "record V { n: i64 }
+    let e = env("record V { n: i64 }
          protocol Eq for T { fn eq(a: T, b: T) -> bool }
          protocol Ord for T where T: Eq { fn cmp(a: T, b: T) -> i64 }
          impl Eq for V { fn eq(a: V, b: V) -> bool { true } }
-         impl Ord for V { fn cmp(a: V, b: V) -> i64 { 0 } }",
-    );
+         impl Ord for V { fn cmp(a: V, b: V) -> i64 { 0 } }");
     assert_eq!(kinds(&e), vec![]);
 }
 
 #[test]
 fn a_protocol_without_a_where_has_no_supertrait_obligation() {
-    let e = env(
-        "record V { n: i64 }
+    let e = env("record V { n: i64 }
          protocol Show for T { fn show(v: T) -> str }
-         impl Show for V { fn show(v: V) -> str { \"v\" } }",
-    );
+         impl Show for V { fn show(v: V) -> str { \"v\" } }");
     assert_eq!(kinds(&e), vec![]);
 }

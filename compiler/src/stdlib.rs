@@ -24,7 +24,10 @@ pub fn module_path(rel: &str) -> Vec<String> {
     if rel == "prelude" {
         return vec![crate::typecheck::env::Env::PRELUDE.to_string()];
     }
-    rel.split(['/', '\\']).filter(|s| !s.is_empty()).map(String::from).collect()
+    rel.split(['/', '\\'])
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect()
 }
 
 /// Parse `(relative-path, source)` pairs into prefixed modules.
@@ -47,10 +50,7 @@ pub fn parse_with(
 
 /// Parse the stdlib, numbering expressions from `base` so ids stay unique across the whole
 /// compilation. Returns the modules and the next free id, which the program is numbered from.
-pub fn parse_from(
-    sources: &[(String, String)],
-    base: u32,
-) -> Result<ParsedStdlib, String> {
+pub fn parse_from(sources: &[(String, String)], base: u32) -> Result<ParsedStdlib, String> {
     parse_from_with(sources, base, &crate::expand::Config::for_host([]))
 }
 
@@ -81,7 +81,10 @@ pub fn parse_from_with(
         let (mut module, _meta, expand_errors) = crate::expand::expand(module, config);
         if !expand_errors.is_empty() {
             let shown: Vec<String> = expand_errors.iter().map(|e| e.message.clone()).collect();
-            return Err(format!("stdlib `{rel}` did not expand: {}", shown.join("; ")));
+            return Err(format!(
+                "stdlib `{rel}` did not expand: {}",
+                shown.join("; ")
+            ));
         }
         next = crate::ast::number_exprs_from(&mut module, next);
         out.push((module_path(rel), module));
@@ -96,12 +99,18 @@ mod tests {
     #[test]
     fn module_path_from_relative() {
         assert_eq!(module_path("std/io.neon"), vec!["std", "io"]);
-        assert_eq!(module_path("std/collections/list.neon"), vec!["std", "collections", "list"]);
+        assert_eq!(
+            module_path("std/collections/list.neon"),
+            vec!["std", "collections", "list"]
+        );
         // The prelude declares at a path of its own, which resolution consults last so
         // its short names need no `use` and a program can still shadow any of them. NOT
         // the root: that is the program's own path, and sharing it made prelude opaques
         // reachable from every program and prelude `use` re-exports unshadowable.
-        assert_eq!(module_path("prelude.neon"), vec![crate::typecheck::env::Env::PRELUDE]);
+        assert_eq!(
+            module_path("prelude.neon"),
+            vec![crate::typecheck::env::Env::PRELUDE]
+        );
         // Only the toolchain's own `prelude.neon` is special; a file that merely happens
         // to be named `prelude` inside a library is an ordinary module.
         assert_eq!(module_path("std/prelude.neon"), vec!["std", "prelude"]);

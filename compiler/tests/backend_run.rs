@@ -41,7 +41,11 @@ fn runtime_archive() -> PathBuf {
     let is_clang = Command::new(&cc)
         .arg("--version")
         .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).to_lowercase().contains("clang"))
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .to_lowercase()
+                .contains("clang")
+        })
         .unwrap_or(false);
     let flavor = if is_clang { "clang" } else { "gcc" };
     let path = PathBuf::from(env!("NEON_RT_ROOT"))
@@ -75,7 +79,11 @@ fn collect_neon(root: &Path, dir: &Path, out: &mut Vec<(String, String)>) {
         if path.is_dir() {
             collect_neon(root, &path, out);
         } else if path.extension().is_some_and(|e| e == "neon") {
-            let rel = path.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
+            let rel = path
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
             out.push((rel, std::fs::read_to_string(&path).expect("readable")));
         }
     }
@@ -113,7 +121,8 @@ fn emit_c(src: &str) -> Result<String, String> {
     let (std_owned, next_id) = stdlib_modules();
     neon_compiler::ast::number_exprs_from(&mut module, next_id);
 
-    let mut modules: Vec<(Vec<String>, &_)> = std_owned.iter().map(|(p, m)| (p.clone(), m)).collect();
+    let mut modules: Vec<(Vec<String>, &_)> =
+        std_owned.iter().map(|(p, m)| (p.clone(), m)).collect();
     modules.push((Vec::new(), &module));
     let mut env = Env::build_with(&modules, Unit::RootApplication);
     if !env.errors().is_empty() {
@@ -124,7 +133,13 @@ fn emit_c(src: &str) -> Result<String, String> {
         return Err(format!("type errors: {errs:?}"));
     }
     let libs: Vec<(Vec<String>, &_)> = std_owned.iter().map(|(p, m)| (p.clone(), m)).collect();
-    Ok(c::emit(&ir::compile(&env, &result, &module, &libs, Stage::Final)))
+    Ok(c::emit(&ir::compile(
+        &env,
+        &result,
+        &module,
+        &libs,
+        Stage::Final,
+    )))
 }
 
 /// Compile a corpus program to C, build it with `cc`, run it, and diff against `.stdout`.
@@ -163,7 +178,11 @@ fn run_one(dir: &Path, rel: &str) -> Result<(), Failed> {
         .output()
         .expect("run cc");
     if !out.status.success() {
-        let msg = String::from_utf8_lossy(&out.stderr).lines().take(4).collect::<Vec<_>>().join("\n");
+        let msg = String::from_utf8_lossy(&out.stderr)
+            .lines()
+            .take(4)
+            .collect::<Vec<_>>()
+            .join("\n");
         return Err(Failed::from(format!("cc failed:\n{msg}")));
     }
 
@@ -192,28 +211,41 @@ fn run_one(dir: &Path, rel: &str) -> Result<(), Failed> {
     // `//@ exit:` annotation pins (0 when absent). Both stdout and the code must match.
     let want_exit = expected_exit(&src);
     let got = String::from_utf8_lossy(&run.stdout).to_string();
-    let want = std::fs::read_to_string(lang_root().join(rel).with_extension("stdout")).unwrap_or_default();
+    let want =
+        std::fs::read_to_string(lang_root().join(rel).with_extension("stdout")).unwrap_or_default();
     if got != want {
-        return Err(Failed::from(format!("output mismatch\n  got:  {got:?}\n  want: {want:?}")));
+        return Err(Failed::from(format!(
+            "output mismatch\n  got:  {got:?}\n  want: {want:?}"
+        )));
     }
     if code != Some(want_exit) {
         let err = String::from_utf8_lossy(&run.stderr).trim().to_string();
-        return Err(Failed::from(format!("exit {code:?}, want {want_exit}\n  stderr: {err}")));
+        return Err(Failed::from(format!(
+            "exit {code:?}, want {want_exit}\n  stderr: {err}"
+        )));
     }
     Ok(())
 }
 
 /// The first few lines of a sanitizer report, if the run produced one.
 fn sanitizer_report(stderr: &str) -> Option<String> {
-    let marks = ["AddressSanitizer", "LeakSanitizer", "runtime error:", "SUMMARY:"];
-    stderr.lines().any(|l| marks.iter().any(|m| l.contains(m))).then(|| {
-        stderr
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .take(6)
-            .collect::<Vec<_>>()
-            .join("\n")
-    })
+    let marks = [
+        "AddressSanitizer",
+        "LeakSanitizer",
+        "runtime error:",
+        "SUMMARY:",
+    ];
+    stderr
+        .lines()
+        .any(|l| marks.iter().any(|m| l.contains(m)))
+        .then(|| {
+            stderr
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .take(6)
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
 }
 
 /// The exit code a program is expected to end with, from a `//@ exit: N` directive; 0 when
@@ -224,7 +256,10 @@ fn expected_exit(src: &str) -> i32 {
             let t = l.trim_start();
             (t.starts_with("//") || t.is_empty()).then_some(t)
         })
-        .find_map(|l| l.strip_prefix("//@ exit:").and_then(|n| n.trim().parse().ok()))
+        .find_map(|l| {
+            l.strip_prefix("//@ exit:")
+                .and_then(|n| n.trim().parse().ok())
+        })
         .unwrap_or(0)
 }
 

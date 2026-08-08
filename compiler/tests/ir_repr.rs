@@ -27,7 +27,11 @@ fn collect_neon(root: &Path, dir: &Path, out: &mut Vec<(String, String)>) {
         if path.is_dir() {
             collect_neon(root, &path, out);
         } else if path.extension().is_some_and(|e| e == "neon") {
-            let rel = path.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
+            let rel = path
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
             out.push((rel, std::fs::read_to_string(&path).expect("readable")));
         }
     }
@@ -84,7 +88,9 @@ fn every_corpus_type_has_a_representation() {
             Ok(s) => s,
             Err(_) => continue,
         };
-        let Ok(tokens) = lexer::lex(&src) else { continue };
+        let Ok(tokens) = lexer::lex(&src) else {
+            continue;
+        };
         let (module, perrs) = parser::parse(&tokens, src.len());
         if !perrs.is_empty() {
             continue;
@@ -120,7 +126,10 @@ fn every_corpus_type_has_a_representation() {
         seen.total, seen.list, seen.map, seen.record, seen.tuple, seen.union, seen.nullable,
         seen.closure, seen.tag
     );
-    assert!(files > 100, "expected to cover most of the corpus, only ran {files} files");
+    assert!(
+        files > 100,
+        "expected to cover most of the corpus, only ran {files} files"
+    );
     assert!(seen.total > 1000, "expected many types, saw {}", seen.total);
     // Breadth: the interesting shapes must actually occur, or the map is only being
     // exercised on scalars and the totality claim is hollow.

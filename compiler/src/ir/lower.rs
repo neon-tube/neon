@@ -19,7 +19,7 @@
 //! `internal error` panic — a crash names the gap; a placeholder value hides it.
 
 use super::repr::{normalize_union, repr_of, Repr};
-use super::ssa::{Builder, BlockId, Func, Op, PrimOp, Program, Target, Term, Value};
+use super::ssa::{BlockId, Builder, Func, Op, PrimOp, Program, Target, Term, Value};
 use crate::ast::{
     self, BinOp, Block, Decl, DeclKind, Expr, ExprId, ExprKind, Stmt, StmtKind, UnOp,
 };
@@ -69,9 +69,11 @@ fn contains_var(r: &Repr) -> bool {
         Repr::List(e) | Repr::Nullable(e) => contains_var(e),
         Repr::Map(k, v) => contains_var(k) || contains_var(v),
         Repr::Runtime { args, .. } => args.iter().any(contains_var),
-        Repr::Closure { params, throws, ret } => {
-            params.iter().any(contains_var) || contains_var(throws) || contains_var(ret)
-        }
+        Repr::Closure {
+            params,
+            throws,
+            ret,
+        } => params.iter().any(contains_var) || contains_var(throws) || contains_var(ret),
         _ => false,
     }
 }
@@ -81,7 +83,10 @@ fn substitute_repr(r: &Repr, subst: &std::collections::HashMap<String, Repr>) ->
         Repr::Var(n) => subst.get(n).cloned().unwrap_or_else(|| r.clone()),
         Repr::Record { name, fields } => Repr::Record {
             name: name.clone(),
-            fields: fields.iter().map(|(n, r)| (n.clone(), substitute_repr(r, subst))).collect(),
+            fields: fields
+                .iter()
+                .map(|(n, r)| (n.clone(), substitute_repr(r, subst)))
+                .collect(),
         },
         Repr::Tuple(rs) => Repr::Tuple(rs.iter().map(|r| substitute_repr(r, subst)).collect()),
         // Re-normalise: substituted variants may collapse (`T | null` with a pointer `T`
@@ -89,23 +94,32 @@ fn substitute_repr(r: &Repr, subst: &std::collections::HashMap<String, Repr>) ->
         // type's — variables are collected after the base bits, so `T | null` substitutes
         // to `[null, i64]` while `i64 | null` is `[i64, null]`. Left alone, one type gets
         // two different C structs.
-        Repr::Union(rs) => crate::ir::repr::normalize_union(
-            rs.iter().map(|r| substitute_repr(r, subst)).collect(),
-        ),
+        Repr::Union(rs) => {
+            crate::ir::repr::normalize_union(rs.iter().map(|r| substitute_repr(r, subst)).collect())
+        }
         Repr::List(e) => Repr::List(Box::new(substitute_repr(e, subst))),
         // Substitution reaches the arguments only: the nominal name and the C symbol name
         // the type itself, and `Resource[T, E]` instantiated at `i64` is still a
         // `Resource`. Both ride through untouched, together, so neither can drift.
-        Repr::Runtime { nominal, c_type, args } => Repr::Runtime {
+        Repr::Runtime {
+            nominal,
+            c_type,
+            args,
+        } => Repr::Runtime {
             nominal: nominal.clone(),
             c_type: c_type.clone(),
             args: args.iter().map(|r| substitute_repr(r, subst)).collect(),
         },
         Repr::Nullable(e) => Repr::Nullable(Box::new(substitute_repr(e, subst))),
-        Repr::Map(k, v) => {
-            Repr::Map(Box::new(substitute_repr(k, subst)), Box::new(substitute_repr(v, subst)))
-        }
-        Repr::Closure { params, throws, ret } => Repr::Closure {
+        Repr::Map(k, v) => Repr::Map(
+            Box::new(substitute_repr(k, subst)),
+            Box::new(substitute_repr(v, subst)),
+        ),
+        Repr::Closure {
+            params,
+            throws,
+            ret,
+        } => Repr::Closure {
             params: params.iter().map(|r| substitute_repr(r, subst)).collect(),
             throws: Box::new(substitute_repr(throws, subst)),
             ret: Box::new(substitute_repr(ret, subst)),
@@ -116,7 +130,11 @@ fn substitute_repr(r: &Repr, subst: &std::collections::HashMap<String, Repr>) ->
 
 /// Bind the type variables in a template repr to make it match a concrete one, for
 /// building a call's instance substitution from its argument reprs.
-fn match_repr(template: &Repr, concrete: &Repr, subst: &mut std::collections::HashMap<String, Repr>) {
+fn match_repr(
+    template: &Repr,
+    concrete: &Repr,
+    subst: &mut std::collections::HashMap<String, Repr>,
+) {
     match (template, concrete) {
         (Repr::Var(n), c) => {
             subst.entry(n.clone()).or_insert_with(|| c.clone());
@@ -128,10 +146,17 @@ fn match_repr(template: &Repr, concrete: &Repr, subst: &mut std::collections::Ha
         // another, so this is equivalent to testing `nominal` alone — it is written out so
         // the invariant is checked rather than assumed.
         (
-            Repr::Runtime { nominal: an, c_type: ac, args: aa },
-            Repr::Runtime { nominal: bn, c_type: bc, args: ba },
-        ) if an == bn && ac == bc =>
-        {
+            Repr::Runtime {
+                nominal: an,
+                c_type: ac,
+                args: aa,
+            },
+            Repr::Runtime {
+                nominal: bn,
+                c_type: bc,
+                args: ba,
+            },
+        ) if an == bn && ac == bc => {
             aa.iter().zip(ba).for_each(|(x, y)| match_repr(x, y, subst));
         }
         (Repr::Map(ak, av), Repr::Map(bk, bv)) => {
@@ -157,8 +182,16 @@ fn match_repr(template: &Repr, concrete: &Repr, subst: &mut std::collections::Ha
             }
         }
         (
-            Repr::Closure { params: ap, throws: at, ret: ar },
-            Repr::Closure { params: bp, throws: bt, ret: br },
+            Repr::Closure {
+                params: ap,
+                throws: at,
+                ret: ar,
+            },
+            Repr::Closure {
+                params: bp,
+                throws: bt,
+                ret: br,
+            },
         ) => {
             ap.iter().zip(bp).for_each(|(x, y)| match_repr(x, y, subst));
             match_repr(at, bt, subst);
@@ -305,15 +338,31 @@ fn repr_key(r: &Repr) -> String {
         // otherwise mangle to one monomorphisation instance.
         Repr::Runtime { nominal, args, .. } if args.is_empty() => nominal.clone(),
         Repr::Runtime { nominal, args, .. } => {
-            format!("{nominal}_{}", args.iter().map(repr_key).collect::<Vec<_>>().join("_"))
+            format!(
+                "{nominal}_{}",
+                args.iter().map(repr_key).collect::<Vec<_>>().join("_")
+            )
         }
         // A generic record carries its arguments in its *fields* — `Box[i64]` and
         // `Box[str]` are both `Record { name: Some("Box"), .. }` — so the name alone is
         // not the type. `ctype::tag_name` spells a nominal record the same way for the
         // same reason; keying on the name alone gave one `unwrap$Box` body to both.
-        Repr::Record { name: Some(n), fields } if fields.is_empty() => n.clone(),
-        Repr::Record { name: Some(n), fields } => {
-            format!("{n}_{}", fields.iter().map(|(_, r)| repr_key(r)).collect::<Vec<_>>().join("_"))
+        Repr::Record {
+            name: Some(n),
+            fields,
+        } if fields.is_empty() => n.clone(),
+        Repr::Record {
+            name: Some(n),
+            fields,
+        } => {
+            format!(
+                "{n}_{}",
+                fields
+                    .iter()
+                    .map(|(_, r)| repr_key(r))
+                    .collect::<Vec<_>>()
+                    .join("_")
+            )
         }
         // An anonymous record has no name at all; its fields are its whole identity.
         Repr::Record { fields, .. } => format!(
@@ -326,7 +375,10 @@ fn repr_key(r: &Repr) -> String {
         ),
         Repr::List(e) => format!("list_{}", repr_key(e)),
         Repr::Map(k, v) => format!("map_{}_{}", repr_key(k), repr_key(v)),
-        Repr::Tuple(rs) => format!("tup_{}", rs.iter().map(repr_key).collect::<Vec<_>>().join("_")),
+        Repr::Tuple(rs) => format!(
+            "tup_{}",
+            rs.iter().map(repr_key).collect::<Vec<_>>().join("_")
+        ),
         Repr::Nullable(e) => format!("opt_{}", repr_key(e)),
         // Structural, like `Tuple` and `Map` above, and for the same reason: this string
         // is the *identity* of a monomorphisation instance. `Closure { .. } => "fn"` and
@@ -343,14 +395,21 @@ fn repr_key(r: &Repr) -> String {
         //
         // Recursion terminates: the two back-edge reprs below carry an id and nothing to
         // descend into, and every cycle in a type graph passes through one of them.
-        Repr::Closure { params, throws, ret } => format!(
+        Repr::Closure {
+            params,
+            throws,
+            ret,
+        } => format!(
             "fn_{}_{}_{}",
             params.iter().map(repr_key).collect::<Vec<_>>().join("_"),
             repr_key(throws),
             repr_key(ret)
         ),
         Repr::Union(vs) => {
-            format!("union_{}", vs.iter().map(repr_key).collect::<Vec<_>>().join("_"))
+            format!(
+                "union_{}",
+                vs.iter().map(repr_key).collect::<Vec<_>>().join("_")
+            )
         }
         Repr::Var(n) => n.clone(),
         Repr::Recursive(t) => format!("mu{}", t.0),
@@ -401,7 +460,10 @@ pub fn test_entries(module: &ast::Module) -> Vec<TestEntry> {
             match &d.kind {
                 DeclKind::TestBlock(t) if t.kind == ast::TestKind::Test => {
                     let symbol = format!("__neon_test_{}", out.len());
-                    out.push(TestEntry { name: t.name.clone(), symbol });
+                    out.push(TestEntry {
+                        name: t.name.clone(),
+                        symbol,
+                    });
                 }
                 DeclKind::Mod(m) => walk(&m.decls, out),
                 _ => {}
@@ -552,16 +614,28 @@ pub fn lower_module_with<'a>(
     // Through `mangle`, because a `FnSig` carries its module separately from its name
     // while a `Func` carries the two already joined -- comparing the bare `set` against
     // `std__collections__list__set` matches nothing, silently.
-    let inline_bases: Vec<String> =
-        env.fns().iter().filter(|s| s.inline).map(|s| mangle(&s.module, &s.name)).collect();
+    let inline_bases: Vec<String> = env
+        .fns()
+        .iter()
+        .filter(|s| s.inline)
+        .map(|s| mangle(&s.module, &s.name))
+        .collect();
     let inlined = funcs
         .iter()
         .map(|f| f.name.clone())
         .filter(|n| {
-            inline_bases.iter().any(|b| n == b || n.starts_with(&format!("{b}$")))
+            inline_bases
+                .iter()
+                .any(|b| n == b || n.starts_with(&format!("{b}$")))
         })
         .collect();
-    Program { funcs, recursive, boxed, pure_natives, inlined }
+    Program {
+        funcs,
+        recursive,
+        boxed,
+        pure_natives,
+        inlined,
+    }
 }
 
 /// Index every bodied function by `(module path, name)`, descending into nested `mod`s.
@@ -606,7 +680,9 @@ fn lower_instance(
         }
         None => {
             let f = all_fns.get(&(job.module.clone(), job.fn_name.clone()))?;
-            let sig = env.fn_named(&job.module, std::slice::from_ref(&job.fn_name))?.clone();
+            let sig = env
+                .fn_named(&job.module, std::slice::from_ref(&job.fn_name))?
+                .clone();
             (f, sig)
         }
     };
@@ -630,7 +706,10 @@ fn lower_instance(
         // used to become `TyId(0)` — whatever type was interned first — and the
         // parameter lowered at a silently wrong layout.
         let Some(&(_, ty)) = sig.params.get(i) else {
-            panic!("internal error: `{}` has more AST params than its signature", job.mangled);
+            panic!(
+                "internal error: `{}` has more AST params than its signature",
+                job.mangled
+            );
         };
         let r = lo.repr_of_ty(ty);
         let v = lo.b.block_param(BlockId(0), r, ty);
@@ -641,10 +720,17 @@ fn lower_instance(
     let body = f.body.as_ref().expect("generic fn has a body");
     let tail = lo.lower_block(body);
     if !lo.terminated {
-        let ret = if matches!(ret_repr, Repr::Unit) { None } else { tail };
+        let ret = if matches!(ret_repr, Repr::Unit) {
+            None
+        } else {
+            tail
+        };
         lo.b.terminate(Term::Ret(ret));
     }
-    let (l, i) = (std::mem::take(&mut lo.pending), std::mem::take(&mut lo.instances));
+    let (l, i) = (
+        std::mem::take(&mut lo.pending),
+        std::mem::take(&mut lo.instances),
+    );
     Some((lo.b.finish(params), l, i))
 }
 
@@ -683,10 +769,7 @@ fn mangle(module: &[String], name: &str) -> String {
 /// The key is split rather than carried structurally because it is the same string
 /// dispatch already mangles, so the two sides cannot drift apart; the cost is this linear
 /// scan over every impl in the environment.
-fn impl_method_sig(
-    env: &Env,
-    key: &str,
-) -> Option<crate::typecheck::env::FnSig> {
+fn impl_method_sig(env: &Env, key: &str) -> Option<crate::typecheck::env::FnSig> {
     let mut parts = key.split('$');
     let (proto, head, method) = (parts.next()?, parts.next()?, parts.next()?);
     for impl_def in env.impls() {
@@ -760,9 +843,7 @@ fn impl_head(env: &Env, impl_def: &crate::typecheck::env::ImplDef) -> String {
         // itself, because its body exists only as instances and `mangle_instance` spells
         // the substitution onto this key. `repr_head` is the same function the receiver's
         // side uses, so the two agree by construction rather than by review.
-        Some(r) if !impl_def.generics.is_empty() => {
-            repr_head(&r).unwrap_or_else(|| repr_key(&r))
-        }
+        Some(r) if !impl_def.generics.is_empty() => repr_head(&r).unwrap_or_else(|| repr_key(&r)),
         Some(Repr::Record { name: Some(n), .. }) => n,
         // Everything else spells its full structure through `repr_key`, which carries
         // an injectivity obligation of its own. The `_ => String::new()` this replaces
@@ -821,7 +902,9 @@ fn impl_def_at<'e>(
     module: &[String],
     span: &crate::parser::Span,
 ) -> Option<&'e crate::typecheck::env::ImplDef> {
-    env.impls().iter().find(|d| d.module == module && d.span == *span)
+    env.impls()
+        .iter()
+        .find(|d| d.module == module && d.span == *span)
 }
 
 /// Index every impl method that has a body under the same `protocol$head$method` key
@@ -890,8 +973,7 @@ fn default_bodies<'a>(
     for d in decls {
         match &d.kind {
             DeclKind::Protocol(p)
-                if env.lookup_protocol(module, std::slice::from_ref(&p.name))
-                    == Some(protocol) =>
+                if env.lookup_protocol(module, std::slice::from_ref(&p.name)) == Some(protocol) =>
             {
                 out.extend(p.methods.iter().filter(|m| m.body.is_some()));
             }
@@ -922,7 +1004,10 @@ fn lower_method(
     for (i, p) in f.params.iter().enumerate() {
         // Same invariant as `lower_instance`: the sig comes from this declaration.
         let Some(&(_, ty)) = sig.params.get(i) else {
-            panic!("internal error: method `{}` has more AST params than its signature", f.name);
+            panic!(
+                "internal error: method `{}` has more AST params than its signature",
+                f.name
+            );
         };
         let r = repr_of(&env.solver.t, ty);
         let v = lo.b.block_param(BlockId(0), r, ty);
@@ -933,10 +1018,17 @@ fn lower_method(
     let body = f.body.as_ref().expect("filtered to bodied methods");
     let tail = lo.lower_block(body);
     if !lo.terminated {
-        let ret = if matches!(ret_repr, Repr::Unit) { None } else { tail };
+        let ret = if matches!(ret_repr, Repr::Unit) {
+            None
+        } else {
+            tail
+        };
         lo.b.terminate(Term::Ret(ret));
     }
-    let (l, i) = (std::mem::take(&mut lo.pending), std::mem::take(&mut lo.instances));
+    let (l, i) = (
+        std::mem::take(&mut lo.pending),
+        std::mem::take(&mut lo.instances),
+    );
     (lo.b.finish(params), l, i)
 }
 
@@ -962,7 +1054,13 @@ fn lower_fn(
     };
     let ret_repr = repr_of(&env.solver.t, sig.ret);
 
-    let mut lo = Lower::new(env, result, module.to_vec(), mangle(module, &f.name), ret_repr.clone());
+    let mut lo = Lower::new(
+        env,
+        result,
+        module.to_vec(),
+        mangle(module, &f.name),
+        ret_repr.clone(),
+    );
     set_throws(&mut lo.b, env, sig.throws, &Default::default());
 
     // Parameters are the entry block's parameters.
@@ -982,10 +1080,17 @@ fn lower_fn(
     let body = f.body.as_ref().expect("filtered to bodied fns");
     let tail = lo.lower_block(body);
     if !lo.terminated {
-        let ret = if matches!(ret_repr, Repr::Unit) { None } else { tail };
+        let ret = if matches!(ret_repr, Repr::Unit) {
+            None
+        } else {
+            tail
+        };
         lo.b.terminate(Term::Ret(ret));
     }
-    let (l, i) = (std::mem::take(&mut lo.pending), std::mem::take(&mut lo.instances));
+    let (l, i) = (
+        std::mem::take(&mut lo.pending),
+        std::mem::take(&mut lo.instances),
+    );
     (lo.b.finish(params), l, i)
 }
 
@@ -1031,14 +1136,25 @@ fn lower_test_block(
     if !lo.terminated {
         lo.b.terminate(Term::Ret(None));
     }
-    let (l, i) = (std::mem::take(&mut lo.pending), std::mem::take(&mut lo.instances));
+    let (l, i) = (
+        std::mem::take(&mut lo.pending),
+        std::mem::take(&mut lo.instances),
+    );
     (lo.b.finish(vec![]), l, i)
 }
 
 /// Lower a lambda's body as its own function. Its first parameter is the environment (a
 /// tuple of the captured values); the rest are the lambda's parameters.
-fn lower_lambda_job(env: &Env, result: &TypecheckResult, job: LambdaJob) -> (Func, Vec<LambdaJob>, Vec<InstanceJob>) {
-    let ExprKind::Lambda { params: lparams, body } = &job.lambda.kind else {
+fn lower_lambda_job(
+    env: &Env,
+    result: &TypecheckResult,
+    job: LambdaJob,
+) -> (Func, Vec<LambdaJob>, Vec<InstanceJob>) {
+    let ExprKind::Lambda {
+        params: lparams,
+        body,
+    } = &job.lambda.kind
+    else {
         unreachable!("a lambda job holds a lambda");
     };
     // The lambda's inferred arrow gives its parameter, throws and return reprs. The
@@ -1047,7 +1163,11 @@ fn lower_lambda_job(env: &Env, result: &TypecheckResult, job: LambdaJob) -> (Fun
     // return, a silently wrong function.
     let (param_reprs, throws_repr, ret_repr) =
         match result.ty(job.lambda.id).map(|t| repr_of(&env.solver.t, t)) {
-            Some(Repr::Closure { params, throws, ret }) => (params, *throws, *ret),
+            Some(Repr::Closure {
+                params,
+                throws,
+                ret,
+            }) => (params, *throws, *ret),
             other => panic!(
                 "internal error: lambda `{}` has repr {other:?}, not a closure",
                 job.name
@@ -1055,8 +1175,10 @@ fn lower_lambda_job(env: &Env, result: &TypecheckResult, job: LambdaJob) -> (Fun
         };
     // The inferred arrow is the *generic* one, so its variables are still open; the
     // enclosing instance's substitution closes them.
-    let param_reprs: Vec<Repr> =
-        param_reprs.iter().map(|r| substitute_repr(r, &job.subst)).collect();
+    let param_reprs: Vec<Repr> = param_reprs
+        .iter()
+        .map(|r| substitute_repr(r, &job.subst))
+        .collect();
     let ret_repr = substitute_repr(&ret_repr, &job.subst);
     let throws_repr = substitute_repr(&throws_repr, &job.subst);
 
@@ -1079,7 +1201,14 @@ fn lower_lambda_job(env: &Env, result: &TypecheckResult, job: LambdaJob) -> (Fun
     let mut params = vec![env_v];
     if !job.captures.is_empty() {
         for (i, (n, r, cty)) in job.captures.iter().enumerate() {
-            let cap = lo.b.emit(Op::Elem { base: env_v, index: i }, r.clone(), *cty);
+            let cap = lo.b.emit(
+                Op::Elem {
+                    base: env_v,
+                    index: i,
+                },
+                r.clone(),
+                *cty,
+            );
             lo.bind(n, cap);
         }
     }
@@ -1088,7 +1217,10 @@ fn lower_lambda_job(env: &Env, result: &TypecheckResult, job: LambdaJob) -> (Fun
         // agree; the old `Repr::Any` fallback was an invented erasure of the kind the
         // `any_never_appears...` guard in `compiler/tests/ir_lower.rs` exists to catch.
         let Some(r) = param_reprs.get(i).cloned() else {
-            panic!("internal error: lambda `{}` has more params than its arrow type", job.name);
+            panic!(
+                "internal error: lambda `{}` has more params than its arrow type",
+                job.name
+            );
         };
         let v = lo.b.block_param(BlockId(0), r, TyId(0));
         lo.bind(&p.name, v);
@@ -1098,10 +1230,17 @@ fn lower_lambda_job(env: &Env, result: &TypecheckResult, job: LambdaJob) -> (Fun
 
     let tail = lo.lower_expr(body);
     if !lo.terminated {
-        let ret = if matches!(ret_repr, Repr::Unit) { None } else { Some(tail) };
+        let ret = if matches!(ret_repr, Repr::Unit) {
+            None
+        } else {
+            Some(tail)
+        };
         lo.b.terminate(Term::Ret(ret));
     }
-    let (l, i) = (std::mem::take(&mut lo.pending), std::mem::take(&mut lo.instances));
+    let (l, i) = (
+        std::mem::take(&mut lo.pending),
+        std::mem::take(&mut lo.instances),
+    );
     (lo.b.finish_lambda(params, env_repr), l, i)
 }
 
@@ -1193,7 +1332,12 @@ impl Lower<'_> {
     /// replacing the first. Scanning a frame forwards would resolve every read after an
     /// assignment back to the pre-assignment value.
     fn lookup(&self, name: &str) -> Option<Value> {
-        self.scope.iter().rev().flat_map(|s| s.iter().rev()).find(|(n, _)| n == name).map(|(_, v)| *v)
+        self.scope
+            .iter()
+            .rev()
+            .flat_map(|s| s.iter().rev())
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| *v)
     }
 
     /// The repr of an expression, as the checker typed it. The old `Unit` fallback for a
@@ -1329,7 +1473,14 @@ impl Lower<'_> {
                 for f in fields {
                     let r = field_repr(&self.b, v, &f.name);
                     let ty = self.b.value_ty(v);
-                    let e = self.b.emit(Op::Field { base: v, field: f.name.clone() }, r, ty);
+                    let e = self.b.emit(
+                        Op::Field {
+                            base: v,
+                            field: f.name.clone(),
+                        },
+                        r,
+                        ty,
+                    );
                     match &f.pat {
                         Some(sub) => self.bind_pattern(sub, e),
                         None => self.bind(&f.name, e),
@@ -1374,10 +1525,14 @@ impl Lower<'_> {
                 self.b.emit(Op::Prim(un_prim(*op), vec![r]), repr, ty)
             }
             ExprKind::Binary { op, lhs, rhs } => self.lower_binary(*op, lhs, rhs, repr, ty),
-            ExprKind::Call { callee, generics, args } => {
-                self.lower_call(e.id, callee, generics, args, repr, ty)
+            ExprKind::Call {
+                callee,
+                generics,
+                args,
+            } => self.lower_call(e.id, callee, generics, args, repr, ty),
+            ExprKind::If { cond, then, else_ } => {
+                self.lower_if(cond, then, else_.as_deref(), repr, ty)
             }
-            ExprKind::If { cond, then, else_ } => self.lower_if(cond, then, else_.as_deref(), repr, ty),
             ExprKind::Match { scrutinee, arms } => self.lower_match(scrutinee, arms, repr, ty),
             ExprKind::Loop { body } => self.lower_loop(body, repr, ty),
             ExprKind::While { cond, body } => self.lower_while(cond, body, ty),
@@ -1417,17 +1572,32 @@ impl Lower<'_> {
                 // error to surface. The cast is unchecked because the checker has already
                 // proved which variant it is, exactly as for `as`'s infallible form.
                 let declared = match self.b.value_repr(b) {
-                    Repr::Record { fields, .. } => {
-                        fields.iter().find(|(n, _)| n == name).map(|(_, r)| r.clone())
-                    }
+                    Repr::Record { fields, .. } => fields
+                        .iter()
+                        .find(|(n, _)| n == name)
+                        .map(|(_, r)| r.clone()),
                     _ => None,
                 };
                 match declared {
                     Some(d) if d != repr => {
-                        let raw = self.b.emit(Op::Field { base: b, field: name.clone() }, d, ty);
+                        let raw = self.b.emit(
+                            Op::Field {
+                                base: b,
+                                field: name.clone(),
+                            },
+                            d,
+                            ty,
+                        );
                         self.b.emit(Op::Cast(raw), repr, ty)
                     }
-                    _ => self.b.emit(Op::Field { base: b, field: name.clone() }, repr, ty),
+                    _ => self.b.emit(
+                        Op::Field {
+                            base: b,
+                            field: name.clone(),
+                        },
+                        repr,
+                        ty,
+                    ),
                 }
             }
             ExprKind::Tuple(elems) => {
@@ -1435,9 +1605,11 @@ impl Lower<'_> {
                 self.b.emit(Op::MakeTuple(vs), repr, ty)
             }
             ExprKind::List(elems) => self.lower_list(elems, repr, ty),
-            ExprKind::RecordLit { path, fields, spread } => {
-                self.lower_record(path.as_deref(), fields, spread.as_deref(), repr, ty)
-            }
+            ExprKind::RecordLit {
+                path,
+                fields,
+                spread,
+            } => self.lower_record(path.as_deref(), fields, spread.as_deref(), repr, ty),
             ExprKind::Index { base, index } => {
                 let b = self.lower_expr(base);
                 let i = self.lower_expr(index);
@@ -1447,7 +1619,11 @@ impl Lower<'_> {
                 let v = self.lower_expr(lhs);
                 self.type_test(v, spec, e.id)
             }
-            ExprKind::As { form, lhs, ty: spec } => {
+            ExprKind::As {
+                form,
+                lhs,
+                ty: spec,
+            } => {
                 let v = self.lower_expr(lhs);
                 match form {
                     // Infallible by the checker's trichotomy: a plain coercion.
@@ -1463,7 +1639,10 @@ impl Lower<'_> {
             ExprKind::Throw(e) => {
                 let ev = self.lower_expr(e);
                 match self.handlers.last().copied() {
-                    Some(h) => self.b.terminate(Term::Jump(Target { to: h, args: vec![ev] })),
+                    Some(h) => self.b.terminate(Term::Jump(Target {
+                        to: h,
+                        args: vec![ev],
+                    })),
                     None => self.throw_or_escape(ev, ty),
                 }
                 self.terminated = true;
@@ -1485,7 +1664,10 @@ impl Lower<'_> {
                     format!("TODO: {msg}")
                 };
                 let m = self.b.emit(Op::ConstStr(text), Repr::Str, ty);
-                self.b.emit_void(Op::Native { symbol: "neon_panic".into(), args: vec![m] });
+                self.b.emit_void(Op::Native {
+                    symbol: "neon_panic".into(),
+                    args: vec![m],
+                });
                 self.b.terminate(Term::Unreachable);
                 let after = self.b.new_block();
                 self.b.switch_to(after);
@@ -1520,7 +1702,12 @@ impl Lower<'_> {
             // marker below lowered the assertion to a no-op that silently passed.
             panic!("internal error: assert_throws reached lowering");
         }
-        let Some(Assertion { cond, operands, text }) = self.assert_condition(kind, args, ty) else {
+        let Some(Assertion {
+            cond,
+            operands,
+            text,
+        }) = self.assert_condition(kind, args, ty)
+        else {
             return self.unit(ty);
         };
 
@@ -1528,18 +1715,31 @@ impl Lower<'_> {
         let fail = self.b.new_block();
         self.b.terminate(Term::Branch {
             cond,
-            then: Target { to: ok, args: vec![] },
-            els: Target { to: fail, args: vec![] },
+            then: Target {
+                to: ok,
+                args: vec![],
+            },
+            els: Target {
+                to: fail,
+                args: vec![],
+            },
         });
 
         self.b.switch_to(fail);
         self.terminated = false;
-        let mut msg = self.b.emit(Op::ConstStr(format!("assertion failed: {text}")), Repr::Str, ty);
+        let mut msg = self.b.emit(
+            Op::ConstStr(format!("assertion failed: {text}")),
+            Repr::Str,
+            ty,
+        );
         if let Some((l, r)) = operands {
             msg = self.append_operand(msg, "\n  left:  ", l, ty);
             msg = self.append_operand(msg, "\n  right: ", r, ty);
         }
-        self.b.emit_void(Op::Native { symbol: "neon_panic".into(), args: vec![msg] });
+        self.b.emit_void(Op::Native {
+            symbol: "neon_panic".into(),
+            args: vec![msg],
+        });
         self.b.terminate(Term::Unreachable);
 
         self.b.switch_to(ok);
@@ -1565,11 +1765,19 @@ impl Lower<'_> {
                         let l = self.lower_expr(lhs);
                         let r = self.lower_expr(rhs);
                         let cond = self.b.emit(Op::Prim(prim, vec![l, r]), Repr::Bool, ty);
-                        return Some(Assertion { cond, operands: Some((l, r)), text });
+                        return Some(Assertion {
+                            cond,
+                            operands: Some((l, r)),
+                            text,
+                        });
                     }
                 }
                 let cond = self.lower_expr(a);
-                Some(Assertion { cond, operands: None, text })
+                Some(Assertion {
+                    cond,
+                    operands: None,
+                    text,
+                })
             }
             ast::AssertKind::Eq | ast::AssertKind::Ne => {
                 let (le, re) = (args.first()?, args.get(1)?);
@@ -1581,7 +1789,11 @@ impl Lower<'_> {
                 };
                 let cond = self.b.emit(Op::Prim(prim, vec![l, r]), Repr::Bool, ty);
                 let text = format!("{} {} {}", describe(le), op, describe(re));
-                Some(Assertion { cond, operands: Some((l, r)), text })
+                Some(Assertion {
+                    cond,
+                    operands: Some((l, r)),
+                    text,
+                })
             }
             ast::AssertKind::Throws => None,
         }
@@ -1603,15 +1815,31 @@ impl Lower<'_> {
                 self.concat_str(open, q2, ty)
             }
             _ => match to_string_symbol(&repr) {
-                Some(sym) => self.b.emit(Op::Native { symbol: sym, args: vec![v] }, Repr::Str, ty),
-                None => self.b.emit(Op::ConstStr("<not displayable>".into()), Repr::Str, ty),
+                Some(sym) => self.b.emit(
+                    Op::Native {
+                        symbol: sym,
+                        args: vec![v],
+                    },
+                    Repr::Str,
+                    ty,
+                ),
+                None => self
+                    .b
+                    .emit(Op::ConstStr("<not displayable>".into()), Repr::Str, ty),
             },
         };
         self.concat_str(acc, rendered, ty)
     }
 
     fn concat_str(&mut self, a: Value, b: Value, ty: TyId) -> Value {
-        self.b.emit(Op::Native { symbol: "neon_str_concat".into(), args: vec![a, b] }, Repr::Str, ty)
+        self.b.emit(
+            Op::Native {
+                symbol: "neon_str_concat".into(),
+                args: vec![a, b],
+            },
+            Repr::Str,
+            ty,
+        )
     }
 
     /// `[a, b, c]` — one `MakeList` with the elements already lowered, left to right.
@@ -1636,7 +1864,9 @@ impl Lower<'_> {
         // width is the specific mistake the ice was added to stop.
         if repr == Repr::Any {
             let elem = normalize_union(vs.iter().map(|&v| self.b.value_repr(v).clone()).collect());
-            let built = self.b.emit(Op::MakeList(vs), Repr::List(Box::new(elem)), ty);
+            let built = self
+                .b
+                .emit(Op::MakeList(vs), Repr::List(Box::new(elem)), ty);
             return self.b.emit(Op::Cast(built), repr, ty);
         }
         self.b.emit(Op::MakeList(vs), repr, ty)
@@ -1672,7 +1902,14 @@ impl Lower<'_> {
             };
             built.push((fname, v));
         }
-        self.b.emit(Op::MakeRecord { name, fields: built }, repr, ty)
+        self.b.emit(
+            Op::MakeRecord {
+                name,
+                fields: built,
+            },
+            repr,
+            ty,
+        )
     }
 
     /// A string literal, or an interpolation. A single text part is a constant; anything
@@ -1706,9 +1943,14 @@ impl Lower<'_> {
                         None => {
                             let vr = self.b.value_repr(v).clone();
                             match to_string_symbol(&vr) {
-                                Some(sym) => {
-                                    self.b.emit(Op::Native { symbol: sym, args: vec![v] }, Repr::Str, ty)
-                                }
+                                Some(sym) => self.b.emit(
+                                    Op::Native {
+                                        symbol: sym,
+                                        args: vec![v],
+                                    },
+                                    Repr::Str,
+                                    ty,
+                                ),
                                 None => v,
                             }
                         }
@@ -1718,7 +1960,10 @@ impl Lower<'_> {
             acc = Some(match acc {
                 None => piece,
                 Some(a) => self.b.emit(
-                    Op::Native { symbol: "neon_str_concat".into(), args: vec![a, piece] },
+                    Op::Native {
+                        symbol: "neon_str_concat".into(),
+                        args: vec![a, piece],
+                    },
                     Repr::Str,
                     ty,
                 ),
@@ -1769,12 +2014,22 @@ impl Lower<'_> {
         // A bare function name used as a value: a closure with no captured environment.
         if let Some(sig) = self.env.fn_named(&self.module, p) {
             let func = mangle(&sig.module, &sig.name);
-            return self.b.emit(Op::MakeClosure { func, captures: vec![] }, repr, ty);
+            return self.b.emit(
+                Op::MakeClosure {
+                    func,
+                    captures: vec![],
+                },
+                repr,
+                ty,
+            );
         }
         // The checker's `path` resolves a value path to a local, a const or a function,
         // or reports `UnknownName` — so a fourth kind arriving here is a checker/lowering
         // disagreement, not a program the user can write.
-        panic!("internal error: path `{}` lowered as a value resolves to nothing", p.join("::"))
+        panic!(
+            "internal error: path `{}` lowered as a value resolves to nothing",
+            p.join("::")
+        )
     }
 
     /// `(x) => e` — capture the free variables, queue the body to be lowered as its own
@@ -1801,13 +2056,22 @@ impl Lower<'_> {
             module: self.module.clone(),
             subst: self.subst.clone(),
         });
-        self.b.emit(Op::MakeClosure { func: name, captures: capture_vals }, repr, ty)
+        self.b.emit(
+            Op::MakeClosure {
+                func: name,
+                captures: capture_vals,
+            },
+            repr,
+            ty,
+        )
     }
 
     /// The free variables a lambda closes over: names its body uses that are bound in the
     /// enclosing scope, excluding its own parameters and locals.
     fn free_vars(&self, e: &Expr) -> Vec<String> {
-        let ExprKind::Lambda { params, body } = &e.kind else { return vec![] };
+        let ExprKind::Lambda { params, body } = &e.kind else {
+            return vec![];
+        };
         let mut bound: std::collections::HashSet<String> =
             params.iter().map(|p| p.name.clone()).collect();
         let mut used = Vec::new();
@@ -1854,21 +2118,33 @@ impl Lower<'_> {
         };
         self.b.terminate(Term::Branch {
             cond: l,
-            then: Target { to: then_tgt, args: vec![] },
-            els: Target { to: else_tgt, args: vec![] },
+            then: Target {
+                to: then_tgt,
+                args: vec![],
+            },
+            els: Target {
+                to: else_tgt,
+                args: vec![],
+            },
         });
 
         self.b.switch_to(rhs_b);
         self.terminated = false;
         let r = self.lower_expr(rhs);
         if !self.terminated {
-            self.b.terminate(Term::Jump(Target { to: join, args: vec![r] }));
+            self.b.terminate(Term::Jump(Target {
+                to: join,
+                args: vec![r],
+            }));
         }
 
         self.b.switch_to(short_b);
         self.terminated = false;
         let sv = self.b.emit(Op::ConstBool(short_const), Repr::Bool, ty);
-        self.b.terminate(Term::Jump(Target { to: join, args: vec![sv] }));
+        self.b.terminate(Term::Jump(Target {
+            to: join,
+            args: vec![sv],
+        }));
 
         self.b.switch_to(join);
         self.terminated = false;
@@ -1887,22 +2163,34 @@ impl Lower<'_> {
 
         self.b.terminate(Term::Branch {
             cond: isnull,
-            then: Target { to: none_b, args: vec![] },
-            els: Target { to: some_b, args: vec![] },
+            then: Target {
+                to: none_b,
+                args: vec![],
+            },
+            els: Target {
+                to: some_b,
+                args: vec![],
+            },
         });
 
         self.b.switch_to(none_b);
         self.terminated = false;
         let r = self.lower_expr(rhs);
         if !self.terminated {
-            self.b.terminate(Term::Jump(Target { to: join, args: vec![r] }));
+            self.b.terminate(Term::Jump(Target {
+                to: join,
+                args: vec![r],
+            }));
         }
 
         self.b.switch_to(some_b);
         self.terminated = false;
         // The non-null value, reinterpreted to the non-null repr.
         let unwrapped = self.b.emit(Op::Cast(l), repr, ty);
-        self.b.terminate(Term::Jump(Target { to: join, args: vec![unwrapped] }));
+        self.b.terminate(Term::Jump(Target {
+            to: join,
+            args: vec![unwrapped],
+        }));
 
         self.b.switch_to(join);
         self.terminated = false;
@@ -2037,13 +2325,26 @@ impl Lower<'_> {
                         subst,
                         impl_key: None,
                     });
-                    let result = self.b.emit(Op::Call { func: mangled, args: arg_vs }, repr.clone(), ty);
+                    let result = self.b.emit(
+                        Op::Call {
+                            func: mangled,
+                            args: arg_vs,
+                        },
+                        repr.clone(),
+                        ty,
+                    );
                     return self.wrap_throwing_repr(result, err_repr, throws, repr, ty);
                 }
 
                 let op = match native {
-                    Some(sym) => Op::Native { symbol: sym, args: arg_vs },
-                    None => Op::Call { func: mangle(&smodule, &sname), args: arg_vs },
+                    Some(sym) => Op::Native {
+                        symbol: sym,
+                        args: arg_vs,
+                    },
+                    None => Op::Call {
+                        func: mangle(&smodule, &sname),
+                        args: arg_vs,
+                    },
                 };
                 let result = self.b.emit(op, repr.clone(), ty);
                 return self.wrap_throwing(result, throws, repr, ty);
@@ -2070,7 +2371,14 @@ impl Lower<'_> {
             Repr::Closure { throws, .. } => throws.as_ref().clone(),
             _ => Repr::Never,
         };
-        let result = self.b.emit(Op::CallClosure { callee: callee_v, args }, repr.clone(), ty);
+        let result = self.b.emit(
+            Op::CallClosure {
+                callee: callee_v,
+                args,
+            },
+            repr.clone(),
+            ty,
+        );
         // The error's TyId, for the handler's parameter; the arrow the checker recorded
         // for the callee carries it. The repr above stays authoritative — it is
         // substituted where the arrow type would still mention a variable.
@@ -2119,15 +2427,22 @@ impl Lower<'_> {
                 // the matching below reaches it without a second mechanism. Dispatch
                 // declines any impl whose generics the receiver does not bind, so every
                 // name in this list is one the match can find.
-                let generics: Vec<String> =
-                    impl_def.generics.iter().chain(m.generics.iter()).cloned().collect();
+                let generics: Vec<String> = impl_def
+                    .generics
+                    .iter()
+                    .chain(m.generics.iter())
+                    .cloned()
+                    .collect();
                 let mparams: Vec<TyId> = m.params.iter().map(|(_, t)| *t).collect();
                 let mret = m.ret;
                 // Set only on the generic-instance path, where the declared `throws` may
                 // still be a type variable. See `instance_throws_repr`.
                 let mut err_repr: Option<Repr> = None;
                 let op = match &m.native {
-                    Some(sym) => Op::Native { symbol: sym.clone(), args },
+                    Some(sym) => Op::Native {
+                        symbol: sym.clone(),
+                        args,
+                    },
                     None => {
                         // A user impl: call the method's own lowered function.
                         let proto = self.env.protocols()[impl_def.protocol.0].name.clone();
@@ -2158,7 +2473,10 @@ impl Lower<'_> {
                                 subst,
                                 impl_key: Some(key),
                             });
-                            Op::Call { func: mangled, args }
+                            Op::Call {
+                                func: mangled,
+                                args,
+                            }
                         }
                     }
                 };
@@ -2172,11 +2490,17 @@ impl Lower<'_> {
                 // The checker computed the arms (coverage-checked, most-specific
                 // filtered); lowering used to throw them away here and print
                 // `<todo: dispatch switch>` as program output.
-                let arms: Vec<(Repr, crate::typecheck::env::ImplId)> =
-                    arms.iter().map(|&(t, id)| (self.repr_of_ty(t), id)).collect();
+                let arms: Vec<(Repr, crate::typecheck::env::ImplId)> = arms
+                    .iter()
+                    .map(|&(t, id)| (self.repr_of_ty(t), id))
+                    .collect();
                 self.lower_dispatch_switch(&arms, &method, args, repr, ty)
             }
-            Resolution::Bound { protocol, subject_pos, .. } => {
+            Resolution::Bound {
+                protocol,
+                subject_pos,
+                ..
+            } => {
                 // In a monomorphic instance the subject is concrete, so its head picks the
                 // impl the bound stood for. WHERE the subject is comes from the checker:
                 // `subject_pos` names the argument carrying it, and `None` means it is the
@@ -2245,9 +2569,8 @@ impl Lower<'_> {
                                     }
                                 }
                                 if ok && !arms.is_empty() {
-                                    return self.lower_dispatch_switch(
-                                        &arms, &method, args, repr, ty,
-                                    );
+                                    return self
+                                        .lower_dispatch_switch(&arms, &method, args, repr, ty);
                                 }
                             }
                         }
@@ -2309,8 +2632,14 @@ impl Lower<'_> {
                 let next_b = self.b.new_block();
                 self.b.terminate(Term::Branch {
                     cond: test,
-                    then: Target { to: body_b, args: vec![] },
-                    els: Target { to: next_b, args: vec![] },
+                    then: Target {
+                        to: body_b,
+                        args: vec![],
+                    },
+                    els: Target {
+                        to: next_b,
+                        args: vec![],
+                    },
                 });
                 self.b.switch_to(body_b);
                 self.emit_switch_arm(recv, arm_repr, *impl_id, method, &args, join, bty);
@@ -2350,7 +2679,10 @@ impl Lower<'_> {
         };
         let res = crate::typecheck::dispatch::Resolution::Direct(impl_id);
         let out = self.lower_dispatch(&res, method, arm_args, arm_ret_repr, arm_ret_ty);
-        self.b.terminate(Term::Jump(Target { to: join, args: vec![out] }));
+        self.b.terminate(Term::Jump(Target {
+            to: join,
+            args: vec![out],
+        }));
     }
 
     /// `if cond { .. } else { .. }`. The join block's parameters are the merge: the `if`'s
@@ -2394,8 +2726,14 @@ impl Lower<'_> {
 
         self.b.terminate(Term::Branch {
             cond: cond_v,
-            then: Target { to: then_b, args: vec![] },
-            els: Target { to: else_b, args: vec![] },
+            then: Target {
+                to: then_b,
+                args: vec![],
+            },
+            els: Target {
+                to: else_b,
+                args: vec![],
+            },
         });
 
         // then
@@ -2404,7 +2742,11 @@ impl Lower<'_> {
         self.scope.push(vec![]);
         let tv = self.lower_block_inline(then);
         if !self.terminated {
-            let mut args = if produces { vec![tv.unwrap_or_else(|| self.unit(ty))] } else { vec![] };
+            let mut args = if produces {
+                vec![tv.unwrap_or_else(|| self.unit(ty))]
+            } else {
+                vec![]
+            };
             args.extend(mutated.iter().map(|n| self.lookup(n).unwrap()));
             self.b.terminate(Term::Jump(Target { to: join, args }));
         }
@@ -2484,7 +2826,10 @@ impl Lower<'_> {
         self.handlers.push(handler);
         let body_v = self.lower_expr(body);
         if !self.terminated {
-            self.b.terminate(Term::Jump(Target { to: join, args: vec![body_v] }));
+            self.b.terminate(Term::Jump(Target {
+                to: join,
+                args: vec![body_v],
+            }));
         }
         self.handlers.pop();
 
@@ -2495,7 +2840,10 @@ impl Lower<'_> {
             self.bind(&c.binding, err_param);
             let cv = self.lower_block(&c.body).unwrap_or_else(|| self.unit(ty));
             if !self.terminated {
-                self.b.terminate(Term::Jump(Target { to: join, args: vec![cv] }));
+                self.b.terminate(Term::Jump(Target {
+                    to: join,
+                    args: vec![cv],
+                }));
             }
             self.scope.pop();
         } else {
@@ -2514,14 +2862,18 @@ impl Lower<'_> {
                 // in a non-throwing `main` aborted the process instead of running its
                 // catch. `ExprKind::Throw` four hundred lines up already does it this way.
                 ast::TryForm::Propagate => match self.handlers.last().copied() {
-                    Some(h) => {
-                        self.b.terminate(Term::Jump(Target { to: h, args: vec![err_param] }))
-                    }
+                    Some(h) => self.b.terminate(Term::Jump(Target {
+                        to: h,
+                        args: vec![err_param],
+                    })),
                     None => self.throw_or_escape(err_param, ty),
                 },
                 ast::TryForm::Soften => {
                     let n = self.b.emit(Op::ConstNull, Repr::Null, ty);
-                    self.b.terminate(Term::Jump(Target { to: join, args: vec![n] }));
+                    self.b.terminate(Term::Jump(Target {
+                        to: join,
+                        args: vec![n],
+                    }));
                 }
                 ast::TryForm::Assert => {
                     let msg = self.error_message(err_param, ty);
@@ -2564,7 +2916,8 @@ impl Lower<'_> {
         }
         // The call yields a tagged result, not the callee's declared return. Retyping it
         // here keeps codegen and the refcount pass agreeing about what the value holds.
-        self.b.set_value_repr(result, Repr::Union(vec![ok_repr.clone(), err_repr.clone()]));
+        self.b
+            .set_value_repr(result, Repr::Union(vec![ok_repr.clone(), err_repr.clone()]));
 
         let iserr = self.b.emit(Op::IsErr(result), Repr::Bool, ty);
         let err = self.b.emit(Op::UnwrapErr(result), err_repr, throws_ty);
@@ -2572,15 +2925,27 @@ impl Lower<'_> {
         match self.handlers.last().copied() {
             Some(h) => self.b.terminate(Term::Branch {
                 cond: iserr,
-                then: Target { to: h, args: vec![err] },
-                els: Target { to: ok_b, args: vec![] },
+                then: Target {
+                    to: h,
+                    args: vec![err],
+                },
+                els: Target {
+                    to: ok_b,
+                    args: vec![],
+                },
             }),
             // The checker forbids a bare throwing call, so a handler is always present;
             // defensively, propagate straight out.
             None => self.b.terminate(Term::Branch {
                 cond: iserr,
-                then: Target { to: ok_b, args: vec![] },
-                els: Target { to: ok_b, args: vec![] },
+                then: Target {
+                    to: ok_b,
+                    args: vec![],
+                },
+                els: Target {
+                    to: ok_b,
+                    args: vec![],
+                },
             }),
         }
         self.b.switch_to(ok_b);
@@ -2609,11 +2974,20 @@ impl Lower<'_> {
 
             // Test the pattern in the current block.
             match self.pattern_test(subj, &arm.pat) {
-                None => self.b.terminate(Term::Jump(Target { to: matched, args: vec![] })),
+                None => self.b.terminate(Term::Jump(Target {
+                    to: matched,
+                    args: vec![],
+                })),
                 Some(test) => self.b.terminate(Term::Branch {
                     cond: test,
-                    then: Target { to: matched, args: vec![] },
-                    els: Target { to: next, args: vec![] },
+                    then: Target {
+                        to: matched,
+                        args: vec![],
+                    },
+                    els: Target {
+                        to: next,
+                        args: vec![],
+                    },
                 }),
             }
 
@@ -2627,8 +3001,14 @@ impl Lower<'_> {
                 let body_b = self.b.new_block();
                 self.b.terminate(Term::Branch {
                     cond: gv,
-                    then: Target { to: body_b, args: vec![] },
-                    els: Target { to: next, args: vec![] },
+                    then: Target {
+                        to: body_b,
+                        args: vec![],
+                    },
+                    els: Target {
+                        to: next,
+                        args: vec![],
+                    },
                 });
                 self.b.switch_to(body_b);
                 self.terminated = false;
@@ -2675,7 +3055,10 @@ impl Lower<'_> {
                     if let Some(sub) = &f.pat {
                         let r = field_repr(&self.b, subj, &f.name);
                         let fv = self.b.emit(
-                            Op::Field { base: subj, field: f.name.clone() },
+                            Op::Field {
+                                base: subj,
+                                field: f.name.clone(),
+                            },
                             r,
                             subj_ty(&self.b, subj),
                         );
@@ -2690,8 +3073,14 @@ impl Lower<'_> {
                 let mut test = None;
                 for (i, sub) in ps.iter().enumerate() {
                     let r = elem_repr(&self.b, subj, i);
-                    let ev =
-                        self.b.emit(Op::Elem { base: subj, index: i }, r, subj_ty(&self.b, subj));
+                    let ev = self.b.emit(
+                        Op::Elem {
+                            base: subj,
+                            index: i,
+                        },
+                        r,
+                        subj_ty(&self.b, subj),
+                    );
                     if let Some(sub_test) = self.pattern_test(ev, sub) {
                         test = Some(self.and(test, sub_test));
                     }
@@ -2753,8 +3142,14 @@ impl Lower<'_> {
         let bad_b = self.b.new_block();
         self.b.terminate(Term::Branch {
             cond: test,
-            then: Target { to: ok_b, args: vec![] },
-            els: Target { to: bad_b, args: vec![] },
+            then: Target {
+                to: ok_b,
+                args: vec![],
+            },
+            els: Target {
+                to: bad_b,
+                args: vec![],
+            },
         });
         self.b.switch_to(bad_b);
         let msg = self.b.emit(
@@ -2765,7 +3160,10 @@ impl Lower<'_> {
             Repr::Str,
             ty,
         );
-        self.b.emit_void(Op::Native { symbol: "neon_panic".into(), args: vec![msg] });
+        self.b.emit_void(Op::Native {
+            symbol: "neon_panic".into(),
+            args: vec![msg],
+        });
         self.b.terminate(Term::Unreachable);
         self.b.switch_to(ok_b);
         self.terminated = false;
@@ -2789,19 +3187,35 @@ impl Lower<'_> {
         let join_param = self.b.block_param(join, repr.clone(), ty);
         self.b.terminate(Term::Branch {
             cond: test,
-            then: Target { to: ok_b, args: vec![] },
-            els: Target { to: null_b, args: vec![] },
+            then: Target {
+                to: ok_b,
+                args: vec![],
+            },
+            els: Target {
+                to: null_b,
+                args: vec![],
+            },
         });
         // The narrow value first, at the tested type's own repr; the jump into the
         // join widens it into `T | null`, exactly as a `try?` widens its ok value.
         self.b.switch_to(ok_b);
-        let target = self.result.tested(id).map(|t| self.repr_of_ty(t)).unwrap_or(repr.clone());
+        let target = self
+            .result
+            .tested(id)
+            .map(|t| self.repr_of_ty(t))
+            .unwrap_or(repr.clone());
         let tested_ty = self.result.tested(id).unwrap_or(ty);
         let cast = self.b.emit(Op::Cast(v), target, tested_ty);
-        self.b.terminate(Term::Jump(Target { to: join, args: vec![cast] }));
+        self.b.terminate(Term::Jump(Target {
+            to: join,
+            args: vec![cast],
+        }));
         self.b.switch_to(null_b);
         let n = self.b.emit(Op::ConstNull, Repr::Null, ty);
-        self.b.terminate(Term::Jump(Target { to: join, args: vec![n] }));
+        self.b.terminate(Term::Jump(Target {
+            to: join,
+            args: vec![n],
+        }));
         self.b.switch_to(join);
         self.terminated = false;
         join_param
@@ -2814,11 +3228,20 @@ impl Lower<'_> {
             ast::TypeSpecKind::Named { path, .. } => {
                 let variant = path.last().cloned().unwrap_or_default();
                 let tested = self.tested_repr(id);
-                self.b.emit(Op::IsVariant { value: subj, variant, tested }, Repr::Bool, bty)
+                self.b.emit(
+                    Op::IsVariant {
+                        value: subj,
+                        variant,
+                        tested,
+                    },
+                    Repr::Bool,
+                    bty,
+                )
             }
             ast::TypeSpecKind::Atom(a) => {
                 let lit = self.b.emit(Op::ConstAtom(a.clone()), Repr::Tag, bty);
-                self.b.emit(Op::Prim(PrimOp::Eq, vec![subj, lit]), Repr::Bool, bty)
+                self.b
+                    .emit(Op::Prim(PrimOp::Eq, vec![subj, lit]), Repr::Bool, bty)
             }
             // A structural type spec — a tuple `(i64, str)`, an arrow `(i64) -> str`.
             // These have no head name to write, but they are not unanswerable: the
@@ -2834,7 +3257,11 @@ impl Lower<'_> {
             _ => {
                 let tested = self.tested_repr(id);
                 self.b.emit(
-                    Op::IsVariant { value: subj, variant: String::new(), tested },
+                    Op::IsVariant {
+                        value: subj,
+                        variant: String::new(),
+                        tested,
+                    },
                     Repr::Bool,
                     bty,
                 )
@@ -2857,7 +3284,8 @@ impl Lower<'_> {
             ExprKind::Atom(a) => self.b.emit(Op::ConstAtom(a.clone()), Repr::Tag, bty),
             _ => self.lower_expr(lit),
         };
-        self.b.emit(Op::Prim(PrimOp::Eq, vec![subj, lv]), Repr::Bool, bty)
+        self.b
+            .emit(Op::Prim(PrimOp::Eq, vec![subj, lv]), Repr::Bool, bty)
     }
 
     /// Conjoin two pattern tests, with `None` meaning "no test so far". This is a plain
@@ -2868,7 +3296,8 @@ impl Lower<'_> {
         match a {
             Some(a) => {
                 let bty = subj_ty(&self.b, b);
-                self.b.emit(Op::Prim(PrimOp::And, vec![a, b]), Repr::Bool, bty)
+                self.b
+                    .emit(Op::Prim(PrimOp::And, vec![a, b]), Repr::Bool, bty)
             }
             None => b,
         }
@@ -2883,7 +3312,10 @@ impl Lower<'_> {
                 for f in fields {
                     let r = field_repr(&self.b, subj, &f.name);
                     let fv = self.b.emit(
-                        Op::Field { base: subj, field: f.name.clone() },
+                        Op::Field {
+                            base: subj,
+                            field: f.name.clone(),
+                        },
                         r,
                         subj_ty(&self.b, subj),
                     );
@@ -2896,8 +3328,14 @@ impl Lower<'_> {
             ast::PatternKind::Tuple(ps) => {
                 for (i, sub) in ps.iter().enumerate() {
                     let r = elem_repr(&self.b, subj, i);
-                    let ev =
-                        self.b.emit(Op::Elem { base: subj, index: i }, r, subj_ty(&self.b, subj));
+                    let ev = self.b.emit(
+                        Op::Elem {
+                            base: subj,
+                            index: i,
+                        },
+                        r,
+                        subj_ty(&self.b, subj),
+                    );
                     self.bind_match_pattern(ev, sub);
                 }
             }
@@ -2928,7 +3366,10 @@ impl Lower<'_> {
             exit_carried.push(self.b.block_param(exit, r, vty));
         }
 
-        self.b.terminate(Term::Jump(Target { to: header, args: inits }));
+        self.b.terminate(Term::Jump(Target {
+            to: header,
+            args: inits,
+        }));
         self.b.switch_to(header);
         self.terminated = false;
         self.scope.push(vec![]);
@@ -2936,7 +3377,12 @@ impl Lower<'_> {
             self.bind(n, p);
         }
 
-        self.loops.push(LoopCtx { continue_target: header, exit, carried: carried.clone(), has_value: produces });
+        self.loops.push(LoopCtx {
+            continue_target: header,
+            exit,
+            carried: carried.clone(),
+            has_value: produces,
+        });
         for s in &body.stmts {
             if self.terminated {
                 break;
@@ -2981,7 +3427,10 @@ impl Lower<'_> {
             exit_carried.push(self.b.block_param(exit, r, vty));
         }
 
-        self.b.terminate(Term::Jump(Target { to: header, args: inits }));
+        self.b.terminate(Term::Jump(Target {
+            to: header,
+            args: inits,
+        }));
         self.b.switch_to(header);
         self.terminated = false;
         self.scope.push(vec![]);
@@ -2993,13 +3442,24 @@ impl Lower<'_> {
         // current values (the header params) out to the exit block.
         self.b.terminate(Term::Branch {
             cond: cond_v,
-            then: Target { to: body_b, args: vec![] },
-            els: Target { to: exit, args: header_params.clone() },
+            then: Target {
+                to: body_b,
+                args: vec![],
+            },
+            els: Target {
+                to: exit,
+                args: header_params.clone(),
+            },
         });
 
         self.b.switch_to(body_b);
         self.terminated = false;
-        self.loops.push(LoopCtx { continue_target: header, exit, carried: carried.clone(), has_value: false });
+        self.loops.push(LoopCtx {
+            continue_target: header,
+            exit,
+            carried: carried.clone(),
+            has_value: false,
+        });
         for s in &body.stmts {
             if self.terminated {
                 break;
@@ -3036,7 +3496,14 @@ impl Lower<'_> {
             Repr::List(e) => (**e).clone(),
             _ => Repr::Any,
         };
-        let len = self.b.emit(Op::Native { symbol: "neon_list_len".into(), args: vec![list] }, Repr::I64, ty);
+        let len = self.b.emit(
+            Op::Native {
+                symbol: "neon_list_len".into(),
+                args: vec![list],
+            },
+            Repr::I64,
+            ty,
+        );
         let zero = self.b.emit(Op::ConstI64(0), Repr::I64, ty);
 
         let carried = self.carried_vars(body);
@@ -3064,7 +3531,10 @@ impl Lower<'_> {
 
         let mut entry_args = vec![zero];
         entry_args.extend(inits);
-        self.b.terminate(Term::Jump(Target { to: header, args: entry_args }));
+        self.b.terminate(Term::Jump(Target {
+            to: header,
+            args: entry_args,
+        }));
 
         // header: test the index, bind carried, branch into the body or out.
         self.b.switch_to(header);
@@ -3073,19 +3543,34 @@ impl Lower<'_> {
         for (n, &p) in carried.iter().zip(&carried_params) {
             self.bind(n, p);
         }
-        let cond = self.b.emit(Op::Prim(PrimOp::Lt, vec![i_param, len]), Repr::Bool, ty);
+        let cond = self
+            .b
+            .emit(Op::Prim(PrimOp::Lt, vec![i_param, len]), Repr::Bool, ty);
         // Exhausting the list exits, handing the carried variables out to the exit block.
         self.b.terminate(Term::Branch {
             cond,
-            then: Target { to: body_b, args: vec![] },
-            els: Target { to: exit, args: carried_params.clone() },
+            then: Target {
+                to: body_b,
+                args: vec![],
+            },
+            els: Target {
+                to: exit,
+                args: carried_params.clone(),
+            },
         });
 
         // body: bind the element and run.
         self.b.switch_to(body_b);
         self.terminated = false;
         self.scope.push(vec![]);
-        let elem = self.b.emit(Op::Index { base: list, index: i_param }, elem_repr, ty);
+        let elem = self.b.emit(
+            Op::Index {
+                base: list,
+                index: i_param,
+            },
+            elem_repr,
+            ty,
+        );
         self.bind_pattern(pat, elem);
         self.loops.push(LoopCtx {
             continue_target: latch,
@@ -3115,10 +3600,15 @@ impl Lower<'_> {
         self.b.switch_to(latch);
         self.terminated = false;
         let one = self.b.emit(Op::ConstI64(1), Repr::I64, ty);
-        let next_i = self.b.emit(Op::Prim(PrimOp::Add, vec![i_param, one]), Repr::I64, ty);
+        let next_i = self
+            .b
+            .emit(Op::Prim(PrimOp::Add, vec![i_param, one]), Repr::I64, ty);
         let mut back = vec![next_i];
         back.extend(latch_params);
-        self.b.terminate(Term::Jump(Target { to: header, args: back }));
+        self.b.terminate(Term::Jump(Target {
+            to: header,
+            args: back,
+        }));
 
         self.scope.pop();
         for (n, &p) in carried.iter().zip(&exit_carried) {
@@ -3139,7 +3629,10 @@ impl Lower<'_> {
             return;
         }
         let msg = self.error_message(err, ty);
-        self.b.emit_void(Op::Native { symbol: "neon_panic".into(), args: vec![msg] });
+        self.b.emit_void(Op::Native {
+            symbol: "neon_panic".into(),
+            args: vec![msg],
+        });
         self.b.terminate(Term::Unreachable);
     }
 
@@ -3154,7 +3647,14 @@ impl Lower<'_> {
         let r = self.b.value_repr(err).clone();
         if let Some(head) = repr_head(&r) {
             let name = mangle_impl("Error", &head, "message");
-            return self.b.emit(Op::Call { func: name, args: vec![err] }, Repr::Str, ty);
+            return self.b.emit(
+                Op::Call {
+                    func: name,
+                    args: vec![err],
+                },
+                Repr::Str,
+                ty,
+            );
         }
         // A union of error types: which impl to call is a runtime question, so ask it.
         // Each variant is tested in turn and the matching arm narrows and calls its own
@@ -3180,8 +3680,14 @@ impl Lower<'_> {
                     );
                     self.b.terminate(Term::Branch {
                         cond: test,
-                        then: Target { to: hit, args: vec![] },
-                        els: Target { to: next, args: vec![] },
+                        then: Target {
+                            to: hit,
+                            args: vec![],
+                        },
+                        els: Target {
+                            to: next,
+                            args: vec![],
+                        },
                     });
                     self.b.switch_to(hit);
                     self.terminated = false;
@@ -3195,7 +3701,10 @@ impl Lower<'_> {
                         Repr::Str,
                         ty,
                     );
-                    self.b.terminate(Term::Jump(Target { to: join, args: vec![msg] }));
+                    self.b.terminate(Term::Jump(Target {
+                        to: join,
+                        args: vec![msg],
+                    }));
                     self.b.switch_to(next);
                     self.terminated = false;
                 }
@@ -3247,7 +3756,6 @@ impl Lower<'_> {
     fn unit(&mut self, ty: TyId) -> Value {
         self.b.emit(Op::ConstUnit, Repr::Unit, ty)
     }
-
 }
 
 /// Record a function's declared error type on its builder, so its result becomes a tagged
@@ -3337,7 +3845,12 @@ fn describe(e: &Expr) -> String {
         // message reads back as what the author wrote: `assert(1 + 1 == 3)` reports
         // `1 + 1 == 3`, not `(1 + 1) == 3`.
         ExprKind::Binary { op, lhs, rhs } => {
-            format!("{} {} {}", describe_at(lhs, op.prec()), op.text(), describe_at(rhs, op.prec()))
+            format!(
+                "{} {} {}",
+                describe_at(lhs, op.prec()),
+                op.text(),
+                describe_at(rhs, op.prec())
+            )
         }
         ExprKind::Call { callee, args, .. } => {
             let a: Vec<String> = args.iter().map(describe).collect();
@@ -3383,13 +3896,15 @@ fn describe_sub(e: &Expr) -> String {
 }
 
 fn to_string_symbol(r: &Repr) -> Option<String> {
-    Some(match r {
-        Repr::I64 => "neon_i64_to_string",
-        Repr::F64 => "neon_f64_to_string",
-        Repr::Bool => "neon_bool_to_string",
-        _ => return None,
-    }
-    .to_string())
+    Some(
+        match r {
+            Repr::I64 => "neon_i64_to_string",
+            Repr::F64 => "neon_f64_to_string",
+            Repr::Bool => "neon_bool_to_string",
+            _ => return None,
+        }
+        .to_string(),
+    )
 }
 
 // ---- scanning for a lambda's free variables ----
@@ -3416,7 +3931,11 @@ fn pattern_names(p: &ast::Pattern, out: &mut Vec<String>) {
 /// in a block scopes to the rest of that block — the statements after it must see the name
 /// as bound. Constructs whose bindings scope more narrowly (a lambda, a match arm, a `for`
 /// pattern, a `catch`) clone `bound` instead so their names do not leak to their siblings.
-fn collect_free(block: &Block, bound: &mut std::collections::HashSet<String>, used: &mut Vec<String>) {
+fn collect_free(
+    block: &Block,
+    bound: &mut std::collections::HashSet<String>,
+    used: &mut Vec<String>,
+) {
     for s in &block.stmts {
         match &s.kind {
             StmtKind::Let { pat, value, .. } => {
@@ -3475,7 +3994,9 @@ fn collect_free_expr(
             ast::Elem::Value(x) | ast::Elem::Spread(x) => collect_free_expr(x, bound, used),
         }),
         ExprKind::RecordLit { fields, spread, .. } => {
-            fields.iter().for_each(|f| collect_free_expr(&f.value, bound, used));
+            fields
+                .iter()
+                .for_each(|f| collect_free_expr(&f.value, bound, used));
             if let Some(s) = spread {
                 collect_free_expr(s, bound, used);
             }
@@ -3529,7 +4050,9 @@ fn collect_free_expr(
             }
         }
         ExprKind::Is { lhs, .. } | ExprKind::As { lhs, .. } => collect_free_expr(lhs, bound, used),
-        ExprKind::Assert { args, .. } => args.iter().for_each(|a| collect_free_expr(a, bound, used)),
+        ExprKind::Assert { args, .. } => {
+            args.iter().for_each(|a| collect_free_expr(a, bound, used))
+        }
         ExprKind::Todo(_) => {}
         _ => {}
     }
@@ -3587,7 +4110,9 @@ fn collect_assigns_expr(e: &Expr, out: &mut Vec<String>) {
             }
         }
         ExprKind::RecordLit { fields, spread, .. } => {
-            fields.iter().for_each(|f| collect_assigns_expr(&f.value, out));
+            fields
+                .iter()
+                .for_each(|f| collect_assigns_expr(&f.value, out));
             if let Some(s) = spread {
                 collect_assigns_expr(s, out);
             }
@@ -3652,9 +4177,10 @@ fn elem_repr(b: &Builder, base: Value, index: usize) -> Repr {
 fn field_repr(b: &Builder, base: Value, field: &str) -> Repr {
     fn find(r: &Repr, field: &str) -> Option<Repr> {
         match r {
-            Repr::Record { fields, .. } => {
-                fields.iter().find(|(n, _)| n == field).map(|(_, r)| r.clone())
-            }
+            Repr::Record { fields, .. } => fields
+                .iter()
+                .find(|(n, _)| n == field)
+                .map(|(_, r)| r.clone()),
             // Destructuring a union or nullable value: the field lives in a variant.
             Repr::Union(vs) => vs.iter().find_map(|v| find(v, field)),
             Repr::Nullable(inner) => find(inner, field),
@@ -3668,7 +4194,11 @@ fn field_repr(b: &Builder, base: Value, field: &str) -> Repr {
 /// pattern compares against.
 fn variant_scalar(r: &Repr) -> Repr {
     match r {
-        Repr::Union(vs) => vs.iter().find(|v| !matches!(v, Repr::Null)).cloned().unwrap_or(Repr::I64),
+        Repr::Union(vs) => vs
+            .iter()
+            .find(|v| !matches!(v, Repr::Null))
+            .cloned()
+            .unwrap_or(Repr::I64),
         other => other.clone(),
     }
 }

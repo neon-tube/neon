@@ -95,7 +95,8 @@ fn stage_tree(from: &Path, to: &Path) {
 
 fn copy_tree(from: &Path, to: &Path) {
     std::fs::create_dir_all(to).expect("create dir");
-    for entry in std::fs::read_dir(from).unwrap_or_else(|e| panic!("read {}: {e}", from.display())) {
+    for entry in std::fs::read_dir(from).unwrap_or_else(|e| panic!("read {}: {e}", from.display()))
+    {
         let entry = entry.expect("dir entry");
         let dest = to.join(entry.file_name());
         if entry.file_type().expect("file type").is_dir() {

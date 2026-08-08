@@ -68,7 +68,10 @@ struct Directives {
 /// they say. The corpus is the spec, so a test that lies is worse than one that
 /// fails.
 fn directives(path: &Path, src: &str) -> Result<Directives, String> {
-    let mut d = Directives { compile_fail: false, error_contains: Vec::new() };
+    let mut d = Directives {
+        compile_fail: false,
+        error_contains: Vec::new(),
+    };
     let mut exit = false;
 
     // Only the leading comment block: the one ending at the first line that is
@@ -87,12 +90,19 @@ fn directives(path: &Path, src: &str) -> Result<Directives, String> {
         } else if let Some(s) = rest.strip_prefix("error-contains:") {
             let s = s.trim();
             if s.is_empty() {
-                return Err(format!("{}: `//@ error-contains:` with no substring", name(path)));
+                return Err(format!(
+                    "{}: `//@ error-contains:` with no substring",
+                    name(path)
+                ));
             }
             d.error_contains.push(s.to_string());
         } else if let Some(s) = rest.strip_prefix("exit:") {
             if s.trim().parse::<i32>().is_err() {
-                return Err(format!("{}: `//@ exit: {}` is not a number", name(path), s.trim()));
+                return Err(format!(
+                    "{}: `//@ exit: {}` is not a number",
+                    name(path),
+                    s.trim()
+                ));
             }
             exit = true;
         } else {
@@ -103,17 +113,29 @@ fn directives(path: &Path, src: &str) -> Result<Directives, String> {
     let stdout = path.with_extension("stdout").exists();
     if d.compile_fail {
         if exit {
-            return Err(format!("{}: `//@ exit:` on a compile-fail file; it never runs", name(path)));
+            return Err(format!(
+                "{}: `//@ exit:` on a compile-fail file; it never runs",
+                name(path)
+            ));
         }
         if stdout {
-            return Err(format!("{}: compile-fail file has a .stdout; it never runs", name(path)));
+            return Err(format!(
+                "{}: compile-fail file has a .stdout; it never runs",
+                name(path)
+            ));
         }
     } else {
         if !d.error_contains.is_empty() {
-            return Err(format!("{}: `//@ error-contains:` without `//@ compile-fail`", name(path)));
+            return Err(format!(
+                "{}: `//@ error-contains:` without `//@ compile-fail`",
+                name(path)
+            ));
         }
         if !stdout {
-            return Err(format!("{}: no .stdout; required unless compile-fail", name(path)));
+            return Err(format!(
+                "{}: no .stdout; required unless compile-fail",
+                name(path)
+            ));
         }
     }
     Ok(d)
@@ -225,7 +247,11 @@ fn collect_neon(root: &Path, dir: &Path, out: &mut Vec<(String, String)>) {
         if path.is_dir() {
             collect_neon(root, &path, out);
         } else if path.extension().is_some_and(|e| e == "neon") {
-            let rel = path.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
+            let rel = path
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
             out.push((rel, std::fs::read_to_string(&path).expect("readable")));
         }
     }
@@ -253,18 +279,30 @@ fn strip_ansi(s: &str) -> String {
 fn outcome(path: &Path, src: &str, d: &Directives) -> Result<(), String> {
     let result = check(path, src);
     if !d.compile_fail {
-        return result.map_err(|f| format!("does not check clean:\n{}", indent(&strip_ansi(&f.rendered))));
+        return result.map_err(|f| {
+            format!(
+                "does not check clean:\n{}",
+                indent(&strip_ansi(&f.rendered))
+            )
+        });
     }
     let Err(f) = result else {
         return Err("compiles clean, expected compile-fail".to_string());
     };
     let hay = strip_ansi(&f.messages.join("\n"));
-    let missing: Vec<&str> =
-        d.error_contains.iter().filter(|s| !hay.contains(s.as_str())).map(String::as_str).collect();
+    let missing: Vec<&str> = d
+        .error_contains
+        .iter()
+        .filter(|s| !hay.contains(s.as_str()))
+        .map(String::as_str)
+        .collect();
     if missing.is_empty() {
         return Ok(());
     }
-    Err(format!("fails, but not with {missing:?}:\n{}", indent(&strip_ansi(&f.rendered))))
+    Err(format!(
+        "fails, but not with {missing:?}:\n{}",
+        indent(&strip_ansi(&f.rendered))
+    ))
 }
 
 fn indent(s: &str) -> String {
@@ -273,7 +311,8 @@ fn indent(s: &str) -> String {
 
 fn expected_pass() -> Vec<String> {
     let path = root().join("expected-pass.txt");
-    let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let src = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
     src.lines()
         .map(str::trim)
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
@@ -319,12 +358,18 @@ fn the_corpus_checks() {
         }
     }
 
-    let stale: Vec<&String> = expected.iter().filter(|e| !files.iter().any(|p| name(p) == **e)).collect();
+    let stale: Vec<&String> = expected
+        .iter()
+        .filter(|e| !files.iter().any(|p| name(p) == **e))
+        .collect();
 
     // Not a failure: the README's third state. Absent and failing is "not built
     // yet", and the whole point of the ratchet is that it costs nothing to say so.
     if !not_yet.is_empty() {
-        println!("{} corpus files not passing yet (not listed, not a failure):", not_yet.len());
+        println!(
+            "{} corpus files not passing yet (not listed, not a failure):",
+            not_yet.len()
+        );
         for f in &not_yet {
             println!("  {f}");
         }
@@ -332,10 +377,16 @@ fn the_corpus_checks() {
 
     let mut fail = String::new();
     if !malformed.is_empty() {
-        fail.push_str(&format!("{} malformed corpus files:\n{}\n", malformed.len(), indent(&malformed.join("\n"))));
+        fail.push_str(&format!(
+            "{} malformed corpus files:\n{}\n",
+            malformed.len(),
+            indent(&malformed.join("\n"))
+        ));
     }
     if !stale.is_empty() {
-        fail.push_str(&format!("expected-pass.txt lists files that do not exist:\n{stale:#?}\n"));
+        fail.push_str(&format!(
+            "expected-pass.txt lists files that do not exist:\n{stale:#?}\n"
+        ));
     }
     if !regressed.is_empty() {
         fail.push_str(&format!(
@@ -351,6 +402,9 @@ fn the_corpus_checks() {
             indent(&unrecorded.join("\n"))
         ));
     }
-    assert!(fail.is_empty(), "{passing}/{} corpus files pass\n\n{fail}", files.len());
+    assert!(
+        fail.is_empty(),
+        "{passing}/{} corpus files pass\n\n{fail}",
+        files.len()
+    );
 }
-

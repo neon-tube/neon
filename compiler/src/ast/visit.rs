@@ -123,10 +123,7 @@ pub fn walk_pattern<'a, V: Visitor<'a>>(v: &mut V, p: &'a Pattern) {
                 v.pattern(p);
             }
         }
-        PatternKind::Is(_)
-        | PatternKind::Wildcard
-        | PatternKind::Bind(_)
-        | PatternKind::Error => {}
+        PatternKind::Is(_) | PatternKind::Wildcard | PatternKind::Bind(_) | PatternKind::Error => {}
     }
 }
 
@@ -343,7 +340,10 @@ mod tests {
         // `number_exprs` hands out 0..n contiguously, so a complete walk sees each once.
         let n = seen.len() as u32;
         for i in 0..n {
-            assert!(seen.contains(&ExprId(i)), "id {i} was numbered but never visited");
+            assert!(
+                seen.contains(&ExprId(i)),
+                "id {i} was numbered but never visited"
+            );
         }
     }
 
@@ -368,7 +368,10 @@ mod tests {
     #[test]
     fn an_offset_outside_every_span_finds_nothing() {
         let m = parse("fn f() -> i64 { 1 }");
-        assert!(innermost_at(&m, 0).is_none(), "`fn` is not inside any expression");
+        assert!(
+            innermost_at(&m, 0).is_none(),
+            "`fn` is not inside any expression"
+        );
     }
 
     #[test]

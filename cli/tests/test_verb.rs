@@ -65,7 +65,11 @@ test \"arithmetic is broken\" {
 #[test]
 fn a_failing_assertion_fails_the_run() {
     let r = neon_test("failing", ONE_PASS_ONE_FAIL);
-    assert!(!r.ok, "a false assertion must exit non-zero\nstdout:\n{}\nstderr:\n{}", r.out, r.err);
+    assert!(
+        !r.ok,
+        "a false assertion must exit non-zero\nstdout:\n{}\nstderr:\n{}",
+        r.out, r.err
+    );
     assert!(
         r.out.contains("arithmetic is broken") && r.out.contains("FAILED"),
         "the failing test must be named\nstdout:\n{}",
@@ -97,7 +101,11 @@ fn a_failure_reports_what_the_assertion_compared() {
 #[test]
 fn a_passing_test_is_still_reported_alongside_a_failing_one() {
     let r = neon_test("both", ONE_PASS_ONE_FAIL);
-    assert!(r.out.contains("arithmetic holds ... ok"), "stdout:\n{}", r.out);
+    assert!(
+        r.out.contains("arithmetic holds ... ok"),
+        "stdout:\n{}",
+        r.out
+    );
     assert!(r.out.contains("1 passed; 1 failed"), "stdout:\n{}", r.out);
 }
 
@@ -133,7 +141,11 @@ fn assert_eq_reports_both_sides() {
         "stdout:\n{}",
         r.out
     );
-    assert!(r.out.contains("left:  \"ab\"") && r.out.contains("right: \"ac\""), "stdout:\n{}", r.out);
+    assert!(
+        r.out.contains("left:  \"ab\"") && r.out.contains("right: \"ac\""),
+        "stdout:\n{}",
+        r.out
+    );
 }
 
 /// `main` is compiled in a test build but never called: the entry point dispatches to a
@@ -176,7 +188,11 @@ fn a_normal_run_ignores_test_blocks() {
         .output()
         .expect("run neon run");
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(out.status.success(), "stdout:\n{stdout}\nstderr:\n{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stdout:\n{stdout}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(stdout.contains("main ran"), "stdout:\n{stdout}");
     assert!(!stdout.contains("assertion failed"), "stdout:\n{stdout}");
 }

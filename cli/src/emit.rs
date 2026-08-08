@@ -22,7 +22,11 @@ use std::process::Command;
 /// comparison is case-insensitive because Windows treats `.EXE` as the same suffix.
 pub fn executable_path(base: PathBuf) -> PathBuf {
     let suffix = std::env::consts::EXE_SUFFIX;
-    if suffix.is_empty() || base.extension().is_some_and(|e| e.eq_ignore_ascii_case("exe")) {
+    if suffix.is_empty()
+        || base
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("exe"))
+    {
         return base;
     }
     let mut name = base.clone().into_os_string();
@@ -32,9 +36,14 @@ pub fn executable_path(base: PathBuf) -> PathBuf {
 
 /// Lower a checked program to an executable at `out`, writing a sibling `.c` file.
 pub fn to_executable(checked: &Checked, out: &Path, cfg: &BuildConfig) -> Result<()> {
-    let libs: Vec<(Vec<String>, &_)> =
-        checked.libs.iter().map(|(p, m)| (p.clone(), m)).collect();
-    let program = ir::compile(&checked.env, &checked.result, &checked.module, &libs, Stage::Final);
+    let libs: Vec<(Vec<String>, &_)> = checked.libs.iter().map(|(p, m)| (p.clone(), m)).collect();
+    let program = ir::compile(
+        &checked.env,
+        &checked.result,
+        &checked.module,
+        &libs,
+        Stage::Final,
+    );
     link(&c::emit(&program), out, cfg)
 }
 
@@ -48,8 +57,7 @@ pub fn to_test_executable(
     out: &Path,
     cfg: &BuildConfig,
 ) -> Result<()> {
-    let libs: Vec<(Vec<String>, &_)> =
-        checked.libs.iter().map(|(p, m)| (p.clone(), m)).collect();
+    let libs: Vec<(Vec<String>, &_)> = checked.libs.iter().map(|(p, m)| (p.clone(), m)).collect();
     let program = ir::compile_tests(&checked.env, &checked.result, &checked.module, &libs);
     link(&c::emit_tests(&program, tests), out, cfg)
 }
@@ -80,7 +88,10 @@ fn link(c_source: &str, out: &Path, cfg: &BuildConfig) -> Result<()> {
     // (and run under Wine) from here, so a `@cfg(windows)` branch can be executed rather
     // than only type-checked.
     let archive = match &cfg.runtime {
-        Some(path) => crate::sysroot::ResolvedRuntime { path: path.clone(), note: None },
+        Some(path) => crate::sysroot::ResolvedRuntime {
+            path: path.clone(),
+            note: None,
+        },
         None => sysroot.runtime_lib(variant, flavor)?,
     };
     // Asking for a strict subset of the sanitized archive's sanitizers links the full set

@@ -137,7 +137,9 @@ pub fn apply(program: &mut Program) {
         // cheaper than proving staleness impossible. Each round converts at least one
         // `set` call, so this terminates; the bound is a backstop, not a schedule.
         for _ in 0..64 {
-            let Some(plan) = plans(f).into_iter().find(|p| p.scalar) else { break };
+            let Some(plan) = plans(f).into_iter().find(|p| p.scalar) else {
+                break;
+            };
             rewrite(f, &plan);
         }
     }
@@ -179,7 +181,11 @@ enum Use {
     By { at: (BlockId, usize), op: Op },
     /// Passed as a block argument on an edge leaving `from`. This is SSA plumbing, not a
     /// new reference: the value moves to the parameter, which continues the same chain.
-    Carried { from: BlockId, to: BlockId, slot: usize },
+    Carried {
+        from: BlockId,
+        to: BlockId,
+        slot: usize,
+    },
     /// Read by the terminator of `from` itself.
     Term { from: BlockId, kind: TermUse },
 }
@@ -197,26 +203,34 @@ fn uses(f: &Func) -> HashMap<Value, Vec<Use>> {
     for b in &f.blocks {
         for (i, inst) in b.insts.iter().enumerate() {
             for v in operands(&inst.op) {
-                out.entry(v).or_default().push(Use::By { at: (b.id, i), op: inst.op.clone() });
+                out.entry(v).or_default().push(Use::By {
+                    at: (b.id, i),
+                    op: inst.op.clone(),
+                });
             }
         }
         match &b.term {
-            Term::Ret(Some(v)) | Term::Throw(v) => {
-                out.entry(*v).or_default().push(Use::Term { from: b.id, kind: TermUse::Handoff })
-            }
-            Term::Branch { cond, .. } => out
-                .entry(*cond)
-                .or_default()
-                .push(Use::Term { from: b.id, kind: TermUse::Scrutinee }),
-            Term::Switch { on, .. } => out
-                .entry(*on)
-                .or_default()
-                .push(Use::Term { from: b.id, kind: TermUse::Scrutinee }),
+            Term::Ret(Some(v)) | Term::Throw(v) => out.entry(*v).or_default().push(Use::Term {
+                from: b.id,
+                kind: TermUse::Handoff,
+            }),
+            Term::Branch { cond, .. } => out.entry(*cond).or_default().push(Use::Term {
+                from: b.id,
+                kind: TermUse::Scrutinee,
+            }),
+            Term::Switch { on, .. } => out.entry(*on).or_default().push(Use::Term {
+                from: b.id,
+                kind: TermUse::Scrutinee,
+            }),
             _ => {}
         }
         for (to, args) in targets_with_dest(&b.term) {
             for (slot, v) in args.iter().enumerate() {
-                out.entry(*v).or_default().push(Use::Carried { from: b.id, to, slot });
+                out.entry(*v).or_default().push(Use::Carried {
+                    from: b.id,
+                    to,
+                    slot,
+                });
             }
         }
     }
@@ -229,9 +243,11 @@ fn successors(f: &Func, b: BlockId) -> Vec<BlockId> {
     match &block.term {
         Term::Jump(t) => vec![t.to],
         Term::Branch { then, els, .. } => vec![then.to, els.to],
-        Term::Switch { arms, default, .. } => {
-            arms.iter().map(|(_, t)| t.to).chain(std::iter::once(default.to)).collect()
-        }
+        Term::Switch { arms, default, .. } => arms
+            .iter()
+            .map(|(_, t)| t.to)
+            .chain(std::iter::once(default.to))
+            .collect(),
         Term::Ret(_) | Term::Throw(_) | Term::Unreachable => vec![],
     }
 }
@@ -287,9 +303,9 @@ fn targets_with_dest(t: &Term) -> Vec<(BlockId, Vec<Value>)> {
 fn operands(op: &Op) -> Vec<Value> {
     match op {
         Op::Prim(_, vs) | Op::MakeTuple(vs) | Op::MakeList(vs) => vs.clone(),
-        Op::Call { args, .. } | Op::Native { args, .. } | Op::MakeClosure { captures: args, .. } => {
-            args.clone()
-        }
+        Op::Call { args, .. }
+        | Op::Native { args, .. }
+        | Op::MakeClosure { captures: args, .. } => args.clone(),
         Op::CallClosure { callee, args } => {
             let mut v = vec![*callee];
             v.extend(args.iter().copied());
@@ -318,7 +334,10 @@ fn operands(op: &Op) -> Vec<Value> {
 
 /// List natives that only read. Everything else is treated as possibly retaining.
 fn is_read_only_list_native(symbol: &str) -> bool {
-    matches!(symbol, "neon_list_at" | "neon_list_at_scalar" | "neon_list_len")
+    matches!(
+        symbol,
+        "neon_list_at" | "neon_list_at_scalar" | "neon_list_len"
+    )
 }
 
 fn plans(f: &Func) -> Vec<Plan> {
@@ -334,11 +353,18 @@ fn plans(f: &Func) -> Vec<Plan> {
     let mut out = Vec::new();
     for header in headers {
         for &param in &f.blocks[header.0 as usize].params {
-            let Repr::List(elem) = f.value_repr(param) else { continue };
+            let Repr::List(elem) = f.value_repr(param) else {
+                continue;
+            };
             let scalar = !elem.is_counted();
             if let Some(sites) = chain(f, &sets, &all_uses, param) {
                 if !sites.is_empty() {
-                    out.push(Plan { header, param, scalar, sites });
+                    out.push(Plan {
+                        header,
+                        param,
+                        scalar,
+                        sites,
+                    });
                 }
             }
         }
@@ -355,7 +381,11 @@ fn set_calls(f: &Func) -> Vec<SetCall> {
             if let Op::Call { func, args } = &inst.op {
                 if func.starts_with(SET_PREFIX) && args.len() == 3 {
                     if let Some(tagged) = inst.result {
-                        out.push(SetCall { block: b.id, idx, tagged });
+                        out.push(SetCall {
+                            block: b.id,
+                            idx,
+                            tagged,
+                        });
                     }
                 }
             }
@@ -381,15 +411,21 @@ fn chain(
         for u in all_uses.get(&v).into_iter().flatten() {
             match u {
                 // Reading an element or a length leaves no reference behind.
-                Use::By { op: Op::Index { .. }, .. } => {}
-                Use::By { op: Op::Native { symbol, .. }, .. }
-                    if is_read_only_list_native(symbol) => {}
+                Use::By {
+                    op: Op::Index { .. },
+                    ..
+                } => {}
+                Use::By {
+                    op: Op::Native { symbol, .. },
+                    ..
+                } if is_read_only_list_native(symbol) => {}
                 // The consuming write, as the *list* argument. As any other argument —
                 // the element of a list-of-lists, say — it falls through to the escape
                 // arm below.
-                Use::By { at, op: Op::Call { func, args } }
-                    if func.starts_with(SET_PREFIX) && args.first() == Some(&v) =>
-                {
+                Use::By {
+                    at,
+                    op: Op::Call { func, args },
+                } if func.starts_with(SET_PREFIX) && args.first() == Some(&v) => {
                     let s = sets.iter().find(|s| (s.block, s.idx) == *at)?;
                     if consumed_by.replace(s).is_some() {
                         // Two writes consuming one value is a genuine fork: two logical
@@ -409,8 +445,14 @@ fn chain(
                     }
                 }
                 // Returned or thrown: the single reference leaves whole.
-                Use::Term { kind: TermUse::Handoff, .. } => {}
-                Use::Term { kind: TermUse::Scrutinee, .. } => return None,
+                Use::Term {
+                    kind: TermUse::Handoff,
+                    ..
+                } => {}
+                Use::Term {
+                    kind: TermUse::Scrutinee,
+                    ..
+                } => return None,
             }
         }
         if let Some(s) = consumed_by {
@@ -450,8 +492,10 @@ fn write_is_last(
     s: &SetCall,
 ) -> bool {
     let mut reach = HashSet::new();
-    let mut stack: Vec<BlockId> =
-        successors(f, s.block).into_iter().filter(|b| *b != def_block).collect();
+    let mut stack: Vec<BlockId> = successors(f, s.block)
+        .into_iter()
+        .filter(|b| *b != def_block)
+        .collect();
     while let Some(b) = stack.pop() {
         if reach.insert(b) {
             stack.extend(successors(f, b).into_iter().filter(|x| *x != def_block));
@@ -487,19 +531,28 @@ fn try_shape(f: &Func, all_uses: &HashMap<Value, Vec<Use>>, s: &SetCall) -> Opti
     let mut unwrap_err: Option<Value> = None;
     for u in all_uses.get(&s.tagged).into_iter().flatten() {
         match u {
-            Use::By { at, op: Op::IsErr(_) } => {
+            Use::By {
+                at,
+                op: Op::IsErr(_),
+            } => {
                 let r = result_at(f, *at)?;
                 if is_err.replace(r).is_some() {
                     return None;
                 }
             }
-            Use::By { at, op: Op::UnwrapOk(_) } => {
+            Use::By {
+                at,
+                op: Op::UnwrapOk(_),
+            } => {
                 let r = result_at(f, *at)?;
                 if unwrap_ok.replace((at.0, r)).is_some() {
                     return None;
                 }
             }
-            Use::By { at, op: Op::UnwrapErr(_) } => {
+            Use::By {
+                at,
+                op: Op::UnwrapErr(_),
+            } => {
                 let r = result_at(f, *at)?;
                 if unwrap_err.replace(r).is_some() {
                     return None;
@@ -519,7 +572,10 @@ fn try_shape(f: &Func, all_uses: &HashMap<Value, Vec<Use>>, s: &SetCall) -> Opti
     // The `is_err` must feed that branch and nothing else.
     for u in all_uses.get(&is_err).into_iter().flatten() {
         match u {
-            Use::Term { from, kind: TermUse::Scrutinee } if *from == s.block => {}
+            Use::Term {
+                from,
+                kind: TermUse::Scrutinee,
+            } if *from == s.block => {}
             _ => return None,
         }
     }
@@ -596,8 +652,10 @@ fn rewrite(f: &mut Func, plan: &Plan) {
         };
         let (list, index, elem) = (args[0], args[1], args[2]);
         inst.result = None;
-        inst.op =
-            Op::Native { symbol: "neon_list_set_inplace".into(), args: vec![list, index, elem] };
+        inst.op = Op::Native {
+            symbol: "neon_list_set_inplace".into(),
+            args: vec![list, index, elem],
+        };
         b.term = Term::Jump(site.ok.clone());
         dead.insert(site.is_err);
         dead.extend(site.unwrap_err);
@@ -622,7 +680,8 @@ fn rewrite(f: &mut Func, plan: &Plan) {
         .collect();
 
     for b in &mut f.blocks {
-        b.insts.retain(|i| !i.result.is_some_and(|r| dead.contains(&r)));
+        b.insts
+            .retain(|i| !i.result.is_some_and(|r| dead.contains(&r)));
         for inst in &mut b.insts {
             map_operands(&mut inst.op, &resolved);
         }
@@ -661,13 +720,20 @@ fn establish(f: &mut Func, plan: &Plan) {
         }
         if matches!(&f.blocks[bi].term, Term::Jump(t) if t.to == header) {
             let old = {
-                let Term::Jump(t) = &f.blocks[bi].term else { unreachable!() };
+                let Term::Jump(t) = &f.blocks[bi].term else {
+                    unreachable!()
+                };
                 t.args[slot]
             };
             let nv = f.new_value(repr.clone(), ty);
             let b = &mut f.blocks[bi];
-            b.insts.push(Inst { result: Some(nv), op: ensure(old) });
-            let Term::Jump(t) = &mut b.term else { unreachable!() };
+            b.insts.push(Inst {
+                result: Some(nv),
+                op: ensure(old),
+            });
+            let Term::Jump(t) = &mut b.term else {
+                unreachable!()
+            };
             t.args[slot] = nv;
             continue;
         }
@@ -682,7 +748,10 @@ fn establish(f: &mut Func, plan: &Plan) {
             }
             let nb = BlockId((base + edge_args.len()) as u32);
             edge_args.push((nb, std::mem::take(&mut t.args)));
-            *t = Target { to: nb, args: vec![] };
+            *t = Target {
+                to: nb,
+                args: vec![],
+            };
         }
         for (nb, mut args) in edge_args {
             let old = args[slot];
@@ -691,7 +760,10 @@ fn establish(f: &mut Func, plan: &Plan) {
             f.blocks.push(Block {
                 id: nb,
                 params: vec![],
-                insts: vec![Inst { result: Some(nv), op: ensure(old) }],
+                insts: vec![Inst {
+                    result: Some(nv),
+                    op: ensure(old),
+                }],
                 term: Term::Jump(Target { to: header, args }),
             });
         }
@@ -703,9 +775,11 @@ fn term_targets_mut(term: &mut Term) -> Vec<&mut Target> {
     match term {
         Term::Jump(t) => vec![t],
         Term::Branch { then, els, .. } => vec![then, els],
-        Term::Switch { arms, default, .. } => {
-            arms.iter_mut().map(|(_, t)| t).chain(std::iter::once(default)).collect()
-        }
+        Term::Switch { arms, default, .. } => arms
+            .iter_mut()
+            .map(|(_, t)| t)
+            .chain(std::iter::once(default))
+            .collect(),
         Term::Ret(_) | Term::Throw(_) | Term::Unreachable => vec![],
     }
 }
@@ -720,9 +794,9 @@ fn map_operands(op: &mut Op, m: &HashMap<Value, Value>) {
     };
     match op {
         Op::Prim(_, vs) | Op::MakeTuple(vs) | Op::MakeList(vs) => vs.iter_mut().for_each(r),
-        Op::Call { args, .. } | Op::Native { args, .. } | Op::MakeClosure { captures: args, .. } => {
-            args.iter_mut().for_each(r)
-        }
+        Op::Call { args, .. }
+        | Op::Native { args, .. }
+        | Op::MakeClosure { captures: args, .. } => args.iter_mut().for_each(r),
         Op::CallClosure { callee, args } => {
             r(callee);
             args.iter_mut().for_each(r);
@@ -769,7 +843,8 @@ fn map_term(term: &mut Term, m: &HashMap<Value, Value>) {
         }
         Term::Switch { on, arms, default } => {
             r(on);
-            arms.iter_mut().for_each(|(_, t)| t.args.iter_mut().for_each(r));
+            arms.iter_mut()
+                .for_each(|(_, t)| t.args.iter_mut().for_each(r));
             default.args.iter_mut().for_each(r);
         }
     }

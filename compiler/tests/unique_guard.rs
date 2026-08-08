@@ -23,7 +23,11 @@ fn stdlib_modules() -> (Vec<(Vec<String>, neon_compiler::ast::Module)>, u32) {
             if p.is_dir() {
                 collect(root, &p, out);
             } else if p.extension().is_some_and(|x| x == "neon") {
-                let rel = p.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
+                let rel = p
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/");
                 out.push((rel, std::fs::read_to_string(&p).expect("readable")));
             }
         }
@@ -56,17 +60,25 @@ fn compile(src: &str, stage: Stage) -> ir::ssa::Program {
 /// pipeline asks — at `Stage::Optimised`, before refcounting muddies ownership.
 fn candidates_for(src: &str, func: &str) -> Vec<unique::Candidate> {
     let program = compile(src, Stage::Optimised);
-    unique::candidates(&program).into_iter().filter(|c| c.func == func).collect()
+    unique::candidates(&program)
+        .into_iter()
+        .filter(|c| c.func == func)
+        .collect()
 }
 
 /// Whether the finished pipeline (`Stage::Final`, after `unique::apply`) left the given
 /// native in the named function.
 fn final_has_native(src: &str, func: &str, symbol: &str) -> bool {
     let program = compile(src, Stage::Final);
-    let f = program.funcs.iter().find(|f| f.name == func).expect("function exists");
-    f.blocks.iter().flat_map(|b| &b.insts).any(
-        |i| matches!(&i.op, Op::Native { symbol: s, .. } if s == symbol),
-    )
+    let f = program
+        .funcs
+        .iter()
+        .find(|f| f.name == func)
+        .expect("function exists");
+    f.blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .any(|i| matches!(&i.op, Op::Native { symbol: s, .. } if s == symbol))
 }
 
 const QUALIFIES: &str = r##"
@@ -96,7 +108,11 @@ fn a_scalar_loop_write_qualifies_and_is_rewritten() {
     assert!(found[0].scalar);
     // And the pipeline acts on it: the write is in place, uniqueness is established.
     assert!(final_has_native(QUALIFIES, "bump", "neon_list_set_inplace"));
-    assert!(final_has_native(QUALIFIES, "bump", "neon_list_ensure_unique"));
+    assert!(final_has_native(
+        QUALIFIES,
+        "bump",
+        "neon_list_ensure_unique"
+    ));
 }
 
 #[test]

@@ -221,7 +221,9 @@ fn ordered_rec(env: &Env, ty: TyId, bound: &HashSet<String>, seen: &mut Vec<TyId
                 None => false,
             },
             _ => match record_fields(env, ty) {
-                Some(fields) => fields.iter().all(|&(_, ft)| ordered_rec(env, ft, bound, seen)),
+                Some(fields) => fields
+                    .iter()
+                    .all(|&(_, ft)| ordered_rec(env, ft, bound, seen)),
                 None => false,
             },
         }

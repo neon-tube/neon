@@ -43,7 +43,12 @@ const MAX_NODES: usize = 4096;
 /// Takes `&mut` because deciding whether to print a type or its complement means
 /// interning the complement. Nothing observable is added: the table is hash-consed.
 pub fn print(t: &mut Types, ty: TyId) -> String {
-    let mut p = Printer { t, stack: vec![], used: vec![], budget: MAX_NODES };
+    let mut p = Printer {
+        t,
+        stack: vec![],
+        used: vec![],
+        budget: MAX_NODES,
+    };
     let r = p.render(ty);
     at(P_ANY, r)
 }
@@ -68,7 +73,11 @@ struct Printer<'a> {
 /// re-parses to the same type by construction rather than by anyone remembering to add
 /// brackets.
 fn at(min: u8, (s, p): (String, u8)) -> String {
-    if p < min { format!("({s})") } else { s }
+    if p < min {
+        format!("({s})")
+    } else {
+        s
+    }
 }
 
 /// An n-ary operator: each part parenthesised at `inner`, the result carrying `outer`.
@@ -183,7 +192,10 @@ impl Printer<'_> {
         let d = self.t.data(id);
         // The absent marker is not a value, so it is split off before anything asks
         // what set of values this is.
-        let vd = TyData { base: d.base & B_ANY, ..d };
+        let vd = TyData {
+            base: d.base & B_ANY,
+            ..d
+        };
         let vid = self.t.intern(vd);
         let (never, any) = (self.t.never(), self.t.any());
 
@@ -232,12 +244,22 @@ impl Printer<'_> {
         const INF: usize = 1 << 16;
         let set = |id: AtomSetId| {
             let a = self.t.atomset_of(id);
-            if a.neg { INF + a.names.len() } else { a.names.len() }
+            if a.neg {
+                INF + a.names.len()
+            } else {
+                a.names.len()
+            }
         };
         let bdd = |b: &super::bdd::Bdd, id| {
             b.paths(id)
                 .iter()
-                .map(|(pos, neg)| if pos.is_empty() { INF } else { pos.len() + neg.len() })
+                .map(|(pos, neg)| {
+                    if pos.is_empty() {
+                        INF
+                    } else {
+                        pos.len() + neg.len()
+                    }
+                })
                 .sum::<usize>()
         };
         d.base.count_ones() as usize
@@ -283,7 +305,14 @@ impl Printer<'_> {
         let a = self.t.atomset_of(id);
         let one = |n: &NameId| {
             let s = self.t.name_str(*n);
-            (if colon { format!(":{s}") } else { s.to_string() }, P_ATOM)
+            (
+                if colon {
+                    format!(":{s}")
+                } else {
+                    s.to_string()
+                },
+                P_ATOM,
+            )
         };
         if !a.neg {
             return a.names.iter().map(one).collect();
@@ -291,7 +320,11 @@ impl Printer<'_> {
         // Cofinite. There is no supertype of every atom to write, so the set it is
         // taken from has to be named.
         let mut fs = vec![(all.to_string(), P_ATOM)];
-        fs.extend(a.names.iter().map(|n| (format!("!{}", at(P_NEGATE, one(n))), P_NEGATE)));
+        fs.extend(
+            a.names
+                .iter()
+                .map(|n| (format!("!{}", at(P_NEGATE, one(n))), P_NEGATE)),
+        );
         vec![intersect(fs)]
     }
 
@@ -384,7 +417,12 @@ impl Printer<'_> {
     fn args(&self, a: &RecordAtom) -> Option<Vec<TyId>> {
         let mut args: Vec<(usize, TyId)> = Vec::new();
         for (l, t) in &a.fields {
-            if let Some(i) = self.t.name_str(*l).strip_prefix('#').and_then(|s| s.parse().ok()) {
+            if let Some(i) = self
+                .t
+                .name_str(*l)
+                .strip_prefix('#')
+                .and_then(|s| s.parse().ok())
+            {
                 args.push((i, *t));
             }
         }
@@ -499,7 +537,6 @@ impl Printer<'_> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::super::empty::Solver;
@@ -607,7 +644,10 @@ mod tests {
             let all = s.t.any();
             let none = s.t.never();
             let atoms = s.t.data(all).atoms;
-            s.t.intern(TyData { atoms, ..s.t.data(none) })
+            s.t.intern(TyData {
+                atoms,
+                ..s.t.data(none)
+            })
         };
         let d = s.t.diff(every_atom, a_ok);
         assert_eq!(p(&mut s, d), "<atom> & !:ok");
@@ -623,7 +663,10 @@ mod tests {
             let none = s.t.never();
             let all = s.t.any();
             let records = s.t.data(all).records;
-            s.t.intern(TyData { records, ..s.t.data(none) })
+            s.t.intern(TyData {
+                records,
+                ..s.t.data(none)
+            })
         };
         assert_eq!(p(&mut s, every_record), "<record>");
 
@@ -746,7 +789,11 @@ mod tests {
         let st = s.t.str();
         let nothrow = s.t.never();
         let f = s.t.arrow(vec![i], nothrow, st);
-        assert_eq!(p(&mut s, f), "(i64) -> str", "an absent throws is not `throws never`");
+        assert_eq!(
+            p(&mut s, f),
+            "(i64) -> str",
+            "an absent throws is not `throws never`"
+        );
 
         let e = {
             let n = s.t.name("err");
@@ -929,7 +976,9 @@ mod tests {
 
     fn ty(e: &mut Env, src: &str) -> TyId {
         let m = parse(&format!("fn probe(x: {src}) {{ }}"));
-        let ast::DeclKind::Fn(f) = &m.decls[0].kind else { unreachable!("the fixture is a fn") };
+        let ast::DeclKind::Fn(f) = &m.decls[0].kind else {
+            unreachable!("the fixture is a fn")
+        };
         let scope = Scope::new(&[]);
         e.resolve(&scope, &f.params[0].ty)
     }
@@ -944,12 +993,16 @@ mod tests {
             e.solver.is_equiv(t, back),
             "{src:?} printed as {printed:?}, which is a different type"
         );
-        assert!(e.errors().is_empty(), "{printed:?} did not re-resolve cleanly");
+        assert!(
+            e.errors().is_empty(),
+            "{printed:?} did not re-resolve cleanly"
+        );
     }
 
     #[test]
     fn source_types_round_trip() {
-        let mut e = env("record Red { x: i64 }\nrecord Box[T] { v: T }\nrecord Pair[A, B] { a: A, b: B }");
+        let mut e =
+            env("record Red { x: i64 }\nrecord Box[T] { v: T }\nrecord Pair[A, B] { a: A, b: B }");
         for src in [
             "i64",
             "f64",
@@ -1036,6 +1089,9 @@ mod tests {
             t = s.t.nominal(n, vec![t], vec![]);
         }
         let out = p(&mut s, t);
-        assert!(out.contains(CUT), "a type deeper than the cap is truncated: {out}");
+        assert!(
+            out.contains(CUT),
+            "a type deeper than the cap is truncated: {out}"
+        );
     }
 }

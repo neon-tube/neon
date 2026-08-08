@@ -25,7 +25,11 @@ pub struct Project {
 impl Project {
     /// Find the project containing `start` (a file or directory), walking upward.
     pub fn find(start: &Path) -> Result<Project> {
-        let mut dir = if start.is_dir() { Some(start) } else { start.parent() };
+        let mut dir = if start.is_dir() {
+            Some(start)
+        } else {
+            start.parent()
+        };
         while let Some(d) = dir {
             let manifest = d.join("neon.toml");
             if manifest.is_file() {
@@ -43,7 +47,10 @@ impl Project {
         let src = std::fs::read_to_string(manifest)?;
         let parsed: Manifest =
             toml::from_str(&src).map_err(|e| eyre!("{}: {e}", manifest.display()))?;
-        Ok(Project { root: root.to_path_buf(), name: parsed.package.name })
+        Ok(Project {
+            root: root.to_path_buf(),
+            name: parsed.package.name,
+        })
     }
 
     /// The application entry point.

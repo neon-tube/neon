@@ -36,7 +36,9 @@ impl Mode {
             "debug" => Ok(Mode::Debug),
             "release" => Ok(Mode::Release),
             "opt_release" | "opt-release" => Ok(Mode::OptRelease),
-            other => Err(eyre!("unknown mode `{other}` (debug, release, opt_release)")),
+            other => Err(eyre!(
+                "unknown mode `{other}` (debug, release, opt_release)"
+            )),
         }
     }
 }
@@ -311,7 +313,11 @@ impl BuildConfig {
              so the build would silently cover only your program and not the runtime it \
              calls. Drop the unsupported sanitizer{}, or rebuild the runtime with it.",
             if unsupported.len() == 1 { "" } else { "s" },
-            unsupported.iter().map(|s| format!("`{s}`")).collect::<Vec<_>>().join(", "),
+            unsupported
+                .iter()
+                .map(|s| format!("`{s}`"))
+                .collect::<Vec<_>>()
+                .join(", "),
             SANITIZED_VARIANT_COVERS.join(","),
             if unsupported.len() == 1 { "" } else { "s" },
         ))
@@ -333,15 +339,29 @@ impl BuildConfig {
         let output = std::process::Command::new(&self.cc)
             .arg("--version")
             .output()
-            .map_err(|e| eyre!("cannot run `{} --version` to identify the compiler: {e}", self.cc))?;
+            .map_err(|e| {
+                eyre!(
+                    "cannot run `{} --version` to identify the compiler: {e}",
+                    self.cc
+                )
+            })?;
         let text = String::from_utf8_lossy(&output.stdout).to_lowercase();
-        Ok(if text.contains("clang") { CcFlavor::Clang } else { CcFlavor::Gcc })
+        Ok(if text.contains("clang") {
+            CcFlavor::Clang
+        } else {
+            CcFlavor::Gcc
+        })
     }
 
     /// The sanitizers requested, normalised: split on commas, trimmed, deduplicated.
     fn requested_sanitizers(&self) -> Vec<&str> {
         let mut out: Vec<&str> = Vec::new();
-        for s in self.sanitize.iter().flat_map(|s| s.split(',')).map(str::trim) {
+        for s in self
+            .sanitize
+            .iter()
+            .flat_map(|s| s.split(','))
+            .map(str::trim)
+        {
             if !s.is_empty() && !out.contains(&s) {
                 out.push(s);
             }
@@ -395,7 +415,10 @@ impl BuildConfig {
         let mut args = vec!["-std=c11".to_string()];
 
         // Optimisation: an explicit `opt` wins, otherwise the mode's level.
-        let opt = self.opt.clone().unwrap_or_else(|| self.mode.opt_level().to_string());
+        let opt = self
+            .opt
+            .clone()
+            .unwrap_or_else(|| self.mode.opt_level().to_string());
         args.push(format!("-O{opt}"));
 
         // Debug info when asked, or always in debug mode; debug mode also turns on the
@@ -433,7 +456,10 @@ impl BuildConfig {
         // `RuntimeVariant::link_sanitizers`). One `-fsanitize=a,b` rather than one flag
         // each, so the link matches how the archive was compiled exactly.
         if !variant.link_sanitizers().is_empty() {
-            args.push(format!("-fsanitize={}", variant.link_sanitizers().join(",")));
+            args.push(format!(
+                "-fsanitize={}",
+                variant.link_sanitizers().join(",")
+            ));
         }
         args.extend(self.allocator.link_flags());
         // `std::math` bottoms out in libm, which is a separate library on Linux (it is
@@ -450,8 +476,17 @@ impl BuildConfig {
 /// and move as a pair, so distinct `-I a -I b` both survive while `-flto -flto` collapses.
 fn normalize_cflags(cflags: &[String]) -> Vec<String> {
     const VALUE_FLAGS: &[&str] = &[
-        "-I", "-D", "-U", "-L", "-l", "-include", "-isystem", "-x", "-Xlinker",
-        "-Xpreprocessor", "-framework",
+        "-I",
+        "-D",
+        "-U",
+        "-L",
+        "-l",
+        "-include",
+        "-isystem",
+        "-x",
+        "-Xlinker",
+        "-Xpreprocessor",
+        "-framework",
     ];
     let tokens: Vec<&str> = cflags.iter().flat_map(|c| c.split_whitespace()).collect();
     let mut out = Vec::new();
@@ -482,18 +517,26 @@ fn parse_allocator(name: &str) -> Result<Allocator> {
         "jemalloc" => Ok(Allocator::Jemalloc),
         "mimalloc" => Ok(Allocator::Mimalloc),
         "tcmalloc" => Ok(Allocator::Tcmalloc),
-        other => Err(eyre!("unknown allocator `{other}` (system, jemalloc, mimalloc, tcmalloc)")),
+        other => Err(eyre!(
+            "unknown allocator `{other}` (system, jemalloc, mimalloc, tcmalloc)"
+        )),
     }
 }
 
 /// Find and parse `neon.toml`, searching from `near`'s directory upward.
 fn find_manifest(near: &Path) -> Result<Option<TomlFile>> {
-    let mut dir = if near.is_dir() { Some(near) } else { near.parent() };
+    let mut dir = if near.is_dir() {
+        Some(near)
+    } else {
+        near.parent()
+    };
     while let Some(d) = dir {
         let candidate = d.join("neon.toml");
         if candidate.is_file() {
             let src = std::fs::read_to_string(&candidate)?;
-            return Ok(Some(toml::from_str(&src).map_err(|e| eyre!("{}: {e}", candidate.display()))?));
+            return Ok(Some(
+                toml::from_str(&src).map_err(|e| eyre!("{}: {e}", candidate.display()))?,
+            ));
         }
         dir = d.parent();
     }
@@ -527,11 +570,20 @@ mod tests {
 
     #[test]
     fn runtime_variant_follows_mode_when_unsanitized() {
-        assert_eq!(cfg(Mode::Debug, false).runtime_variant().unwrap(), RuntimeVariant::Debug);
-        assert_eq!(cfg(Mode::Release, false).runtime_variant().unwrap(), RuntimeVariant::Release);
+        assert_eq!(
+            cfg(Mode::Debug, false).runtime_variant().unwrap(),
+            RuntimeVariant::Debug
+        );
+        assert_eq!(
+            cfg(Mode::Release, false).runtime_variant().unwrap(),
+            RuntimeVariant::Release
+        );
         // `opt-release` reuses the release archive: `-flto`/`-march=native` cannot be
         // prebuilt. See `runtime_variant`.
-        assert_eq!(cfg(Mode::OptRelease, false).runtime_variant().unwrap(), RuntimeVariant::Release);
+        assert_eq!(
+            cfg(Mode::OptRelease, false).runtime_variant().unwrap(),
+            RuntimeVariant::Release
+        );
     }
 
     /// Any combination of the sanitizers the archive actually carries, however spelled.
@@ -571,7 +623,11 @@ mod tests {
     /// actually linking; this pins the flag the fix rests on.
     #[test]
     fn the_link_enables_the_archives_full_sanitizer_set_not_the_subset_asked_for() {
-        for req in [&["address"][..], &["undefined"][..], &["address,undefined"][..]] {
+        for req in [
+            &["address"][..],
+            &["undefined"][..],
+            &["address,undefined"][..],
+        ] {
             let cfg = with_sanitize(Mode::Release, req);
             let args = cfg.cc_args(cfg.runtime_variant().unwrap());
             assert!(
@@ -579,8 +635,14 @@ mod tests {
                 "for {req:?} got {args:?}"
             );
             // Never a lone subset flag, which is precisely what failed to link.
-            assert!(!args.iter().any(|a| a == "-fsanitize=address"), "for {req:?}");
-            assert!(!args.iter().any(|a| a == "-fsanitize=undefined"), "for {req:?}");
+            assert!(
+                !args.iter().any(|a| a == "-fsanitize=address"),
+                "for {req:?}"
+            );
+            assert!(
+                !args.iter().any(|a| a == "-fsanitize=undefined"),
+                "for {req:?}"
+            );
         }
     }
 

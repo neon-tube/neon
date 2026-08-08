@@ -15,9 +15,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::typecheck::bdd;
-use crate::typecheck::types::{
-    NameId, Types, B_ANY, B_BOOL, B_F64, B_I64, B_NULL, B_STR, TyId,
-};
+use crate::typecheck::types::{NameId, TyId, Types, B_ANY, B_BOOL, B_F64, B_I64, B_NULL, B_STR};
 
 /// How a value of some type is laid out. See the module docs and `docs/design/ir.md`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,7 +36,10 @@ pub enum Repr {
     Tag,
     /// A record or nominal struct, stored inline. `name` is the nominal identity (for
     /// the printer and for union discriminants); `None` for an anonymous record.
-    Record { name: Option<String>, fields: Vec<(String, Repr)> },
+    Record {
+        name: Option<String>,
+        fields: Vec<(String, Repr)>,
+    },
     /// A tuple, stored inline in order.
     Tuple(Vec<Repr>),
     /// A `List[T]` — a runtime container holding `T` inline.
@@ -72,7 +73,11 @@ pub enum Repr {
     ///
     /// `List` and `Map` are still their own variants; folding them in is mechanical but
     /// their element reprs feed witness emission, so they move separately.
-    Runtime { nominal: String, c_type: String, args: Vec<Repr> },
+    Runtime {
+        nominal: String,
+        c_type: String,
+        args: Vec<Repr>,
+    },
     /// A closure: a function pointer plus a boxed environment. `throws` is part of the
     /// calling convention, not the layout: a throwing closure's function returns the
     /// tagged result `Union([ret, throws])` rather than `ret`, exactly like a named
@@ -81,7 +86,11 @@ pub enum Repr {
     /// value-witness resolved the back-edge differently, so the witness emitted `.env` on a
     /// `void*`. A field leaves the type graph identical and combines the two only where the
     /// C signature is built.
-    Closure { params: Vec<Repr>, throws: Box<Repr>, ret: Box<Repr> },
+    Closure {
+        params: Vec<Repr>,
+        throws: Box<Repr>,
+        ret: Box<Repr>,
+    },
     /// A tagged union of two or more distinct variants.
     Union(Vec<Repr>),
     /// `T | null` where `T` is pointer-backed: a nullable pointer, `null` = null pointer.
@@ -152,10 +161,11 @@ impl Repr {
             (Repr::Null, Repr::Nullable(_)) => true,
             (src, Repr::Nullable(inner)) => src == inner.as_ref(),
             (Repr::Record { fields: sf, .. }, Repr::Record { fields: tf, .. }) => {
-                tf.iter().all(|(n, tr)| match sf.iter().find(|(sn, _)| sn == n) {
-                    Some((_, sr)) => sr.assignable(tr),
-                    None => Repr::Null.assignable(tr),
-                })
+                tf.iter()
+                    .all(|(n, tr)| match sf.iter().find(|(sn, _)| sn == n) {
+                        Some((_, sr)) => sr.assignable(tr),
+                        None => Repr::Null.assignable(tr),
+                    })
             }
             (Repr::Tuple(se), Repr::Tuple(te)) => {
                 te.len() <= se.len() && se.iter().zip(te).all(|(s, t)| s.assignable(t))
@@ -220,9 +230,11 @@ impl Repr {
             Repr::List(r) | Repr::Nullable(r) => r.is_concrete(),
             Repr::Map(k, v) => k.is_concrete() && v.is_concrete(),
             Repr::Runtime { args, .. } => args.iter().all(Repr::is_concrete),
-            Repr::Closure { params, throws, ret } => {
-                params.iter().all(Repr::is_concrete) && throws.is_concrete() && ret.is_concrete()
-            }
+            Repr::Closure {
+                params,
+                throws,
+                ret,
+            } => params.iter().all(Repr::is_concrete) && throws.is_concrete() && ret.is_concrete(),
             _ => true,
         }
     }
@@ -257,7 +269,11 @@ pub fn repr_of(t: &Types, ty: TyId) -> Repr {
 /// `List[L]` inside an `L` — has a layout walk boxing does not cut, and the compiler
 /// recursed until the stack ran out. See `tests/lang/records/boxed_record_reaching_a_pointer_cycle.neon`.
 pub fn repr_shape(t: &Types, atom: u32, boxed: &HashSet<u32>) -> Repr {
-    let roots: Vec<TyId> = t.rec_atoms[atom as usize].fields.iter().map(|(_, ty)| *ty).collect();
+    let roots: Vec<TyId> = t.rec_atoms[atom as usize]
+        .fields
+        .iter()
+        .map(|(_, ty)| *ty)
+        .collect();
     let cyclic = scc_cycles(&roots, &mut |v| layout_successors(t, v, boxed));
     record_repr(t, atom, &cyclic, boxed)
 }
@@ -302,7 +318,10 @@ fn layout_successors(t: &Types, ty: TyId, boxed: &HashSet<u32>) -> Vec<TyId> {
 /// a `List`/`Map`'s element slots, or an ordinary record's real fields.
 fn atom_layout_successors(t: &Types, atom: u32, out: &mut Vec<TyId>) {
     let name = nominal_name(t, atom);
-    if name.as_deref().is_some_and(|n| t.runtime_types.contains_key(n)) {
+    if name
+        .as_deref()
+        .is_some_and(|n| t.runtime_types.contains_key(n))
+    {
         out.extend((0..).map_while(|i| field_ty(t, atom, &format!("#{i}"))));
         return;
     }
@@ -344,13 +363,7 @@ pub fn boxed_shapes(t: &Types, ty: TyId, out: &mut HashMap<u32, Repr>) {
 /// has to reference itself somewhere — so the identity of a recursive type lives in its
 /// `TyId`, not in its unfolding. Two reprs denote the same type when they agree up to
 /// these back-edges, which is what the backend's type table keys on.
-fn repr_rec(
-    t: &Types,
-    ty: TyId,
-    cyclic: &HashSet<TyId>,
-    boxed: &HashSet<u32>,
-    root: bool,
-) -> Repr {
+fn repr_rec(t: &Types, ty: TyId, cyclic: &HashSet<TyId>, boxed: &HashSet<u32>, root: bool) -> Repr {
     if !root && cyclic.contains(&ty) {
         return Repr::Recursive(ty);
     }
@@ -483,7 +496,6 @@ fn scc_cycles<K: Copy + Eq + std::hash::Hash>(
     s.out
 }
 
-
 /// The record atoms reachable from `root` that sit on a cycle closing entirely by value,
 /// and so have no finite inline layout.
 ///
@@ -554,7 +566,10 @@ fn value_atoms_of(t: &Types, ty: TyId, out: &mut Vec<u32>, seen: &mut HashSet<Ty
     }
     let d = t.data(ty);
     for a in positive_atoms(&t.rec_bdd.paths(d.records)) {
-        if matches!(nominal_name(t, a).as_deref(), Some("std::collections::list::List") | Some("std::collections::map::Map")) {
+        if matches!(
+            nominal_name(t, a).as_deref(),
+            Some("std::collections::list::List") | Some("std::collections::map::Map")
+        ) {
             continue;
         }
         if !out.contains(&a) {
@@ -676,13 +691,22 @@ fn repr_components(t: &Types, ty: TyId, cyclic: &HashSet<TyId>, boxed: &HashSet<
         comps.push(if elems.is_empty() {
             Repr::Unit
         } else {
-            Repr::Tuple(elems.iter().map(|&e| repr_rec(t, e, cyclic, boxed, false)).collect())
+            Repr::Tuple(
+                elems
+                    .iter()
+                    .map(|&e| repr_rec(t, e, cyclic, boxed, false))
+                    .collect(),
+            )
         });
     }
     for atom in positive_atoms(&t.arrow_bdd.paths(d.arrows)) {
         let a = t.arrow_atoms[atom as usize].clone();
         comps.push(Repr::Closure {
-            params: a.params.iter().map(|&p| repr_rec(t, p, cyclic, boxed, false)).collect(),
+            params: a
+                .params
+                .iter()
+                .map(|&p| repr_rec(t, p, cyclic, boxed, false))
+                .collect(),
             throws: Box::new(repr_rec(t, a.throws, cyclic, boxed, false)),
             ret: Box::new(repr_rec(t, a.ret, cyclic, boxed, false)),
         });
@@ -713,7 +737,10 @@ fn is_top(t: &Types, ty: TyId) -> bool {
 /// can appear in a path that also carries a negation; the negation is only disjointness
 /// bookkeeping, and what a value can *be* is the union of the positive mentions.
 fn positive_atoms(paths: &[(Vec<u32>, Vec<u32>)]) -> Vec<u32> {
-    let mut out: Vec<u32> = paths.iter().flat_map(|(pos, _)| pos.iter().copied()).collect();
+    let mut out: Vec<u32> = paths
+        .iter()
+        .flat_map(|(pos, _)| pos.iter().copied())
+        .collect();
     out.sort_unstable();
     out.dedup();
     out
@@ -721,7 +748,12 @@ fn positive_atoms(paths: &[(Vec<u32>, Vec<u32>)]) -> Vec<u32> {
 
 /// One DNF path's positive atoms, intersected: a single record carrying every field they
 /// require. One atom is the ordinary case — a nominal record, or a variant of a union.
-fn record_intersection(t: &Types, atoms: &[u32], cyclic: &HashSet<TyId>, boxed: &HashSet<u32>) -> Repr {
+fn record_intersection(
+    t: &Types,
+    atoms: &[u32],
+    cyclic: &HashSet<TyId>,
+    boxed: &HashSet<u32>,
+) -> Repr {
     if let [only] = atoms {
         return record_repr(t, *only, cyclic, boxed);
     }
@@ -762,7 +794,9 @@ fn record_repr(t: &Types, atom_idx: u32, cyclic: &HashSet<TyId>, boxed: &HashSet
     // a payload's element type reaches the backend and can get a witness.
     //
     // A new runtime-backed type is a stdlib declaration, not a compiler edit.
-    if let Some((nominal, sym)) = name.as_deref().and_then(|n| Some((n, t.runtime_types.get(n)?)))
+    if let Some((nominal, sym)) = name
+        .as_deref()
+        .and_then(|n| Some((n, t.runtime_types.get(n)?)))
     {
         let args = (0..)
             .map_while(|i| field_ty(t, atom_idx, &format!("#{i}")))
@@ -771,19 +805,26 @@ fn record_repr(t: &Types, atom_idx: u32, cyclic: &HashSet<TyId>, boxed: &HashSet
         // Both halves are in hand at exactly this point: the table is keyed by the Neon
         // name and holds the C symbol. Carrying only the symbol here is what made
         // `x is Resource` unanswerable downstream.
-        return Repr::Runtime { nominal: nominal.to_string(), c_type: sym.clone(), args };
+        return Repr::Runtime {
+            nominal: nominal.to_string(),
+            c_type: sym.clone(),
+            args,
+        };
     }
 
     // `List` and `Map` still have their own reprs: their element types drive witness
     // emission and the codegen-assisted natives, so they move separately.
     match name.as_deref() {
         Some("std::collections::list::List") => {
-            let elem = field_ty(t, atom_idx, "#0").map_or(Repr::Never, |e| repr_rec(t, e, cyclic, boxed, false));
+            let elem = field_ty(t, atom_idx, "#0")
+                .map_or(Repr::Never, |e| repr_rec(t, e, cyclic, boxed, false));
             return Repr::List(Box::new(elem));
         }
         Some("std::collections::map::Map") => {
-            let k = field_ty(t, atom_idx, "#0").map_or(Repr::Never, |e| repr_rec(t, e, cyclic, boxed, false));
-            let v = field_ty(t, atom_idx, "#1").map_or(Repr::Never, |e| repr_rec(t, e, cyclic, boxed, false));
+            let k = field_ty(t, atom_idx, "#0")
+                .map_or(Repr::Never, |e| repr_rec(t, e, cyclic, boxed, false));
+            let v = field_ty(t, atom_idx, "#1")
+                .map_or(Repr::Never, |e| repr_rec(t, e, cyclic, boxed, false));
             return Repr::Map(Box::new(k), Box::new(v));
         }
         _ => {}
@@ -803,7 +844,12 @@ fn record_repr(t: &Types, atom_idx: u32, cyclic: &HashSet<TyId>, boxed: &HashSet
         .collect();
     let fields = fields
         .into_iter()
-        .map(|(n, fty)| (t.name_str(n).to_string(), repr_rec(t, fty, cyclic, boxed, false)))
+        .map(|(n, fty)| {
+            (
+                t.name_str(n).to_string(),
+                repr_rec(t, fty, cyclic, boxed, false),
+            )
+        })
         .collect();
     Repr::Record { name, fields }
 }

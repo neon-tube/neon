@@ -70,7 +70,11 @@ fn simplify_cfg_collapses_a_folded_if_to_one_block() {
     // `if true { 1 } else { 2 }`: the branch folds, the dead arm and the join marshalling
     // blocks fall away, and single-predecessor merging fuses the rest into one block.
     let ir = optimized("fn f() -> i64 { if true { 1 } else { 2 } }");
-    assert_eq!(ir.matches("block").count(), 1, "should collapse to a single block:\n{ir}");
+    assert_eq!(
+        ir.matches("block").count(),
+        1,
+        "should collapse to a single block:\n{ir}"
+    );
     assert!(!ir.contains("jump"), "no residual forwarding:\n{ir}");
 }
 
@@ -99,5 +103,8 @@ fn a_call_that_never_returns_is_not_deleted() {
         "fn spin(n: f64) -> f64 { let x = n; while x < 100.0 { x = x * 0.0; } x }
          fn main() { let unused = spin(1.0); }",
     );
-    assert!(ir.contains("call @spin"), "the diverging call was deleted:\n{ir}");
+    assert!(
+        ir.contains("call @spin"),
+        "the diverging call was deleted:\n{ir}"
+    );
 }

@@ -10,7 +10,11 @@ fn lower(src: &str) -> String {
     assert!(perrs.is_empty(), "parse errors: {perrs:?}");
     let module = module.expect("parses");
     let mut env = Env::build(&module);
-    assert!(env.errors().is_empty(), "declaration errors: {:?}", env.errors());
+    assert!(
+        env.errors().is_empty(),
+        "declaration errors: {:?}",
+        env.errors()
+    );
     let (result, errs) = check_module(&mut env, &module);
     assert!(errs.is_empty(), "check errors: {errs:?}");
     print::program(&lower_module(&env, &result, &module, &[]))
@@ -142,9 +146,7 @@ fn a_sum_type_match_becomes_a_decision_list() {
 
 #[test]
 fn a_nullable_match_tests_null() {
-    let ir = lower(
-        "fn add_one(v: i64 | null) -> i64 { match v { is null => -1, n => n + 1 } }",
-    );
+    let ir = lower("fn add_one(v: i64 | null) -> i64 { match v { is null => -1, n => n + 1 } }");
     assert!(ir.contains("is_null %0"), "{ir}");
 }
 
@@ -173,9 +175,7 @@ fn a_loop_carries_reassigned_variables_as_block_args() {
 
 #[test]
 fn a_while_loop_tests_its_condition_in_the_header() {
-    let ir = lower(
-        "fn f() { let i = 0; while i < 3 { i = i + 1; } }",
-    );
+    let ir = lower("fn f() { let i = 0; while i < 3 { i = i + 1; } }");
     assert!(ir.contains("prim.lt"), "{ir}");
     assert!(ir.contains("branch"), "{ir}");
 }
@@ -245,9 +245,7 @@ fn a_for_loop_indexes_the_list_with_a_carried_accumulator() {
 
 #[test]
 fn a_lambda_captures_and_lowers_as_its_own_function() {
-    let ir = lower(
-        "fn adder(n: i64) -> (i64) -> i64 { (x) => x + n }",
-    );
+    let ir = lower("fn adder(n: i64) -> (i64) -> i64 { (x) => x + n }");
     // The lambda becomes its own function that unpacks `n` from the env; the parent
     // builds a closure capturing `n`.
     assert!(ir.contains("closure @lambda$"), "make closure: {ir}");
@@ -293,7 +291,10 @@ fn a_where_bound_is_discharged_to_the_concrete_impl() {
     );
     // Inside show$i64, the bound `to_string` resolves to the i64 impl's native symbol.
     assert!(ir.contains("fn @show$i64"), "instance: {ir}");
-    assert!(ir.contains("neon_i64_to_string"), "bound discharged to i64 impl: {ir}");
+    assert!(
+        ir.contains("neon_i64_to_string"),
+        "bound discharged to i64 impl: {ir}"
+    );
 }
 
 #[test]
@@ -311,10 +312,19 @@ fn an_instance_name_spells_its_type_arguments() {
          fn use_boxes(p: Box[i64], q: Box[str]) -> Box[i64] { unwrap(q); unwrap(p) }",
     );
     // Two union instances, not one shared `ident$union`.
-    assert!(!ir.contains("@ident$union\n"), "the collapsed name must be gone: {ir}");
-    assert!(ir.contains("fn @ident$union_i64_str"), "i64|str instance: {ir}");
+    assert!(
+        !ir.contains("@ident$union\n"),
+        "the collapsed name must be gone: {ir}"
+    );
+    assert!(
+        ir.contains("fn @ident$union_i64_str"),
+        "i64|str instance: {ir}"
+    );
     // Spelled in the union's own normalised order, which is what the layout follows.
-    assert!(ir.contains("fn @ident$union_f64_bool"), "bool|f64 instance: {ir}");
+    assert!(
+        ir.contains("fn @ident$union_f64_bool"),
+        "bool|f64 instance: {ir}"
+    );
     // And two record instances, not one shared `unwrap$Box`.
     assert!(ir.contains("fn @unwrap$Box_i64"), "Box[i64] instance: {ir}");
     assert!(ir.contains("fn @unwrap$Box_str"), "Box[str] instance: {ir}");
@@ -337,11 +347,20 @@ fn try_assert_on_a_union_error_calls_each_variants_message() {
          fn go() -> i64 { try! { let a = try find(true); let b = try check(true); a + b } }",
     );
     // Both impls are reachable from the panic path, chosen by a runtime variant test.
-    assert!(ir.contains("call @Error$NotFound$message"), "NotFound's impl: {ir}");
-    assert!(ir.contains("call @Error$Denied$message"), "Denied's impl: {ir}");
+    assert!(
+        ir.contains("call @Error$NotFound$message"),
+        "NotFound's impl: {ir}"
+    );
+    assert!(
+        ir.contains("call @Error$Denied$message"),
+        "Denied's impl: {ir}"
+    );
     assert!(ir.contains("is_variant"), "chosen by a runtime test: {ir}");
     // And the placeholder that used to stand in for all of it is gone.
-    assert!(!ir.contains("const.str \"error\""), "no placeholder message: {ir}");
+    assert!(
+        !ir.contains("const.str \"error\""),
+        "no placeholder message: {ir}"
+    );
 }
 
 #[test]
@@ -360,6 +379,12 @@ fn an_inner_try_propagates_to_an_enclosing_catch() {
     );
     let body = ir.split("fn @caught").nth(1).expect("caught is lowered");
     // The catch body is reached, and nothing on this path panics.
-    assert!(body.contains("const.i64 7"), "the catch body is lowered: {body}");
-    assert!(!body.contains("neon_panic"), "the enclosing catch handles it: {body}");
+    assert!(
+        body.contains("const.i64 7"),
+        "the catch body is lowered: {body}"
+    );
+    assert!(
+        !body.contains("neon_panic"),
+        "the enclosing catch handles it: {body}"
+    );
 }

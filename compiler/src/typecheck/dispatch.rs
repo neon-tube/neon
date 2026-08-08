@@ -28,7 +28,11 @@ pub enum Resolution {
     /// reading `args[0]` regardless is how a return-position call came to be discharged
     /// against its unrelated first argument, which finds the wrong impl whenever that
     /// argument's type happens to have one.
-    Bound { param: String, protocol: ProtocolId, subject_pos: Option<usize> },
+    Bound {
+        param: String,
+        protocol: ProtocolId,
+        subject_pos: Option<usize>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -50,15 +54,26 @@ pub enum DispatchError {
     /// No protocol declares it. The caller checks locals and module fns first.
     UnknownMethod(String),
     /// Two protocols answer. `A::go(r)` picks one.
-    Ambiguous { method: String, protocols: Vec<String> },
+    Ambiguous {
+        method: String,
+        protocols: Vec<String>,
+    },
     /// `S ∧ ¬⋁targetᵢ` is inhabited: some values have no impl, and `uncovered`
     /// names exactly which. A nominal system cannot say this.
-    NoImpl { protocol: String, method: String, uncovered: TyId },
+    NoImpl {
+        protocol: String,
+        method: String,
+        uncovered: TyId,
+    },
     /// `fn make() -> T` — nothing to dispatch on without an expected type.
     NoReceiver(String),
     /// The subject is the return and it is a union needing a different impl per variant.
     /// There is no value in hand whose tag could choose one.
-    NoSubjectToSwitch { protocol: String, method: String, subject: TyId },
+    NoSubjectToSwitch {
+        protocol: String,
+        method: String,
+        subject: TyId,
+    },
 }
 
 /// Resolve `method` called with `args`.
@@ -97,7 +112,10 @@ pub fn resolve(
                 .map(|&p| env.protocols()[p.0].name.clone())
                 .collect();
             names.sort();
-            return Err(DispatchError::Ambiguous { method: method.to_string(), protocols: names });
+            return Err(DispatchError::Ambiguous {
+                method: method.to_string(),
+                protocols: names,
+            });
         }
     };
 
@@ -130,7 +148,11 @@ pub fn resolve(
         let (ret, throws) = protocol_method_result(env, protocol, method, &param);
         return Ok(Selection {
             protocol,
-            resolution: Resolution::Bound { param, protocol, subject_pos: position },
+            resolution: Resolution::Bound {
+                param,
+                protocol,
+                subject_pos: position,
+            },
             ret,
             throws,
             receiver_pos: position,
@@ -165,14 +187,22 @@ fn hkt_resolve(
         .find(|(_, i)| i.target_head.as_deref() == Some(head.as_str()))
         .map(|(id, _)| id);
     let Some(impl_id) = impl_id else {
-        return Err(DispatchError::NoImpl { protocol: name, method: method.to_string(), uncovered: receiver });
+        return Err(DispatchError::NoImpl {
+            protocol: name,
+            method: method.to_string(),
+            uncovered: receiver,
+        });
     };
 
     // Instantiate the method's generics from the arguments: match each parameter
     // (`c: Box[T]`, `init: A`) against its argument to bind `T`, `A`, then substitute.
     // The receiver alone is not enough -- `fold`'s accumulator `A` comes from `init`,
     // not from the container -- so every argument feeds the inference.
-    let m = env.impls()[impl_id.0].methods.iter().find(|m| m.name == method).cloned();
+    let m = env.impls()[impl_id.0]
+        .methods
+        .iter()
+        .find(|m| m.name == method)
+        .cloned();
     let (ret, throws) = match m {
         Some(m) => {
             let var_names: std::collections::HashSet<_> =
@@ -188,7 +218,11 @@ fn hkt_resolve(
         // The impl relies on the protocol's default body, so the protocol's own signature
         // is the answer. Falling through to `never` here said "this call produces a value
         // nothing inhabits" with no diagnostic — see `result_of` for the same shape.
-        None => match env.protocols()[protocol.0].methods.iter().find(|m| m.name == method) {
+        None => match env.protocols()[protocol.0]
+            .methods
+            .iter()
+            .find(|m| m.name == method)
+        {
             Some(m) => (m.ret, m.throws),
             None => {
                 let never = env.solver.t.never();
@@ -197,7 +231,13 @@ fn hkt_resolve(
         },
     };
     let receiver_pos = if args.is_empty() { None } else { Some(0) };
-    Ok(Selection { protocol, resolution: Resolution::Direct(impl_id), ret, throws, receiver_pos })
+    Ok(Selection {
+        protocol,
+        resolution: Resolution::Direct(impl_id),
+        ret,
+        throws,
+        receiver_pos,
+    })
 }
 
 /// The constructor name of a nominal type -- `Box[i64]` → `"Box"` -- read from the
@@ -240,19 +280,29 @@ fn applicable(
     let mut hits: Vec<Hit> = Vec::new();
     for c in candidates(env, protocol) {
         let Some(target) = c.target else { continue };
-        let Some((head, subst)) = match_head(env, target, &c.generics, receiver) else { continue };
+        let Some((head, subst)) = match_head(env, target, &c.generics, receiver) else {
+            continue;
+        };
         if !bounds_hold(env, &c, &subst, &mut Vec::new()) {
             continue;
         }
         let meet = env.solver.t.intersect(receiver, head);
         if !env.solver.is_empty(meet) {
-            hits.push(Hit { id: c.id, head, subst });
+            hits.push(Hit {
+                id: c.id,
+                head,
+                subst,
+            });
         }
     }
 
     let name = env.protocols()[protocol.0].name.clone();
     if hits.is_empty() {
-        return Err(DispatchError::NoImpl { protocol: name, method: method.to_string(), uncovered: receiver });
+        return Err(DispatchError::NoImpl {
+            protocol: name,
+            method: method.to_string(),
+            uncovered: receiver,
+        });
     }
 
     // Coverage. The residual is a type, so the diagnostic names exactly the values
@@ -261,7 +311,11 @@ fn applicable(
     let covered = env.solver.t.union_all(&targets);
     let uncovered = env.solver.t.diff(receiver, covered);
     if !env.solver.is_empty(uncovered) {
-        return Err(DispatchError::NoImpl { protocol: name, method: method.to_string(), uncovered });
+        return Err(DispatchError::NoImpl {
+            protocol: name,
+            method: method.to_string(),
+            uncovered,
+        });
     }
 
     // Specificity, except in return position, where an impl covering the WHOLE subject is
@@ -274,7 +328,8 @@ fn applicable(
     // answered. `impl FromJson for i64 | str`, written precisely to decide the arm itself,
     // was discarded in favour of the two impls that need a tag nobody has.
     let covering = if receiver_pos.is_none() {
-        hits.iter().position(|h| env.solver.is_subtype(receiver, h.head))
+        hits.iter()
+            .position(|h| env.solver.is_subtype(receiver, h.head))
     } else {
         None
     };
@@ -323,7 +378,13 @@ fn applicable(
             Resolution::Switch(arms)
         }
     };
-    Ok(Selection { protocol, resolution, ret, throws, receiver_pos })
+    Ok(Selection {
+        protocol,
+        resolution,
+        ret,
+        throws,
+        receiver_pos,
+    })
 }
 
 /// Match an impl's head against the receiver, treating the impl's *own* generics as
@@ -389,11 +450,15 @@ fn bounds_hold(
 ) -> bool {
     for (param, path) in &c.wheres {
         let n = env.solver.t.name(param);
-        let Some(&bound_to) = subst.get(&n) else { continue };
+        let Some(&bound_to) = subst.get(&n) else {
+            continue;
+        };
         if env.is_error(bound_to) || super::generic::is_var(&env.solver.t, bound_to) {
             continue;
         }
-        let Some(pid) = env.lookup_protocol(&c.module, path) else { continue };
+        let Some(pid) = env.lookup_protocol(&c.module, path) else {
+            continue;
+        };
         if !satisfies(env, pid, bound_to, seen) {
             return false;
         }
@@ -431,7 +496,9 @@ fn satisfies(
     let mut heads = Vec::new();
     for c in candidates(env, protocol) {
         let Some(target) = c.target else { continue };
-        let Some((head, subst)) = match_head(env, target, &c.generics, ty) else { continue };
+        let Some((head, subst)) = match_head(env, target, &c.generics, ty) else {
+            continue;
+        };
         if bounds_hold(env, &c, &subst, seen) {
             heads.push(head);
         }
@@ -479,7 +546,11 @@ fn most_specific(env: &mut Env, hits: Vec<Hit>) -> Vec<Hit> {
                 && !env.solver.is_subtype(h.head, o.head)
         });
         if !beaten {
-            out.push(Hit { id: h.id, head: h.head, subst: h.subst.clone() });
+            out.push(Hit {
+                id: h.id,
+                head: h.head,
+                subst: h.subst.clone(),
+            });
         }
     }
     out
@@ -500,7 +571,10 @@ fn result_of(env: &mut Env, hits: &[Hit], method: &str, protocol: ProtocolId) ->
     let mut rets = Vec::new();
     let mut throws = Vec::new();
     for h in hits {
-        let found = env.impls()[h.id.0].methods.iter().find(|m| m.name == method);
+        let found = env.impls()[h.id.0]
+            .methods
+            .iter()
+            .find(|m| m.name == method);
         let sig = match found {
             Some(m) => Some((m.ret, m.throws)),
             None => env.protocols()[protocol.0]
@@ -541,7 +615,10 @@ fn protocol_method_result(
     method: &str,
     param: &str,
 ) -> (TyId, TyId) {
-    let found = env.protocols()[protocol.0].methods.iter().find(|m| m.name == method);
+    let found = env.protocols()[protocol.0]
+        .methods
+        .iter()
+        .find(|m| m.name == method);
     let Some((ret, throws)) = found.map(|m| (m.ret, m.throws)) else {
         let n = env.solver.t.never();
         return (n, n);
@@ -574,7 +651,10 @@ fn dispatch_position(
     method: &str,
     subject: TyId,
 ) -> Option<usize> {
-    let m = env.protocols()[protocol.0].methods.iter().find(|m| m.name == method)?;
+    let m = env.protocols()[protocol.0]
+        .methods
+        .iter()
+        .find(|m| m.name == method)?;
     m.params.iter().position(|(_, t)| *t == subject)
 }
 

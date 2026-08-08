@@ -70,7 +70,9 @@ impl Func {
     /// become a nullable `E`. Normalising here would leave the accessors reading an arm
     /// that is no longer where they think it is.
     pub fn result_repr(&self) -> Option<Repr> {
-        self.throws.as_ref().map(|e| Repr::Union(vec![self.ret.clone(), e.clone()]))
+        self.throws
+            .as_ref()
+            .map(|e| Repr::Union(vec![self.ret.clone(), e.clone()]))
     }
 }
 
@@ -147,22 +149,43 @@ pub enum Op {
     Prim(PrimOp, Vec<Value>),
 
     /// A direct call to a monomorphic function by its mangled name.
-    Call { func: String, args: Vec<Value> },
+    Call {
+        func: String,
+        args: Vec<Value>,
+    },
     /// A call to a runtime symbol (a `@native`).
-    Native { symbol: String, args: Vec<Value> },
+    Native {
+        symbol: String,
+        args: Vec<Value>,
+    },
     /// A call through a closure value.
-    CallClosure { callee: Value, args: Vec<Value> },
+    CallClosure {
+        callee: Value,
+        args: Vec<Value>,
+    },
     /// Build a closure: a function plus its captured environment.
-    MakeClosure { func: String, captures: Vec<Value> },
+    MakeClosure {
+        func: String,
+        captures: Vec<Value>,
+    },
 
     /// Build a record (nominal or anonymous), fields in declared order.
-    MakeRecord { name: Option<String>, fields: Vec<(String, Value)> },
+    MakeRecord {
+        name: Option<String>,
+        fields: Vec<(String, Value)>,
+    },
     /// Read a field.
-    Field { base: Value, field: String },
+    Field {
+        base: Value,
+        field: String,
+    },
     /// Build a tuple.
     MakeTuple(Vec<Value>),
     /// Read a tuple element.
-    Elem { base: Value, index: usize },
+    Elem {
+        base: Value,
+        index: usize,
+    },
     /// `x as T` — a reinterpretation to a narrower or wrapping type: identity at
     /// runtime for a narrowing or a newtype, an extraction out of a union.
     Cast(Value),
@@ -185,11 +208,18 @@ pub enum Op {
     /// erased generic answered yes, and the `as` a person writes next reinterpreted the
     /// payload — an i64 read as a `neon_str` header, which is a segfault, not a wrong
     /// answer.
-    IsVariant { value: Value, variant: String, tested: Option<Repr> },
+    IsVariant {
+        value: Value,
+        variant: String,
+        tested: Option<Repr>,
+    },
     /// Build a list from its elements, in order.
     MakeList(Vec<Value>),
     /// Index a list — `xs[i]`, which traps on a bad index rather than throwing.
-    Index { base: Value, index: Value },
+    Index {
+        base: Value,
+        index: Value,
+    },
 
     /// Retain / release, inserted by the refcount pass.
     Retain(Value),
@@ -214,8 +244,16 @@ pub enum Term {
     /// Return the error case of this throwing function's tagged result.
     Throw(Value),
     Jump(Target),
-    Branch { cond: Value, then: Target, els: Target },
-    Switch { on: Value, arms: Vec<(SwitchKey, Target)>, default: Target },
+    Branch {
+        cond: Value,
+        then: Target,
+        els: Target,
+    },
+    Switch {
+        on: Value,
+        arms: Vec<(SwitchKey, Target)>,
+        default: Target,
+    },
     /// Statically unreachable — after a call that never returns, or an exhausted match.
     Unreachable,
 }
@@ -308,7 +346,12 @@ impl Builder {
     /// honest state for a block nothing has jumped to or filled in yet.
     pub fn new_block(&mut self) -> BlockId {
         let id = BlockId(self.blocks.len() as u32);
-        self.blocks.push(Block { id, params: vec![], insts: vec![], term: Term::Unreachable });
+        self.blocks.push(Block {
+            id,
+            params: vec![],
+            insts: vec![],
+            term: Term::Unreachable,
+        });
         id
     }
 
@@ -338,13 +381,18 @@ impl Builder {
     /// Append an instruction that defines a value.
     pub fn emit(&mut self, op: Op, repr: Repr, ty: TyId) -> Value {
         let v = self.value(repr, ty);
-        self.blocks[self.current.0 as usize].insts.push(Inst { result: Some(v), op });
+        self.blocks[self.current.0 as usize].insts.push(Inst {
+            result: Some(v),
+            op,
+        });
         v
     }
 
     /// Append an instruction that defines nothing.
     pub fn emit_void(&mut self, op: Op) {
-        self.blocks[self.current.0 as usize].insts.push(Inst { result: None, op });
+        self.blocks[self.current.0 as usize]
+            .insts
+            .push(Inst { result: None, op });
     }
 
     /// Finish the current block with a terminator. This overwrites whatever was there, so

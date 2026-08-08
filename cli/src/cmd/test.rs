@@ -55,7 +55,11 @@ pub fn run(file: &OsString, filter: Option<String>, flags: BuildFlags) -> Result
     let exe = emit::executable_path(dir.join(stem));
     emit::to_test_executable(&checked, &all, &exe, &cfg)?;
 
-    println!("running {} test{}\n", selected.len(), if selected.len() == 1 { "" } else { "s" });
+    println!(
+        "running {} test{}\n",
+        selected.len(),
+        if selected.len() == 1 { "" } else { "s" }
+    );
     let mut failed = 0usize;
     for (index, entry) in &selected {
         match run_one(&exe, *index)? {

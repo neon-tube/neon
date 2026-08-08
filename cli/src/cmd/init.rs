@@ -32,7 +32,10 @@ pub fn run(name: Option<OsString>) -> Result<()> {
     }
 
     std::fs::create_dir_all(root.join("src"))?;
-    write_new(&manifest, &format!("[package]\nname = \"{project_name}\"\nversion = \"0.1.0\"\n"))?;
+    write_new(
+        &manifest,
+        &format!("[package]\nname = \"{project_name}\"\nversion = \"0.1.0\"\n"),
+    )?;
     write_new(&root.join("src/main.neon"), MAIN_NEON)?;
 
     println!("created project `{project_name}` in {}", root.display());

@@ -59,9 +59,16 @@ fn an_arrow_type_carries_a_throws() {
     let m = ok("type H = (i64) throws :error -> i64");
     match &m.decls[0].kind {
         DeclKind::TypeAlias(a) => match &a.value.kind {
-            TypeSpecKind::Fn { params, throws, ret } => {
+            TypeSpecKind::Fn {
+                params,
+                throws,
+                ret,
+            } => {
                 assert_eq!(params.len(), 1);
-                assert_eq!(throws.as_ref().expect("throws").kind, TypeSpecKind::Atom("error".into()));
+                assert_eq!(
+                    throws.as_ref().expect("throws").kind,
+                    TypeSpecKind::Atom("error".into())
+                );
                 assert!(matches!(ret.kind, TypeSpecKind::Named { .. }));
             }
             other => panic!("expected a fn type, got {other:?}"),
@@ -95,8 +102,17 @@ fn a_parenthesised_throws_is_not_the_return() {
     // return. Parsed at the full type level, `(str) -> i64` would be read as the
     // thrown type and the return would silently vanish.
     let m = ok("type H = (i64) throws (str) -> i64");
-    let DeclKind::TypeAlias(a) = &m.decls[0].kind else { panic!("a type alias") };
-    let TypeSpecKind::Fn { params, throws, ret } = &a.value.kind else { panic!("an arrow") };
+    let DeclKind::TypeAlias(a) = &m.decls[0].kind else {
+        panic!("a type alias")
+    };
+    let TypeSpecKind::Fn {
+        params,
+        throws,
+        ret,
+    } = &a.value.kind
+    else {
+        panic!("an arrow")
+    };
     assert_eq!(params.len(), 1);
     assert!(matches!(&throws.as_deref().expect("a throws").kind,
         TypeSpecKind::Named { path, .. } if path == &["str"]));
@@ -108,7 +124,9 @@ fn a_fn_decl_throws_does_not_swallow_its_return() {
     // The same ambiguity in declaration position, where it used to misparse in
     // silence: `throws=((str) -> i64), ret=None`.
     let m = ok("fn f() throws (str) -> i64 { 0 }");
-    let DeclKind::Fn(f) = &m.decls[0].kind else { panic!("a fn") };
+    let DeclKind::Fn(f) = &m.decls[0].kind else {
+        panic!("a fn")
+    };
     assert!(matches!(&f.throws.as_ref().expect("a throws").kind,
         TypeSpecKind::Named { path, .. } if path == &["str"]));
     assert!(matches!(&f.ret.as_ref().expect("a return").kind,
@@ -202,10 +220,8 @@ fn the_mu_type_from_the_spec() {
 
 #[test]
 fn protocols_and_impls() {
-    let m = ok(
-        "protocol Sized for T { fn len(v: T) -> i64 } \
-         impl Sized for str { fn len(v: str) -> i64 { 0 } }",
-    );
+    let m = ok("protocol Sized for T { fn len(v: T) -> i64 } \
+         impl Sized for str { fn len(v: str) -> i64 { 0 } }");
     match (&m.decls[0].kind, &m.decls[1].kind) {
         (DeclKind::Protocol(p), DeclKind::Impl(i)) => {
             assert_eq!(p.name, "Sized");
@@ -391,23 +407,47 @@ fn a_record_literal_inside_an_interpolation() {
 fn the_try_triad() {
     assert!(matches!(
         tail("try f()").kind,
-        ExprKind::Try { form: TryForm::Propagate, catch: None, .. }
+        ExprKind::Try {
+            form: TryForm::Propagate,
+            catch: None,
+            ..
+        }
     ));
-    assert!(matches!(tail("try? f()").kind, ExprKind::Try { form: TryForm::Soften, .. }));
-    assert!(matches!(tail("try! f()").kind, ExprKind::Try { form: TryForm::Assert, .. }));
+    assert!(matches!(
+        tail("try? f()").kind,
+        ExprKind::Try {
+            form: TryForm::Soften,
+            ..
+        }
+    ));
+    assert!(matches!(
+        tail("try! f()").kind,
+        ExprKind::Try {
+            form: TryForm::Assert,
+            ..
+        }
+    ));
 }
 
 #[test]
 fn try_catch_and_the_block_form() {
     match tail("try f() catch (e) { 0 }").kind {
-        ExprKind::Try { form: TryForm::Propagate, catch: Some(c), .. } => {
+        ExprKind::Try {
+            form: TryForm::Propagate,
+            catch: Some(c),
+            ..
+        } => {
             assert_eq!(c.binding, "e")
         }
         other => panic!("expected try/catch, got {other:?}"),
     }
     // All forms accept a block, so every throwing call inside is covered.
     match tail("try { a(); b() } catch (e) { 0 }").kind {
-        ExprKind::Try { body, catch: Some(_), .. } => {
+        ExprKind::Try {
+            body,
+            catch: Some(_),
+            ..
+        } => {
             assert!(matches!(body.kind, ExprKind::Block(_)))
         }
         other => panic!("expected a block try, got {other:?}"),
@@ -440,7 +480,10 @@ fn if_else_chain() {
     }
     // The parser records a missing else rather than substituting null; whether
     // that is an error depends on the position, which a later pass decides.
-    assert!(matches!(tail("if a { 1 }").kind, ExprKind::If { else_: None, .. }));
+    assert!(matches!(
+        tail("if a { 1 }").kind,
+        ExprKind::If { else_: None, .. }
+    ));
 }
 
 #[test]
@@ -466,7 +509,10 @@ fn match_with_guards_and_patterns() {
 
 #[test]
 fn loops() {
-    assert!(matches!(tail("loop { break 1 }").kind, ExprKind::Loop { .. }));
+    assert!(matches!(
+        tail("loop { break 1 }").kind,
+        ExprKind::Loop { .. }
+    ));
     assert!(matches!(tail("while a { }").kind, ExprKind::While { .. }));
     assert!(matches!(tail("for x in xs { }").kind, ExprKind::For { .. }));
 }
@@ -497,7 +543,11 @@ fn lists_and_spread() {
 #[test]
 fn record_literal_with_spread() {
     match tail("Point { x: 1, ..base }").kind {
-        ExprKind::RecordLit { path, fields, spread } => {
+        ExprKind::RecordLit {
+            path,
+            fields,
+            spread,
+        } => {
             assert_eq!(path.as_deref(), Some(&["Point".to_string()][..]));
             assert_eq!(fields.len(), 1);
             assert!(spread.is_some());
@@ -551,7 +601,10 @@ fn let_and_rebind() {
 fn a_block_tail_is_its_value() {
     let b = body("fn main() { let x = 1; x }");
     assert_eq!(b.stmts.len(), 1);
-    assert!(b.tail.is_some(), "the trailing expression is the block's value");
+    assert!(
+        b.tail.is_some(),
+        "the trailing expression is the block's value"
+    );
 }
 
 #[test]
@@ -574,7 +627,10 @@ fn field_assignment_is_rejected_with_advice() {
         .iter()
         .find(|e| e.kind == ParseErrorKind::FieldAssignment)
         .unwrap_or_else(|| panic!("expected the field-assignment diagnostic, got {e:?}"));
-    assert!(found.to_string().contains("..p"), "should show the spread form: {found}");
+    assert!(
+        found.to_string().contains("..p"),
+        "should show the spread form: {found}"
+    );
 }
 
 #[test]
@@ -625,7 +681,11 @@ fn recovery_keeps_going_after_a_bad_decl() {
 #[test]
 fn every_error_is_reported_not_just_the_first() {
     let e = errs("fn a( {} fn b( {} fn c() {}");
-    assert!(e.len() >= 2, "expected several errors, got {}: {e:?}", e.len());
+    assert!(
+        e.len() >= 2,
+        "expected several errors, got {}: {e:?}",
+        e.len()
+    );
 }
 
 #[test]
@@ -633,7 +693,10 @@ fn errors_are_concrete_and_carry_a_span() {
     let e = errs("fn 123() {}");
     match &e[0].kind {
         ParseErrorKind::Expected { expected, found } => {
-            assert!(expected.contains(&Expected::Label("an identifier")), "{expected:?}");
+            assert!(
+                expected.contains(&Expected::Label("an identifier")),
+                "{expected:?}"
+            );
             assert_eq!(found, &Some(Token::Int(123)));
         }
         other => panic!("expected an Expected error, got {other:?}"),
@@ -705,8 +768,11 @@ fn an_annotation_argument_list_nests_and_repeats() {
                 }
                 other => panic!("expected an item, got {other:?}"),
             }
-            let derived: Vec<_> =
-                f.annotations[1].args.iter().map(|a| a.name().unwrap().join("::")).collect();
+            let derived: Vec<_> = f.annotations[1]
+                .args
+                .iter()
+                .map(|a| a.name().unwrap().join("::"))
+                .collect();
             assert_eq!(derived, ["Display", "Eq"]);
         }
         other => panic!("expected a fn, got {other:?}"),
@@ -721,7 +787,10 @@ fn an_annotation_argument_may_be_a_qualified_path() {
     let m = ok("@derive(std::fmt::Display) record P {}");
     match &m.decls[0].kind {
         DeclKind::Record(r) => {
-            assert_eq!(r.annotations[0].args[0].name().unwrap(), &["std", "fmt", "Display"]);
+            assert_eq!(
+                r.annotations[0].args[0].name().unwrap(),
+                &["std", "fmt", "Display"]
+            );
         }
         other => panic!("expected a record, got {other:?}"),
     }
@@ -758,7 +827,8 @@ fn a_qualified_name_cannot_be_rebound() {
     // something it could not act on.
     let e = errs("fn main() { a::b = 1; }");
     assert!(
-        e.iter().any(|e| e.kind == ParseErrorKind::InvalidAssignTarget),
+        e.iter()
+            .any(|e| e.kind == ParseErrorKind::InvalidAssignTarget),
         "expected the invalid-target diagnostic, got {e:?}"
     );
 }
@@ -774,7 +844,13 @@ fn try_binds_tighter_than_binary_operators() {
     let (op, lhs, _) = binop(&e);
     assert_eq!(op, BinOp::Orelse);
     assert!(
-        matches!(lhs.kind, ExprKind::Try { form: TryForm::Soften, .. }),
+        matches!(
+            lhs.kind,
+            ExprKind::Try {
+                form: TryForm::Soften,
+                ..
+            }
+        ),
         "the orelse must apply to the try's result, got {:?}",
         lhs.kind
     );
@@ -786,13 +862,21 @@ fn postfix_binds_tighter_than_prefix() {
     // `(-x).f`, which is what C and Rust do not do.
     match tail("-x.f").kind {
         ExprKind::Unary { op: UnOp::Neg, rhs } => {
-            assert!(matches!(rhs.kind, ExprKind::Field { .. }), "got {:?}", rhs.kind)
+            assert!(
+                matches!(rhs.kind, ExprKind::Field { .. }),
+                "got {:?}",
+                rhs.kind
+            )
         }
         other => panic!("expected a negation of a field access, got {other:?}"),
     }
     match tail("-xs[0]").kind {
         ExprKind::Unary { op: UnOp::Neg, rhs } => {
-            assert!(matches!(rhs.kind, ExprKind::Index { .. }), "got {:?}", rhs.kind)
+            assert!(
+                matches!(rhs.kind, ExprKind::Index { .. }),
+                "got {:?}",
+                rhs.kind
+            )
         }
         other => panic!("expected a negation of an index, got {other:?}"),
     }
@@ -818,7 +902,12 @@ fn a_block_like_expression_at_statement_start_is_a_statement() {
     // As a binary operand the `if` would swallow the next line and it would
     // silently vanish. Same rule as Rust.
     let b = body("fn main() { if a { g() } else { h() }\n -1; }");
-    assert_eq!(b.stmts.len(), 2, "expected two statements, got {:?}", b.stmts);
+    assert_eq!(
+        b.stmts.len(),
+        2,
+        "expected two statements, got {:?}",
+        b.stmts
+    );
     match &b.stmts[0].kind {
         StmtKind::Expr(e) => assert!(matches!(e.kind, ExprKind::If { .. })),
         other => panic!("expected the if as a statement, got {other:?}"),
@@ -835,7 +924,11 @@ fn a_block_like_expression_is_still_a_value_where_one_is_expected() {
     let b = body("fn main() { let x = if a { 1 } else { 2 } + 3; }");
     match &b.stmts[0].kind {
         StmtKind::Let { value, .. } => {
-            assert_eq!(binop(value).0, BinOp::Add, "the if is the left operand here")
+            assert_eq!(
+                binop(value).0,
+                BinOp::Add,
+                "the if is the left operand here"
+            )
         }
         other => panic!("expected a let, got {other:?}"),
     }
@@ -855,7 +948,8 @@ fn there_is_no_one_element_tuple() {
     ] {
         let e = errs(src);
         assert!(
-            e.iter().any(|e| matches!(e.kind, ParseErrorKind::OneElementTuple)),
+            e.iter()
+                .any(|e| matches!(e.kind, ParseErrorKind::OneElementTuple)),
             "{src} -- got {e:?}"
         );
     }
@@ -877,15 +971,21 @@ fn a_trailing_comma_is_insignificant_everywhere_it_is_allowed() {
 fn a_trailing_comma_in_an_arrow_parameter_list_is_fine() {
     // `(A,) -> B` is a parameter list, not a tuple, so the comma means nothing.
     let m = ok("type D = (i64,) -> str");
-    let DeclKind::TypeAlias(a) = &m.decls[0].kind else { panic!("a type alias") };
-    let TypeSpecKind::Fn { params, .. } = &a.value.kind else { panic!("an arrow") };
+    let DeclKind::TypeAlias(a) = &m.decls[0].kind else {
+        panic!("a type alias")
+    };
+    let TypeSpecKind::Fn { params, .. } = &a.value.kind else {
+        panic!("an arrow")
+    };
     assert_eq!(params.len(), 1);
 }
 
 #[test]
 fn parens_of_one_are_a_grouping_not_a_tuple() {
     let m = ok("type B = (str)");
-    let DeclKind::TypeAlias(a) = &m.decls[0].kind else { panic!("a type alias") };
+    let DeclKind::TypeAlias(a) = &m.decls[0].kind else {
+        panic!("a type alias")
+    };
     assert!(matches!(&a.value.kind, TypeSpecKind::Named { path, .. } if path == &["str"]));
 
     // Patterns used to disagree with types here: `(x)` built a 1-tuple pattern
@@ -897,8 +997,12 @@ fn parens_of_one_are_a_grouping_not_a_tuple() {
 fn unit_and_larger_tuples_are_unaffected() {
     ok("type E = ()");
     let m = ok("type F = (i64, str)");
-    let DeclKind::TypeAlias(a) = &m.decls[0].kind else { panic!("a type alias") };
-    let TypeSpecKind::Tuple(v) = &a.value.kind else { panic!("a tuple") };
+    let DeclKind::TypeAlias(a) = &m.decls[0].kind else {
+        panic!("a type alias")
+    };
+    let TypeSpecKind::Tuple(v) = &a.value.kind else {
+        panic!("a tuple")
+    };
     assert_eq!(v.len(), 2);
 }
 
@@ -921,8 +1025,12 @@ fn use_trees_in_every_shape() {
 #[test]
 fn a_use_group_flattens_its_prefix() {
     let m = ok("use x::{a, b as c};");
-    let DeclKind::Use(u) = &m.decls[0].kind else { panic!() };
-    let UseTree::Group { prefix, children } = &u.tree else { panic!("a group") };
+    let DeclKind::Use(u) = &m.decls[0].kind else {
+        panic!()
+    };
+    let UseTree::Group { prefix, children } = &u.tree else {
+        panic!("a group")
+    };
     assert_eq!(prefix, &["x"]);
     assert_eq!(children.len(), 2);
     assert!(matches!(&children[1], UseTree::Leaf { alias: Some(a), .. } if a == "c"));
@@ -930,8 +1038,11 @@ fn a_use_group_flattens_its_prefix() {
 
 #[test]
 fn an_impl_may_carry_a_where_clause() {
-    let m = ok("impl[T] Display for List[T] where T: Display { fn show(a: List[T]) -> str { \"\" } }");
-    let DeclKind::Impl(i) = &m.decls[0].kind else { panic!() };
+    let m =
+        ok("impl[T] Display for List[T] where T: Display { fn show(a: List[T]) -> str { \"\" } }");
+    let DeclKind::Impl(i) = &m.decls[0].kind else {
+        panic!()
+    };
     assert_eq!(i.generics, vec!["T".to_string()]);
     assert_eq!(i.wheres.len(), 1);
     assert_eq!(i.wheres[0].param, "T");
@@ -940,7 +1051,9 @@ fn an_impl_may_carry_a_where_clause() {
 #[test]
 fn a_protocol_may_carry_a_where_clause() {
     let m = ok("protocol Ord for T where T: Eq { fn cmp(a: T, b: T) -> i64 }");
-    let DeclKind::Protocol(p) = &m.decls[0].kind else { panic!() };
+    let DeclKind::Protocol(p) = &m.decls[0].kind else {
+        panic!()
+    };
     assert_eq!(p.wheres.len(), 1);
     assert_eq!(p.wheres[0].param, "T");
 }
@@ -963,7 +1076,9 @@ fn the_grammar_is_built_once_per_thread() {
     assert_eq!(after_warmup, 1, "the grammar should be built exactly once");
 
     for i in 0..200 {
-        let src = format!("fn f{i}(x: int) -> int {{ let y = x + {i} * 2; if y > 0 {{ y }} else {{ -y }} }}");
+        let src = format!(
+            "fn f{i}(x: int) -> int {{ let y = x + {i} * 2; if y > 0 {{ y }} else {{ -y }} }}"
+        );
         let _ = parse_src(&src);
     }
     // `format` goes through `parse` too, so it must share the one graph.

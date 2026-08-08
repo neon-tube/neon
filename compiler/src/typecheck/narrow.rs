@@ -81,9 +81,10 @@ impl Refined {
     /// Swaps the branches: `!(x is T)`, or `!= null` against `== null`.
     pub fn flip(self) -> Refined {
         match self {
-            Refined::Both { then_ty, else_ty } => {
-                Refined::Both { then_ty: else_ty, else_ty: then_ty }
-            }
+            Refined::Both { then_ty, else_ty } => Refined::Both {
+                then_ty: else_ty,
+                else_ty: then_ty,
+            },
             Refined::AlwaysMatches(t) => Refined::NeverMatches(t),
             Refined::NeverMatches(t) => Refined::AlwaysMatches(t),
             Refined::Unreachable => Refined::Unreachable,
@@ -128,13 +129,20 @@ impl Test {
 
     /// A guard can always reject, so it makes an otherwise exact test inexact.
     pub fn guarded(self) -> Test {
-        Test { ty: self.ty, exact: false }
+        Test {
+            ty: self.ty,
+            exact: false,
+        }
     }
 
     /// What an arm with this test removes from the fallthrough, and contributes to
     /// coverage.
     pub fn covered(self, s: &mut Solver) -> TyId {
-        if self.exact { self.ty } else { s.t.never() }
+        if self.exact {
+            self.ty
+        } else {
+            s.t.never()
+        }
     }
 }
 
@@ -259,7 +267,11 @@ impl Projected {
         if s.is_empty(ty) {
             return Projected::Absent;
         }
-        if lacks { Projected::Partial(ty) } else { Projected::Present(ty) }
+        if lacks {
+            Projected::Partial(ty)
+        } else {
+            Projected::Present(ty)
+        }
     }
 
     /// The type where present, or `None` when nothing has it.
@@ -556,7 +568,8 @@ mod tests {
 
     #[track_caller]
     fn both(r: Refined) -> (TyId, TyId) {
-        r.both().unwrap_or_else(|| panic!("expected both branches live, got {r:?}"))
+        r.both()
+            .unwrap_or_else(|| panic!("expected both branches live, got {r:?}"))
     }
 
     #[track_caller]
@@ -579,7 +592,10 @@ mod tests {
 
         let (then_ty, else_ty) = both(narrow_is(&mut s, shape, circle));
         assert!(s.is_equiv(then_ty, circle));
-        assert!(s.is_equiv(else_ty, square), "the fallthrough names Square exactly");
+        assert!(
+            s.is_equiv(else_ty, square),
+            "the fallthrough names Square exactly"
+        );
     }
 
     #[test]
@@ -597,7 +613,10 @@ mod tests {
         let meet = s.t.intersect(then_ty, else_ty);
         assert!(s.is_empty(meet), "the branches are disjoint");
         let join = s.t.union(then_ty, else_ty);
-        assert!(s.is_equiv(join, subject), "and together they are the whole subject");
+        assert!(
+            s.is_equiv(join, subject),
+            "and together they are the whole subject"
+        );
     }
 
     #[test]
@@ -682,7 +701,11 @@ mod tests {
         let i = s.t.i64();
         let st = s.t.str();
         let r = narrow_is(&mut s, i, st);
-        assert_eq!(r.flip(), Refined::AlwaysMatches(i), "`!(x is str)` always holds");
+        assert_eq!(
+            r.flip(),
+            Refined::AlwaysMatches(i),
+            "`!(x is str)` always holds"
+        );
     }
 
     // ---- null ----
@@ -695,7 +718,10 @@ mod tests {
         let nullable = s.t.union(i, n);
 
         let (then_ty, else_ty) = both(narrow_not_null(&mut s, nullable));
-        assert_eq!(then_ty, i, "`if p != null` gives back `i64`, not `i64|null`");
+        assert_eq!(
+            then_ty, i,
+            "`if p != null` gives back `i64`, not `i64|null`"
+        );
         assert_eq!(else_ty, n);
     }
 
@@ -736,7 +762,10 @@ mod tests {
         let undef = s.t.undef();
         let (then_ty, _) = both(narrow_not_null(&mut s, any));
         let leak = s.t.intersect(then_ty, undef);
-        assert!(s.is_empty(leak), "`any` is top of the value lattice, and stays there");
+        assert!(
+            s.is_empty(leak),
+            "`any` is top of the value lattice, and stays there"
+        );
         assert!(s.is_subtype(then_ty, any));
     }
 
@@ -800,7 +829,10 @@ mod tests {
         );
 
         let covered = one.covered(&mut s);
-        assert!(!is_exhaustive(&mut s, i, &[covered]), "literals never exhaust an i64");
+        assert!(
+            !is_exhaustive(&mut s, i, &[covered]),
+            "literals never exhaust an i64"
+        );
     }
 
     #[test]
@@ -810,7 +842,10 @@ mod tests {
         let circle = nominal(&mut s, "Circle", &[("r", f)]);
         let i = s.t.i64();
         // `match c { 1 => .. }` — inexactness does not excuse an impossible arm.
-        assert_eq!(narrow(&mut s, circle, Test::inexact(i)), Refined::NeverMatches(circle));
+        assert_eq!(
+            narrow(&mut s, circle, Test::inexact(i)),
+            Refined::NeverMatches(circle)
+        );
     }
 
     #[test]
@@ -825,7 +860,10 @@ mod tests {
         let one_arm = Test::inexact(i);
         let c: Vec<TyId> = vec![null_arm.covered(&mut s), one_arm.covered(&mut s)];
         let rest = residual(&mut s, subject, &c);
-        assert!(s.is_equiv(rest, i), "the residual is `i64`: the numbers are uncovered");
+        assert!(
+            s.is_equiv(rest, i),
+            "the residual is `i64`: the numbers are uncovered"
+        );
     }
 
     // ---- exhaustiveness ----
@@ -845,7 +883,10 @@ mod tests {
         };
 
         let rest = residual(&mut s, subject, &[a_ok, a_err]);
-        assert!(s.is_equiv(rest, a_pending), "the diagnostic can say `:pending`");
+        assert!(
+            s.is_equiv(rest, a_pending),
+            "the diagnostic can say `:pending`"
+        );
         assert!(!is_exhaustive(&mut s, subject, &[a_ok, a_err]));
     }
 
@@ -898,7 +939,10 @@ mod tests {
         let subject = s.t.union(circle, n);
 
         let rest = residual(&mut s, subject, &[circle]);
-        assert!(s.is_equiv(rest, n), "the residual is `null` — no Option to unwrap");
+        assert!(
+            s.is_equiv(rest, n),
+            "the residual is `null` — no Option to unwrap"
+        );
         assert!(is_exhaustive(&mut s, subject, &[circle, n]));
     }
 
@@ -910,7 +954,10 @@ mod tests {
         assert!(s.is_equiv(rest, i));
 
         let never = s.t.never();
-        assert!(is_exhaustive(&mut s, never, &[]), "there is nothing to cover");
+        assert!(
+            is_exhaustive(&mut s, never, &[]),
+            "there is nothing to cover"
+        );
     }
 
     #[test]
@@ -919,8 +966,14 @@ mod tests {
         let t = s.t.name("T");
         let v = s.t.var(t);
         let i = s.t.i64();
-        assert!(is_exhaustive(&mut s, v, &[v]), "a generic body needs no wildcard");
-        assert!(!is_exhaustive(&mut s, v, &[i]), "`is i64` covers nothing of a rigid T");
+        assert!(
+            is_exhaustive(&mut s, v, &[v]),
+            "a generic body needs no wildcard"
+        );
+        assert!(
+            !is_exhaustive(&mut s, v, &[i]),
+            "`is i64` covers nothing of a rigid T"
+        );
     }
 
     // ---- redundancy ----
@@ -1018,7 +1071,10 @@ mod tests {
         let guarded = Test::exact(circle).guarded();
         let c: Vec<TyId> = vec![guarded.covered(&mut s), Test::exact(square).covered(&mut s)];
         let rest = residual(&mut s, shape, &c);
-        assert!(s.is_equiv(rest, circle), "a guarded Circle arm leaves Circle uncovered");
+        assert!(
+            s.is_equiv(rest, circle),
+            "a guarded Circle arm leaves Circle uncovered"
+        );
 
         // And a later unguarded Circle arm is still reachable.
         let arms = [guarded, Test::exact(circle)];
@@ -1092,7 +1148,11 @@ mod tests {
         let name = s.t.name("name");
         let pat = record_test(&mut s, None, &[(name, any)]);
         let r = narrow_is(&mut s, person, pat);
-        assert_eq!(r, Refined::AlwaysMatches(person), "`{{ name }}` matches every Person");
+        assert_eq!(
+            r,
+            Refined::AlwaysMatches(person),
+            "`{{ name }}` matches every Person"
+        );
     }
 
     // ---- field projection ----
@@ -1149,7 +1209,11 @@ mod tests {
         let missing = s.t.name("nope");
         let got = project_field(&mut s, circle, missing);
         assert_eq!(got, Projected::Absent);
-        assert_eq!(got.ty(), None, "no `never` to bind and check vacuously against");
+        assert_eq!(
+            got.ty(),
+            None,
+            "no `never` to bind and check vacuously against"
+        );
     }
 
     #[test]
@@ -1170,7 +1234,10 @@ mod tests {
 
         let timeout = s.t.name("timeout");
         let got = present(project_field(&mut s, opts, timeout));
-        assert_eq!(got, nullable, "present and nullable is not the same as absent");
+        assert_eq!(
+            got, nullable,
+            "present and nullable is not the same as absent"
+        );
 
         let (then_ty, _) = both(narrow_not_null(&mut s, got));
         assert_eq!(then_ty, i, "`opts.timeout orelse 30` is an i64");

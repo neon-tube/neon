@@ -22,7 +22,6 @@ pub struct Checked {
     pub libs: Vec<(Vec<String>, ast::Module)>,
 }
 
-
 /// Render a type error against the file its span actually indexes: the user's program
 /// when the error's module is the root, the owning stdlib source otherwise. Before
 /// this, a stdlib mistake rendered with the user's path and underlined whatever token
@@ -44,11 +43,21 @@ pub fn eprint_type_error(
         Some((rel, src)) => {
             let shown = std::path::PathBuf::from(format!("<stdlib>/{rel}"));
             let mut r = Renderer::for_stderr(&shown, src);
-            r.eprint_full(e.span.clone(), &e.to_string(), &e.labels(), e.help().as_deref());
+            r.eprint_full(
+                e.span.clone(),
+                &e.to_string(),
+                &e.labels(),
+                e.help().as_deref(),
+            );
         }
         None => {
             let mut r = Renderer::for_stderr(user_path, user_src);
-            r.eprint_full(e.span.clone(), &e.to_string(), &e.labels(), e.help().as_deref());
+            r.eprint_full(
+                e.span.clone(),
+                &e.to_string(),
+                &e.labels(),
+                e.help().as_deref(),
+            );
         }
     }
 }
@@ -92,8 +101,8 @@ pub fn check(path: &Path, lib: bool, cfg: &[String]) -> Result<Checked> {
     // compilation is unique — one `TypecheckResult` covers both, and stdlib bodies can be
     // checked and lowered like any other code.
     let std_sources = crate::stdlib::sources()?;
-    let (std_modules, next_id) =
-        neon_compiler::stdlib::parse_from_with(&std_sources, 0, &config).map_err(|e| eyre!("{e}"))?;
+    let (std_modules, next_id) = neon_compiler::stdlib::parse_from_with(&std_sources, 0, &config)
+        .map_err(|e| eyre!("{e}"))?;
     let mut module = module;
     neon_compiler::ast::number_exprs_from(&mut module, next_id);
 
@@ -101,7 +110,11 @@ pub fn check(path: &Path, lib: bool, cfg: &[String]) -> Result<Checked> {
         std_modules.iter().map(|(p, m)| (p.clone(), m)).collect();
     modules.push((Vec::new(), &module));
 
-    let unit = if lib { Unit::Library } else { Unit::RootApplication };
+    let unit = if lib {
+        Unit::Library
+    } else {
+        Unit::RootApplication
+    };
     let mut env = Env::build_with(&modules, unit);
     if !env.errors().is_empty() {
         for e in env.errors() {
@@ -118,5 +131,10 @@ pub fn check(path: &Path, lib: bool, cfg: &[String]) -> Result<Checked> {
         }
         std::process::exit(1);
     }
-    Ok(Checked { env, result, module, libs: std_modules })
+    Ok(Checked {
+        env,
+        result,
+        module,
+        libs: std_modules,
+    })
 }

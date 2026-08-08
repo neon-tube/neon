@@ -15,7 +15,11 @@ fn parse(src: &str) -> ast::Module {
 fn check(src: &str) -> Vec<TypeErrorKind> {
     let m = parse(src);
     let mut env = Env::build(&m);
-    assert!(env.errors().is_empty(), "the fixture's declarations do not check: {:?}", env.errors());
+    assert!(
+        env.errors().is_empty(),
+        "the fixture's declarations do not check: {:?}",
+        env.errors()
+    );
     let (_r, errs) = check_module(&mut env, &m);
     errs.into_iter().map(|e| e.kind).collect()
 }
@@ -35,7 +39,8 @@ fn clean(src: &str) {
 fn mismatch(src: &str) {
     let e = check(src);
     assert!(
-        e.iter().any(|k| matches!(k, TypeErrorKind::Mismatch { .. })),
+        e.iter()
+            .any(|k| matches!(k, TypeErrorKind::Mismatch { .. })),
         "expected a mismatch, got {e:?}"
     );
 }
@@ -54,11 +59,16 @@ fn an_unknown_type_in_a_body_is_in_the_returned_errors() {
     // annotation, so before the fix `errs` was empty and the program checked "clean".
     let m = parse("fn f() { let x: NoSuchType = 5; }");
     let mut env = Env::build(&m);
-    assert!(env.errors().is_empty(), "the declarations resolve: {:?}", env.errors());
+    assert!(
+        env.errors().is_empty(),
+        "the declarations resolve: {:?}",
+        env.errors()
+    );
 
     let (_r, errs) = check_module(&mut env, &m);
     assert!(
-        errs.iter().any(|e| e.kind == TypeErrorKind::Unknown("NoSuchType".into())),
+        errs.iter()
+            .any(|e| e.kind == TypeErrorKind::Unknown("NoSuchType".into())),
         "the returned list must carry the resolution error: {errs:?}"
     );
 }
@@ -94,17 +104,26 @@ fn both_kinds_of_error_are_reported_once_each_in_span_order() {
 
     let kinds: Vec<_> = errs.iter().map(|e| e.kind.clone()).collect();
     assert_eq!(
-        kinds.iter().filter(|k| **k == TypeErrorKind::Unknown("NoSuchType".into())).count(),
+        kinds
+            .iter()
+            .filter(|k| **k == TypeErrorKind::Unknown("NoSuchType".into()))
+            .count(),
         1,
         "reported exactly once: {kinds:?}"
     );
     assert_eq!(
-        kinds.iter().filter(|k| **k == TypeErrorKind::Unknown("AlsoMissing".into())).count(),
+        kinds
+            .iter()
+            .filter(|k| **k == TypeErrorKind::Unknown("AlsoMissing".into()))
+            .count(),
         1,
         "reported exactly once: {kinds:?}"
     );
     assert_eq!(
-        kinds.iter().filter(|k| matches!(k, TypeErrorKind::Mismatch { .. })).count(),
+        kinds
+            .iter()
+            .filter(|k| matches!(k, TypeErrorKind::Mismatch { .. }))
+            .count(),
         1,
         "reported exactly once: {kinds:?}"
     );
@@ -113,7 +132,10 @@ fn both_kinds_of_error_are_reported_once_each_in_span_order() {
     let spans: Vec<usize> = errs.iter().map(|e| e.span.start).collect();
     let mut sorted = spans.clone();
     sorted.sort_unstable();
-    assert_eq!(spans, sorted, "diagnostics come out in source order: {spans:?}");
+    assert_eq!(
+        spans, sorted,
+        "diagnostics come out in source order: {spans:?}"
+    );
     // And the middle one really is the checker's, so the sort interleaved the two phases
     // rather than concatenating them.
     assert!(
@@ -132,7 +154,11 @@ fn every_expression_gets_a_type() {
     assert!(errs.is_empty(), "{errs:?}");
     // The map the previous implementation threw away, forcing lowering to re-derive
     // types, fail, and fall back to erasure.
-    assert!(r.len() >= 5, "expected a type per expression, got {}", r.len());
+    assert!(
+        r.len() >= 5,
+        "expected a type per expression, got {}",
+        r.len()
+    );
 }
 
 // ---- assignability: one rule, most of the corpus ----
@@ -247,10 +273,16 @@ fn an_intersection_requires_every_operand() {
 #[test]
 fn an_if_used_as_a_value_needs_an_else() {
     let e = check("fn f() -> i64 { if true { 1 } }");
-    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::IfWithoutElse)), "{e:?}");
+    assert!(
+        e.iter().any(|k| matches!(k, TypeErrorKind::IfWithoutElse)),
+        "{e:?}"
+    );
 
     let e = check("fn g(n: i64) {} fn f() { g(if true { 1 }); }");
-    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::IfWithoutElse)), "{e:?}");
+    assert!(
+        e.iter().any(|k| matches!(k, TypeErrorKind::IfWithoutElse)),
+        "{e:?}"
+    );
 }
 
 #[test]
@@ -298,13 +330,21 @@ fn a_wildcard_is_exhaustive() {
 fn an_integer_literal_does_not_cover_i64() {
     // The trap the `exact` flag exists for: `1` is an i64, but it matches one i64.
     let e = check("fn f(n: i64) -> i64 { match n { 1 => 1 } }");
-    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::NotExhaustive { .. })), "{e:?}");
+    assert!(
+        e.iter()
+            .any(|k| matches!(k, TypeErrorKind::NotExhaustive { .. })),
+        "{e:?}"
+    );
 }
 
 #[test]
 fn a_nullable_match_must_handle_null() {
     let e = check("fn f(n: i64 | null) -> i64 { match n { is i64 => 1 } }");
-    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::NotExhaustive { .. })), "{e:?}");
+    assert!(
+        e.iter()
+            .any(|k| matches!(k, TypeErrorKind::NotExhaustive { .. })),
+        "{e:?}"
+    );
     clean("fn f(n: i64 | null) -> i64 { match n { is i64 => 1, null => 0 } }");
 }
 
@@ -312,14 +352,22 @@ fn a_nullable_match_must_handle_null() {
 fn atoms_are_exhaustible_because_they_are_singletons() {
     clean("fn f(a: :ok | :err) -> i64 { match a { :ok => 1, :err => 0 } }");
     let e = check("fn f(a: :ok | :err) -> i64 { match a { :ok => 1 } }");
-    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::NotExhaustive { .. })), "{e:?}");
+    assert!(
+        e.iter()
+            .any(|k| matches!(k, TypeErrorKind::NotExhaustive { .. })),
+        "{e:?}"
+    );
 }
 
 #[test]
 fn a_guard_makes_an_arm_inexact() {
     // A guard can always decline, so a guarded arm covers nothing.
     let e = check("fn f(a: :ok | :err) -> i64 { match a { :ok if true => 1, :err => 0 } }");
-    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::NotExhaustive { .. })), "{e:?}");
+    assert!(
+        e.iter()
+            .any(|k| matches!(k, TypeErrorKind::NotExhaustive { .. })),
+        "{e:?}"
+    );
 }
 
 // ---- casts ----
@@ -327,7 +375,11 @@ fn a_guard_makes_an_arm_inexact() {
 #[test]
 fn a_cast_to_an_unrelated_type_is_rejected() {
     let e = check("fn f(n: i64) -> str { n as str }");
-    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::ImpossibleCast { .. })), "{e:?}");
+    assert!(
+        e.iter()
+            .any(|k| matches!(k, TypeErrorKind::ImpossibleCast { .. })),
+        "{e:?}"
+    );
 }
 
 #[test]
@@ -335,7 +387,11 @@ fn a_bare_cast_that_can_fail_is_rejected() {
     // A narrowing cast might fail, so it must say what a mismatch does — `as!`
     // asserts (and is checked at runtime); bare `as` is for casts that cannot fail.
     let e = check("fn f(v: i64 | str) -> i64 { v as i64 }");
-    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::FallibleCast { .. })), "{e:?}");
+    assert!(
+        e.iter()
+            .any(|k| matches!(k, TypeErrorKind::FallibleCast { .. })),
+        "{e:?}"
+    );
     clean("fn f(v: i64 | str) -> i64 { v as! i64 }");
 }
 
@@ -344,7 +400,11 @@ fn a_soft_cast_yields_the_target_or_null() {
     clean("fn f(v: i64 | str) -> i64 | null { v as? i64 }");
     // A null-overlapping target makes the softened null ambiguous.
     let e = check("fn f(v: any) -> (str | null) | null { v as? (str | null) }");
-    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::SoftCastNullOverlap { .. })), "{e:?}");
+    assert!(
+        e.iter()
+            .any(|k| matches!(k, TypeErrorKind::SoftCastNullOverlap { .. })),
+        "{e:?}"
+    );
 }
 
 #[test]
@@ -357,8 +417,14 @@ fn a_newtype_casts_to_and_from_its_representation() {
 fn a_cast_between_unrelated_newtypes_is_rejected() {
     // Both wrap f64, but Meter and Second are disjoint: the bridge is one hop, not
     // two, so `m as Second` is not `m as f64 as Second`.
-    let e = check("newtype Meter = f64  newtype Second = f64  fn f(m: Meter) -> Second { m as Second }");
-    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::ImpossibleCast { .. })), "{e:?}");
+    let e = check(
+        "newtype Meter = f64  newtype Second = f64  fn f(m: Meter) -> Second { m as Second }",
+    );
+    assert!(
+        e.iter()
+            .any(|k| matches!(k, TypeErrorKind::ImpossibleCast { .. })),
+        "{e:?}"
+    );
 }
 
 // ---- fields ----
@@ -366,7 +432,10 @@ fn a_cast_between_unrelated_newtypes_is_rejected() {
 #[test]
 fn reading_a_field_nothing_has_is_rejected() {
     let e = check("record P { name: str }\nfn f(p: P) -> str { p.email }");
-    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::NoField { .. })), "{e:?}");
+    assert!(
+        e.iter().any(|k| matches!(k, TypeErrorKind::NoField { .. })),
+        "{e:?}"
+    );
 }
 
 #[test]
@@ -400,7 +469,10 @@ fn an_ambiguous_call_names_both_protocols() {
          impl B for R { fn go(v: R) -> str { \"b\" } }
          fn f(r: R) -> str { go(r) }",
     );
-    assert!(m.iter().any(|s| s.contains("more than one protocol")), "{m:?}");
+    assert!(
+        m.iter().any(|s| s.contains("more than one protocol")),
+        "{m:?}"
+    );
 }
 
 #[test]
@@ -437,7 +509,10 @@ fn a_dispatched_call_has_the_impls_return_type() {
 #[test]
 fn an_unknown_name_is_a_diagnostic_not_a_guess() {
     let e = check("fn f() -> i64 { nope }");
-    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::UnknownName(_))), "{e:?}");
+    assert!(
+        e.iter().any(|k| matches!(k, TypeErrorKind::UnknownName(_))),
+        "{e:?}"
+    );
 }
 
 #[test]
@@ -451,7 +526,10 @@ fn one_bad_expression_is_one_error() {
 #[test]
 fn arity_is_checked() {
     let e = check("fn g(a: i64, b: i64) -> i64 { a }\nfn f() -> i64 { g(1) }");
-    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::Arity { .. })), "{e:?}");
+    assert!(
+        e.iter().any(|k| matches!(k, TypeErrorKind::Arity { .. })),
+        "{e:?}"
+    );
 }
 
 // ---- first-class calls ----
@@ -475,13 +553,20 @@ fn a_first_class_call_has_the_arrows_return_type() {
 #[test]
 fn a_first_class_call_checks_arity() {
     let e = check("fn f(g: (i64) -> i64) -> i64 { g(1, 2) }");
-    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::Arity { .. })), "{e:?}");
+    assert!(
+        e.iter().any(|k| matches!(k, TypeErrorKind::Arity { .. })),
+        "{e:?}"
+    );
 }
 
 #[test]
 fn calling_a_non_function_is_rejected() {
     let e = check("fn f(x: i64) -> i64 { x(1) }");
-    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::NotCallable { .. })), "{e:?}");
+    assert!(
+        e.iter()
+            .any(|k| matches!(k, TypeErrorKind::NotCallable { .. })),
+        "{e:?}"
+    );
 }
 
 #[test]
@@ -555,13 +640,21 @@ fn a_lambda_param_with_no_type_and_no_context_is_an_error() {
     // The example this design deliberately does not infer: a bare binding with no
     // annotation, disambiguated only by a later use. That is unification.
     let e = check("fn f() -> i64 { let a = (x) => x + 1; a(33) }");
-    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::LambdaParamNeedsType(_))), "{e:?}");
+    assert!(
+        e.iter()
+            .any(|k| matches!(k, TypeErrorKind::LambdaParamNeedsType(_))),
+        "{e:?}"
+    );
 }
 
 #[test]
 fn a_closure_may_not_rebind_a_capture() {
     let e = check("fn f() -> i64 { let c = 0; let g = () => { c = c + 1; c }; g() }");
-    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::RebindCapture { .. })), "{e:?}");
+    assert!(
+        e.iter()
+            .any(|k| matches!(k, TypeErrorKind::RebindCapture { .. })),
+        "{e:?}"
+    );
 }
 
 #[test]
@@ -689,7 +782,10 @@ fn an_interpolated_value_must_be_display() {
     let e = check(&format!(
         "{DISPLAY} record R {{ x: i64 }} fn f(r: R) -> str {{ \"#{{r}}\" }}"
     ));
-    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::NoImpl { .. })), "{e:?}");
+    assert!(
+        e.iter().any(|k| matches!(k, TypeErrorKind::NoImpl { .. })),
+        "{e:?}"
+    );
 }
 
 // ---- comparison ----
@@ -697,13 +793,21 @@ fn an_interpolated_value_must_be_display() {
 #[test]
 fn equality_needs_comparable_operands() {
     clean("fn f() -> bool { 1 == 2 }");
-    clean("fn f() -> bool { :ok == :err }");   // both atoms, one domain
-    clean("fn f(x: i64 | str, y: i64) -> bool { x == y }");  // overlap on i64
-    // An atom and a string share no comparison domain.
+    clean("fn f() -> bool { :ok == :err }"); // both atoms, one domain
+    clean("fn f(x: i64 | str, y: i64) -> bool { x == y }"); // overlap on i64
+                                                            // An atom and a string share no comparison domain.
     let e = check("fn f() -> bool { :ok == \"ok\" }");
-    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::Incomparable { .. })), "{e:?}");
+    assert!(
+        e.iter()
+            .any(|k| matches!(k, TypeErrorKind::Incomparable { .. })),
+        "{e:?}"
+    );
     let e = check("fn f() -> bool { 1 == \"s\" }");
-    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::Incomparable { .. })), "{e:?}");
+    assert!(
+        e.iter()
+            .any(|k| matches!(k, TypeErrorKind::Incomparable { .. })),
+        "{e:?}"
+    );
 }
 
 #[test]
@@ -712,7 +816,11 @@ fn ordering_needs_a_common_ordered_type() {
     clean("fn f() -> bool { 1 < 2 }");
     // No common type to order.
     let e = check("fn f() -> bool { 1 < \"s\" }");
-    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::Incomparable { .. })), "{e:?}");
+    assert!(
+        e.iter()
+            .any(|k| matches!(k, TypeErrorKind::Incomparable { .. })),
+        "{e:?}"
+    );
 }
 
 #[test]
@@ -727,7 +835,11 @@ fn ordering_needs_one_shape_even_when_the_types_match() {
         "fn f(v: :lt | :gt) -> bool { v < v }",
     ] {
         let e = check(src);
-        assert!(e.iter().any(|k| matches!(k, TypeErrorKind::Unordered { .. })), "{src}: {e:?}");
+        assert!(
+            e.iter()
+                .any(|k| matches!(k, TypeErrorKind::Unordered { .. })),
+            "{src}: {e:?}"
+        );
         clean(&src.replace(" < ", " == "));
     }
     // A single shape is ordered, aggregates included. (`List`/`Map` need the prelude,
@@ -750,7 +862,11 @@ fn ordering_needs_one_shape_even_when_the_types_match() {
         "fn smaller[T](a: T, b: T) -> bool { a < b }",
     ] {
         let e = check(src);
-        assert!(e.iter().any(|k| matches!(k, TypeErrorKind::Unordered { .. })), "{src}: {e:?}");
+        assert!(
+            e.iter()
+                .any(|k| matches!(k, TypeErrorKind::Unordered { .. })),
+            "{src}: {e:?}"
+        );
     }
 }
 
@@ -769,7 +885,10 @@ fn a_record_literal_rejects_an_extra_field() {
     // Excess-property check: a fresh literal may not carry fields the target does
     // not declare -- that is a typo, not a widening.
     let e = check("fn g(o: { name: str }) {} fn f() { g({ name: \"x\", extra: 9 }); }");
-    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::NoField { .. })), "{e:?}");
+    assert!(
+        e.iter().any(|k| matches!(k, TypeErrorKind::NoField { .. })),
+        "{e:?}"
+    );
 }
 
 #[test]
@@ -781,7 +900,11 @@ fn a_record_literal_may_omit_a_nullable_field() {
 #[test]
 fn a_record_literal_may_not_omit_a_required_field() {
     let e = check("fn g(o: { a: i64, b: i64 }) {} fn f() { g({ a: 1 }); }");
-    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::MissingField(_))), "{e:?}");
+    assert!(
+        e.iter()
+            .any(|k| matches!(k, TypeErrorKind::MissingField(_))),
+        "{e:?}"
+    );
 }
 
 #[test]
@@ -809,7 +932,11 @@ fn a_negated_field_is_not_optional() {
 #[test]
 fn a_record_literal_checks_field_types() {
     let e = check("fn g(o: { a: i64 }) {} fn f() { g({ a: \"s\" }); }");
-    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::FieldTypeMismatch { .. })), "{e:?}");
+    assert!(
+        e.iter()
+            .any(|k| matches!(k, TypeErrorKind::FieldTypeMismatch { .. })),
+        "{e:?}"
+    );
 }
 
 // ---- iteration and indexing ----
@@ -818,7 +945,9 @@ const COLL: &str = "record List[T] {}  record Map[K, V] {}";
 
 #[test]
 fn a_for_loop_binds_the_element_type() {
-    clean(&format!("{COLL} fn f(xs: List[i64]) -> i64 {{ let s = 0; for x in xs {{ s = x; }} s }}"));
+    clean(&format!(
+        "{COLL} fn f(xs: List[i64]) -> i64 {{ let s = 0; for x in xs {{ s = x; }} s }}"
+    ));
     // The bound variable has the element type, so a str body is a mismatch.
     mismatch(&format!(
         "{COLL} fn f(xs: List[i64]) {{ for x in xs {{ let s: str = x; }} }}"
@@ -828,7 +957,10 @@ fn a_for_loop_binds_the_element_type() {
 #[test]
 fn iterating_a_non_collection_is_rejected() {
     let e = check(&format!("{COLL} fn f(n: i64) {{ for x in n {{ }} }}"));
-    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::NotIterable(_))), "{e:?}");
+    assert!(
+        e.iter().any(|k| matches!(k, TypeErrorKind::NotIterable(_))),
+        "{e:?}"
+    );
 }
 
 #[test]
@@ -839,7 +971,9 @@ fn a_list_index_yields_the_element() {
 
 #[test]
 fn a_map_index_is_keyed_and_yields_the_value() {
-    clean(&format!("{COLL} fn f(m: Map[str, i64]) -> i64 {{ m[\"k\"] }}"));
+    clean(&format!(
+        "{COLL} fn f(m: Map[str, i64]) -> i64 {{ m[\"k\"] }}"
+    ));
     // The key must match: a str-keyed map cannot be indexed by i64.
     mismatch(&format!("{COLL} fn f(m: Map[str, i64]) -> i64 {{ m[0] }}"));
 }
@@ -861,7 +995,10 @@ fn a_generic_record_with_two_uses_of_a_variable_must_agree() {
 #[test]
 fn a_generic_record_rejects_an_unknown_field() {
     let e = check("record Box[T] { item: T }  fn f() { let b = Box { item: 1, extra: 2 }; }");
-    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::NoField { .. })), "{e:?}");
+    assert!(
+        e.iter().any(|k| matches!(k, TypeErrorKind::NoField { .. })),
+        "{e:?}"
+    );
 }
 
 // ---- where-clause bounds ----
@@ -875,7 +1012,9 @@ const DISP2: &str = "
 #[test]
 fn a_generic_body_resolves_a_method_through_its_bound() {
     // T is opaque, so no impl applies; to_string resolves via `where T: Display`.
-    clean(&format!("{DISP2} fn show[T](v: T) -> str where T: Display {{ to_string(v) }}"));
+    clean(&format!(
+        "{DISP2} fn show[T](v: T) -> str where T: Display {{ to_string(v) }}"
+    ));
 }
 
 #[test]
@@ -890,7 +1029,11 @@ fn a_bound_is_discharged_at_the_call_site() {
          fn show[T](v: T) -> str where T: Display {{ to_string(v) }}
          fn f() -> str {{ show(Plain {{ n: 1 }}) }}"
     ));
-    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::UnsatisfiedBound { .. })), "{e:?}");
+    assert!(
+        e.iter()
+            .any(|k| matches!(k, TypeErrorKind::UnsatisfiedBound { .. })),
+        "{e:?}"
+    );
 }
 
 // ---- bound required, impl completeness, supertrait bounds ----
@@ -898,8 +1041,14 @@ fn a_bound_is_discharged_at_the_call_site() {
 #[test]
 fn a_rigid_method_call_requires_a_declared_bound() {
     // No `where T: Display`, so to_string(v) on a rigid T cannot resolve.
-    let e = check(&format!("{DISP2} fn show[T](v: T) -> str {{ to_string(v) }}"));
-    assert!(e.iter().any(|k| matches!(k, TypeErrorKind::UnsatisfiedBound { .. })), "{e:?}");
+    let e = check(&format!(
+        "{DISP2} fn show[T](v: T) -> str {{ to_string(v) }}"
+    ));
+    assert!(
+        e.iter()
+            .any(|k| matches!(k, TypeErrorKind::UnsatisfiedBound { .. })),
+        "{e:?}"
+    );
 }
 
 #[test]
@@ -912,7 +1061,9 @@ fn an_impl_must_provide_every_required_method() {
     );
     let env = Env::build(&m);
     assert!(
-        env.errors().iter().any(|e| matches!(e.kind, TypeErrorKind::ImplMissingMethod { .. })),
+        env.errors()
+            .iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::ImplMissingMethod { .. })),
         "{:?}",
         env.errors()
     );
@@ -942,7 +1093,11 @@ fn defs(src: &str) -> Vec<(String, super::result::DefSite)> {
     let mut m = parse(src);
     crate::ast::number_exprs(&mut m);
     let mut env = Env::build(&m);
-    assert!(env.errors().is_empty(), "the fixture's declarations do not check: {:?}", env.errors());
+    assert!(
+        env.errors().is_empty(),
+        "the fixture's declarations do not check: {:?}",
+        env.errors()
+    );
     let (r, errs) = check_module(&mut env, &m);
     assert!(errs.is_empty(), "expected no errors, got {errs:?}");
 
@@ -996,13 +1151,20 @@ fn the_inner_binding_wins() {
     let src = "fn main() { let x = 1; { let x = 2; let y = x; } }";
     let d = defs(src);
     let (_, site) = d.iter().find(|(n, _)| n == "x").expect("`x` resolved");
-    assert_eq!(site.span.start, src.find("x = 2").expect("the inner binding is in the fixture"));
+    assert_eq!(
+        site.span.start,
+        src.find("x = 2")
+            .expect("the inner binding is in the fixture")
+    );
 }
 
 #[test]
 fn a_call_resolves_to_the_function_it_names() {
     let d = defs("fn helper() -> i64 { 1 }\nfn main() { let n = helper(); }");
-    let (_, site) = d.iter().find(|(n, _)| n == "helper").expect("`helper` resolved");
+    let (_, site) = d
+        .iter()
+        .find(|(n, _)| n == "helper")
+        .expect("`helper` resolved");
     assert_eq!(site.kind, super::result::DefKind::Fn);
 }
 
@@ -1025,5 +1187,7 @@ fn an_unresolved_name_records_nothing() {
     let mut env = Env::build(&m);
     let (r, errs) = check_module(&mut env, &m);
     assert!(!errs.is_empty(), "the fixture is supposed to fail");
-    assert!(r.defs().all(|(_, d)| d.kind != super::result::DefKind::Local));
+    assert!(r
+        .defs()
+        .all(|(_, d)| d.kind != super::result::DefKind::Local));
 }

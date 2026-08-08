@@ -21,7 +21,11 @@ fn tree(src: &str) -> Module {
 #[track_caller]
 fn check(src: &str) -> String {
     let once = fmt(src);
-    assert_eq!(tree(src), tree(&once), "round-trip changed the tree:\n{once}");
+    assert_eq!(
+        tree(src),
+        tree(&once),
+        "round-trip changed the tree:\n{once}"
+    );
     assert_eq!(once, fmt(&once), "not idempotent:\n{once}");
     for c in comments(src) {
         assert!(once.contains(&c), "comment lost: {c:?}\n{once}");
@@ -53,26 +57,64 @@ fn pin(src: &str, want: &str) {
 
 #[test]
 fn parentheses_that_carry_meaning_survive() {
-    pin("fn f() { let x = 1 - (2 - 3); }\n", "fn f() { let x = 1 - (2 - 3); }\n");
-    pin("fn f() { let x = (1 - 2) - 3; }\n", "fn f() { let x = 1 - 2 - 3; }\n");
-    pin("fn f() { let x = (a + b) * c; }\n", "fn f() { let x = (a + b) * c; }\n");
-    pin("fn f() { let x = a + b * c; }\n", "fn f() { let x = a + b * c; }\n");
-    pin("fn f() { let x = (a or b) and c; }\n", "fn f() { let x = (a or b) and c; }\n");
-    pin("fn f() { let x = a or b and c; }\n", "fn f() { let x = a or b and c; }\n");
-    pin("fn f() { let x = (1 bsl 2) bsl 3; }\n", "fn f() { let x = 1 bsl 2 bsl 3; }\n");
-    pin("fn f() { let x = 1 bsl (2 bsl 3); }\n", "fn f() { let x = 1 bsl (2 bsl 3); }\n");
+    pin(
+        "fn f() { let x = 1 - (2 - 3); }\n",
+        "fn f() { let x = 1 - (2 - 3); }\n",
+    );
+    pin(
+        "fn f() { let x = (1 - 2) - 3; }\n",
+        "fn f() { let x = 1 - 2 - 3; }\n",
+    );
+    pin(
+        "fn f() { let x = (a + b) * c; }\n",
+        "fn f() { let x = (a + b) * c; }\n",
+    );
+    pin(
+        "fn f() { let x = a + b * c; }\n",
+        "fn f() { let x = a + b * c; }\n",
+    );
+    pin(
+        "fn f() { let x = (a or b) and c; }\n",
+        "fn f() { let x = (a or b) and c; }\n",
+    );
+    pin(
+        "fn f() { let x = a or b and c; }\n",
+        "fn f() { let x = a or b and c; }\n",
+    );
+    pin(
+        "fn f() { let x = (1 bsl 2) bsl 3; }\n",
+        "fn f() { let x = 1 bsl 2 bsl 3; }\n",
+    );
+    pin(
+        "fn f() { let x = 1 bsl (2 bsl 3); }\n",
+        "fn f() { let x = 1 bsl (2 bsl 3); }\n",
+    );
     // `|>` binds tighter than comparison, so this needs no parentheses.
-    pin("fn f() { let x = (x |> g()) == 3; }\n", "fn f() { let x = x |> g() == 3; }\n");
-    pin("fn f() { let x = x |> (g() == 3); }\n", "fn f() { let x = x |> (g() == 3); }\n");
-    pin("fn f() { let x = a orelse b orelse c; }\n", "fn f() { let x = a orelse b orelse c; }\n");
-    pin("fn f() { let x = a orelse (b orelse c); }\n", "fn f() { let x = a orelse (b orelse c); }\n");
+    pin(
+        "fn f() { let x = (x |> g()) == 3; }\n",
+        "fn f() { let x = x |> g() == 3; }\n",
+    );
+    pin(
+        "fn f() { let x = x |> (g() == 3); }\n",
+        "fn f() { let x = x |> (g() == 3); }\n",
+    );
+    pin(
+        "fn f() { let x = a orelse b orelse c; }\n",
+        "fn f() { let x = a orelse b orelse c; }\n",
+    );
+    pin(
+        "fn f() { let x = a orelse (b orelse c); }\n",
+        "fn f() { let x = a orelse (b orelse c); }\n",
+    );
 }
 
 /// Every pair of levels, both nestings. Reparsing the output has to give the
 /// tree back, which is what `check` asserts.
 #[test]
 fn every_level_against_every_other() {
-    let ops = ["orelse", "or", "and", "==", "|>", "bor", "bxor", "band", "bsl", "+", "*"];
+    let ops = [
+        "orelse", "or", "and", "==", "|>", "bor", "bxor", "band", "bsl", "+", "*",
+    ];
     for a in ops {
         for b in ops {
             check(&format!("fn f() {{ let x = p {a} (q {b} r); }}\n"));
@@ -88,10 +130,19 @@ fn postfix_binds_tighter_than_unary() {
     pin("fn f() { let a = -x.f; }\n", "fn f() { let a = -x.f; }\n");
     pin("fn f() { let a = -(x.f); }\n", "fn f() { let a = -x.f; }\n");
     pin("fn f() { let a = !g(x); }\n", "fn f() { let a = !g(x); }\n");
-    pin("fn f() { let a = !(g(x)); }\n", "fn f() { let a = !g(x); }\n");
-    pin("fn f() { let a = bnot x[0]; }\n", "fn f() { let a = bnot x[0]; }\n");
+    pin(
+        "fn f() { let a = !(g(x)); }\n",
+        "fn f() { let a = !g(x); }\n",
+    );
+    pin(
+        "fn f() { let a = bnot x[0]; }\n",
+        "fn f() { let a = bnot x[0]; }\n",
+    );
     // The other reading is the one that now needs parentheses.
-    pin("fn f() { let a = (-x).f; }\n", "fn f() { let a = (-x).f; }\n");
+    pin(
+        "fn f() { let a = (-x).f; }\n",
+        "fn f() { let a = (-x).f; }\n",
+    );
     pin("fn f() { let a = --x; }\n", "fn f() { let a = -(-x); }\n");
     pin("fn f() { let a = -(-5); }\n", "fn f() { let a = -(-5); }\n");
 }
@@ -100,9 +151,18 @@ fn postfix_binds_tighter_than_unary() {
 /// parentheses anywhere but at the loosest position.
 #[test]
 fn greedy_forms_get_parenthesised() {
-    pin("fn f() { let a = (return 1) + 2; }\n", "fn f() { let a = (return 1) + 2; }\n");
-    pin("fn f() { let a = (break) - 1; }\n", "fn f() { let a = (break) - 1; }\n");
-    pin("fn f() { let a = ((x) => x) (1); }\n", "fn f() { let a = ((x) => x)(1); }\n");
+    pin(
+        "fn f() { let a = (return 1) + 2; }\n",
+        "fn f() { let a = (return 1) + 2; }\n",
+    );
+    pin(
+        "fn f() { let a = (break) - 1; }\n",
+        "fn f() { let a = (break) - 1; }\n",
+    );
+    pin(
+        "fn f() { let a = ((x) => x) (1); }\n",
+        "fn f() { let a = ((x) => x)(1); }\n",
+    );
 }
 
 /// `try` is NOT one of them: its body is the unary-level parser, so it binds
@@ -111,8 +171,14 @@ fn greedy_forms_get_parenthesised() {
 fn try_is_not_greedy() {
     // The documented easy path, which must need no parentheses to mean what it
     // says: `(try? get(m, k)) orelse 30`.
-    pin("fn f() { let a = try g() orelse 3; }\n", "fn f() { let a = try g() orelse 3; }\n");
-    pin("fn f() { let a = (try g()) orelse 3; }\n", "fn f() { let a = try g() orelse 3; }\n");
+    pin(
+        "fn f() { let a = try g() orelse 3; }\n",
+        "fn f() { let a = try g() orelse 3; }\n",
+    );
+    pin(
+        "fn f() { let a = (try g()) orelse 3; }\n",
+        "fn f() { let a = try g() orelse 3; }\n",
+    );
     pin(
         "fn f() { let a = try? get(m, k) orelse 30; }\n",
         "fn f() { let a = try? get(m, k) orelse 30; }\n",
@@ -188,7 +254,10 @@ record P {
 
 #[test]
 fn a_comment_in_an_empty_block_is_not_dropped() {
-    pin("fn f() {\n    // nothing yet\n}\n", "fn f() {\n    // nothing yet\n}\n");
+    pin(
+        "fn f() {\n    // nothing yet\n}\n",
+        "fn f() {\n    // nothing yet\n}\n",
+    );
 }
 
 #[test]
@@ -280,7 +349,10 @@ fn literals_keep_the_spelling_the_author_chose() {
         "fn f() { let a = 0xff; let b = 1_000_000; let c = 0b1010; let d = 1.50; let e = 1e0; }\n",
         "fn f() { let a = 0xff; let b = 1_000_000; let c = 0b1010; let d = 1.50; let e = 1e0; }\n",
     );
-    pin("fn f() { let a = 1_000.5; }\n", "fn f() { let a = 1_000.5; }\n");
+    pin(
+        "fn f() { let a = 1_000.5; }\n",
+        "fn f() { let a = 1_000.5; }\n",
+    );
     pin(
         r#"fn f() { let a = "\u{41}\x42"; let b = '\u{43}'; let c = "\t"; }
 "#,
@@ -315,7 +387,10 @@ fn block_like_operands_keep_their_parentheses() {
         "fn f() { let a = if c { 1 } else { 2 }; }\n",
         "fn f() { let a = if c { 1 } else { 2 }; }\n",
     );
-    pin("fn f() { g(if c { 1 } else { 2 }); }\n", "fn f() { g(if c { 1 } else { 2 }); }\n");
+    pin(
+        "fn f() { g(if c { 1 } else { 2 }); }\n",
+        "fn f() { g(if c { 1 } else { 2 }); }\n",
+    );
 }
 
 #[test]
@@ -368,8 +443,14 @@ fn type_operators_keep_their_grouping() {
     pin("type D = !X & Y\n", "type D = !X & Y\n");
     // A function type reads its return to the end, so a union of one needs
     // brackets.
-    pin("type E = ((i64) -> str) | null\n", "type E = ((i64) -> str) | null\n");
-    pin("type F = (i64) -> str | null\n", "type F = (i64) -> str | null\n");
+    pin(
+        "type E = ((i64) -> str) | null\n",
+        "type E = ((i64) -> str) | null\n",
+    );
+    pin(
+        "type F = (i64) -> str | null\n",
+        "type F = (i64) -> str | null\n",
+    );
 }
 
 #[test]
@@ -394,7 +475,10 @@ fn declarations_of_every_shape() {
         "@derive(Display,Eq) record P { x: i64 }\n",
         "@derive(Display, Eq) record P { x: i64 }\n",
     );
-    pin("@native(\"a\\tb\") fn t(){}\n", "@native(\"a\\tb\") fn t() {}\n");
+    pin(
+        "@native(\"a\\tb\") fn t(){}\n",
+        "@native(\"a\\tb\") fn t() {}\n",
+    );
     // Annotations survive on a protocol, impl and mod, not just fn and record.
     pin(
         "@doc(\"a\") protocol P for T { fn a(v: T) -> i64 }\n",
@@ -616,7 +700,10 @@ fn a_thrown_arrow_keeps_its_parentheses() {
 
 #[test]
 fn a_thrown_type_that_needs_no_parentheses_gets_none() {
-    assert_eq!(check("fn f() throws str -> i64 { 0 }"), "fn f() throws str -> i64 { 0 }\n");
+    assert_eq!(
+        check("fn f() throws str -> i64 { 0 }"),
+        "fn f() throws str -> i64 { 0 }\n"
+    );
     // A union sits at the throws level, so it needs no grouping either.
     assert_eq!(
         check("fn f() throws :err | :other -> i64 { 0 }"),
@@ -628,5 +715,8 @@ fn a_thrown_type_that_needs_no_parentheses_gets_none() {
 fn a_parenthesised_thrown_type_loses_redundant_parentheses() {
     // `(str)` is a grouping, not a tuple, so the parser never built a node for it
     // and the formatter has nothing to print. The tree is what round-trips.
-    assert_eq!(check("fn f() throws (str) -> i64 { 0 }"), "fn f() throws str -> i64 { 0 }\n");
+    assert_eq!(
+        check("fn f() throws (str) -> i64 { 0 }"),
+        "fn f() throws str -> i64 { 0 }\n"
+    );
 }

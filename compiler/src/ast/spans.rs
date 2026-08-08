@@ -151,7 +151,11 @@ fn ty(t: &mut TypeSpec) {
             }
         }
         TypeSpecKind::Negate(t) => ty(t),
-        TypeSpecKind::Fn { params, throws, ret } => {
+        TypeSpecKind::Fn {
+            params,
+            throws,
+            ret,
+        } => {
             for p in params {
                 ty(p);
             }
@@ -229,7 +233,11 @@ fn expr(e: &mut Expr) {
             expr(lhs);
             expr(rhs);
         }
-        ExprKind::Call { callee, generics, args } => {
+        ExprKind::Call {
+            callee,
+            generics,
+            args,
+        } => {
             expr(callee);
             for g in generics {
                 ty(g);

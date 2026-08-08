@@ -57,7 +57,9 @@ impl Config {
     /// condition that flipped mid-pass would drop one of two mutually exclusive branches
     /// and keep neither.
     pub fn with(keys: impl IntoIterator<Item = String>) -> Self {
-        Config { keys: keys.into_iter().collect() }
+        Config {
+            keys: keys.into_iter().collect(),
+        }
     }
 
     /// The keys for a build on this machine, plus any `extra` the caller adds.
@@ -129,7 +131,10 @@ struct Context<'a> {
 
 impl Context<'_> {
     fn error(&mut self, span: Span, message: impl Into<String>) {
-        self.errors.push(Error { span, message: message.into() });
+        self.errors.push(Error {
+            span,
+            message: message.into(),
+        });
     }
 }
 
@@ -166,7 +171,11 @@ fn lookup(name: &str) -> Option<&'static dyn Processor> {
 pub fn expand(module: Module, config: &Config) -> (Module, Meta, Vec<Error>) {
     let mut meta = Meta::default();
     let mut errors = Vec::new();
-    let mut cx = Context { config, meta: &mut meta, errors: &mut errors };
+    let mut cx = Context {
+        config,
+        meta: &mut meta,
+        errors: &mut errors,
+    };
     let decls = expand_decls(module.decls, &mut cx);
     let mut module = Module { decls };
 
@@ -231,15 +240,24 @@ fn expand_decl(decl: Decl, cx: &mut Context) -> Option<Decl> {
     Some(match decl.kind {
         DeclKind::Mod(mut m) => {
             m.decls = expand_decls(m.decls, cx);
-            Decl { kind: DeclKind::Mod(m), ..decl }
+            Decl {
+                kind: DeclKind::Mod(m),
+                ..decl
+            }
         }
         DeclKind::Protocol(mut p) => {
             p.methods = expand_methods(p.methods, cx);
-            Decl { kind: DeclKind::Protocol(p), ..decl }
+            Decl {
+                kind: DeclKind::Protocol(p),
+                ..decl
+            }
         }
         DeclKind::Impl(mut i) => {
             i.methods = expand_methods(i.methods, cx);
-            Decl { kind: DeclKind::Impl(i), ..decl }
+            Decl {
+                kind: DeclKind::Impl(i),
+                ..decl
+            }
         }
         _ => decl,
     })
@@ -270,7 +288,10 @@ fn run(anns: &[Annotation], target: &Target, cx: &mut Context) -> Decision {
                     decision = Decision::Omit;
                 }
             }
-            None => cx.error(ann.span.clone(), format!("unknown annotation `@{}`", ann.name)),
+            None => cx.error(
+                ann.span.clone(),
+                format!("unknown annotation `@{}`", ann.name),
+            ),
         }
     }
     decision
@@ -285,12 +306,23 @@ fn run(anns: &[Annotation], target: &Target, cx: &mut Context) -> Decision {
 /// Every wrong shape lands here — no argument, an unquoted name, two arguments — because the
 /// author's mistake is the same one either way and splitting it into three near-identical
 /// messages buys nothing.
-fn one_str<'a>(ann: &'a Annotation, cx: &mut Context, what: &str, example: &str) -> Option<&'a str> {
+fn one_str<'a>(
+    ann: &'a Annotation,
+    cx: &mut Context,
+    what: &str,
+    example: &str,
+) -> Option<&'a str> {
     match ann.only_str() {
         Some(s) => Some(s),
         None => {
-            let span = ann.args.first().map_or_else(|| ann.span.clone(), |a| a.span().clone());
-            cx.error(span, format!("`@{}` needs {what} in quotes, e.g. `{example}`", ann.name));
+            let span = ann
+                .args
+                .first()
+                .map_or_else(|| ann.span.clone(), |a| a.span().clone());
+            cx.error(
+                span,
+                format!("`@{}` needs {what} in quotes, e.g. `{example}`", ann.name),
+            );
             None
         }
     }
@@ -300,7 +332,10 @@ fn one_str<'a>(ann: &'a Annotation, cx: &mut Context, what: &str, example: &str)
 /// delete.
 fn no_args(ann: &Annotation, cx: &mut Context) {
     if let Some(a) = ann.args.first() {
-        cx.error(a.span().clone(), format!("`@{}` takes no argument", ann.name));
+        cx.error(
+            a.span().clone(),
+            format!("`@{}` takes no argument", ann.name),
+        );
     }
 }
 
@@ -315,7 +350,10 @@ impl Processor for Native {
             Target::Fn(f) => {
                 one_str(ann, cx, "the runtime symbol", "@native(\"neon_str_len\")");
                 if f.body.is_some() {
-                    cx.error(ann.span.clone(), "`@native` fn must have no body: its body is the runtime symbol");
+                    cx.error(
+                        ann.span.clone(),
+                        "`@native` fn must have no body: its body is the runtime symbol",
+                    );
                 }
             }
             other => cx.error(
@@ -354,7 +392,10 @@ impl Processor for Runtime {
             }
             other => cx.error(
                 ann.span.clone(),
-                format!("`@runtime` is only for a `record`, not a `{}`", other.what()),
+                format!(
+                    "`@runtime` is only for a `record`, not a `{}`",
+                    other.what()
+                ),
             ),
         }
         Decision::Keep
@@ -470,7 +511,10 @@ impl Processor for Derive {
         }
         for arg in &ann.args {
             let Some(path) = arg.name() else {
-                cx.error(arg.span().clone(), "`@derive` names a protocol, e.g. `@derive(Display)`");
+                cx.error(
+                    arg.span().clone(),
+                    "`@derive` names a protocol, e.g. `@derive(Display)`",
+                );
                 continue;
             };
             if !crate::derive::can_derive(path) {
@@ -563,7 +607,10 @@ fn eval_cfg(cond: &AnnArg, config: &Config) -> Result<bool, (Span, String)> {
     // is a flat set -- so it is a mistake rather than a key that happens never to be set.
     let [key] = path.as_slice() else {
         let p = path.join("::");
-        return Err((span.clone(), format!("`{p}` is a path; a condition key is one name")));
+        return Err((
+            span.clone(),
+            format!("`{p}` is a path; a condition key is one name"),
+        ));
     };
     match key.as_str() {
         "not" => match args.as_slice() {
@@ -575,7 +622,10 @@ fn eval_cfg(cond: &AnnArg, config: &Config) -> Result<bool, (Span, String)> {
         // answering it keeps code that was meant to be conditional.
         "all" | "any" => {
             if args.is_empty() {
-                return Err((span.clone(), format!("`{key}` needs at least one condition")));
+                return Err((
+                    span.clone(),
+                    format!("`{key}` needs at least one condition"),
+                ));
             }
             let all = key == "all";
             let mut acc = all;

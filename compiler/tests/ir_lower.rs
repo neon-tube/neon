@@ -37,7 +37,11 @@ fn collect_neon(root: &Path, dir: &Path, out: &mut Vec<(String, String)>) {
         if path.is_dir() {
             collect_neon(root, &path, out);
         } else if path.extension().is_some_and(|e| e == "neon") {
-            let rel = path.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
+            let rel = path
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
             out.push((rel, std::fs::read_to_string(&path).expect("readable")));
         }
     }
@@ -59,8 +63,12 @@ fn lowered_corpus() -> Vec<(String, Program, neon_compiler::typecheck::types::Ty
     let std_sources = stdlib_sources();
     let mut out = Vec::new();
     for rel in expected_pass() {
-        let Ok(src) = std::fs::read_to_string(lang_root().join(&rel)) else { continue };
-        let Ok(tokens) = lexer::lex(&src) else { continue };
+        let Ok(src) = std::fs::read_to_string(lang_root().join(&rel)) else {
+            continue;
+        };
+        let Ok(tokens) = lexer::lex(&src) else {
+            continue;
+        };
         let (module, perrs) = parser::parse(&tokens, src.len());
         if !perrs.is_empty() {
             continue;
@@ -124,8 +132,14 @@ fn lower_the_corpus_and_report_gaps() {
     for (what, n) in sorted {
         eprintln!("  {n:>5}  {what}");
     }
-    assert!(files > 100, "expected to lower most of the corpus, got {files}");
-    assert_eq!(clean, files, "every checkable corpus program should lower fully");
+    assert!(
+        files > 100,
+        "expected to lower most of the corpus, got {files}"
+    );
+    assert_eq!(
+        clean, files,
+        "every checkable corpus program should lower fully"
+    );
 }
 
 /// Every repr a lowered function carries, with a label saying where it lives. Values,
@@ -146,7 +160,10 @@ fn func_reprs(f: &Func) -> Vec<(String, &Repr)> {
     }
     for b in &f.blocks {
         for inst in &b.insts {
-            if let Op::IsVariant { tested: Some(t), .. } = &inst.op {
+            if let Op::IsVariant {
+                tested: Some(t), ..
+            } = &inst.op
+            {
                 out.push(("IsVariant::tested".into(), t));
             }
         }
@@ -180,12 +197,20 @@ fn any_never_appears_unless_the_source_type_is_any() {
         }
     }
 
-    assert!(checked > 100, "expected to lower most of the corpus, got {checked}");
+    assert!(
+        checked > 100,
+        "expected to lower most of the corpus, got {checked}"
+    );
     assert!(
         offenders.is_empty(),
         "the compiler invented `any` for {} value(s) whose source type is not `any`:\n  {}",
         offenders.len(),
-        offenders.iter().take(20).cloned().collect::<Vec<_>>().join("\n  "),
+        offenders
+            .iter()
+            .take(20)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n  "),
     );
 }
 
@@ -229,13 +254,21 @@ fn no_type_variable_survives_lowering() {
         }
     }
 
-    assert!(checked > 100, "expected to lower most of the corpus, got {checked}");
+    assert!(
+        checked > 100,
+        "expected to lower most of the corpus, got {checked}"
+    );
     assert!(
         offenders.is_empty(),
         "{} repr position(s) kept an unsubstituted type variable, which codegen boxes \
          as `neon_value`:\n  {}",
         offenders.len(),
-        offenders.iter().take(20).cloned().collect::<Vec<_>>().join("\n  "),
+        offenders
+            .iter()
+            .take(20)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n  "),
     );
 }
 
@@ -250,7 +283,11 @@ fn unsubstituted_var(r: &Repr) -> Option<String> {
         Repr::Tuple(rs) | Repr::Union(rs) => rs.iter().find_map(unsubstituted_var),
         Repr::Runtime { args, .. } => args.iter().find_map(unsubstituted_var),
         Repr::Record { fields, .. } => fields.iter().find_map(|(_, r)| unsubstituted_var(r)),
-        Repr::Closure { params, throws, ret } => params
+        Repr::Closure {
+            params,
+            throws,
+            ret,
+        } => params
             .iter()
             .find_map(unsubstituted_var)
             .or_else(|| unsubstituted_var(throws))
@@ -278,20 +315,20 @@ fn block_arguments_are_assignable_to_their_parameters() {
                 .iter()
                 .map(|b| (b.id, b.params.iter().map(|&p| f.value_repr(p)).collect()))
                 .collect();
-            let mut check_target = |t: &neon_compiler::ir::ssa::Target,
-                                    offenders: &mut Vec<String>| {
-                let Some(ps) = params.get(&t.to) else { return };
-                for (i, (&arg, &want)) in t.args.iter().zip(ps.iter()).enumerate() {
-                    checked_edges += 1;
-                    let got = f.value_repr(arg);
-                    if !got.assignable(want) {
-                        offenders.push(format!(
-                            "{rel}: {} -> block{} arg {i}: {got:?} not assignable to {want:?}",
-                            f.name, t.to.0
-                        ));
+            let mut check_target =
+                |t: &neon_compiler::ir::ssa::Target, offenders: &mut Vec<String>| {
+                    let Some(ps) = params.get(&t.to) else { return };
+                    for (i, (&arg, &want)) in t.args.iter().zip(ps.iter()).enumerate() {
+                        checked_edges += 1;
+                        let got = f.value_repr(arg);
+                        if !got.assignable(want) {
+                            offenders.push(format!(
+                                "{rel}: {} -> block{} arg {i}: {got:?} not assignable to {want:?}",
+                                f.name, t.to.0
+                            ));
+                        }
                     }
-                }
-            };
+                };
             for b in &f.blocks {
                 match &b.term {
                     Term::Jump(t) => check_target(t, &mut offenders),
@@ -311,11 +348,19 @@ fn block_arguments_are_assignable_to_their_parameters() {
         }
     }
 
-    assert!(checked_edges > 5000, "expected thousands of edges, got {checked_edges}");
+    assert!(
+        checked_edges > 5000,
+        "expected thousands of edges, got {checked_edges}"
+    );
     assert!(
         offenders.is_empty(),
         "{} block argument(s) violate the assignable relation:\n  {}",
         offenders.len(),
-        offenders.iter().take(20).cloned().collect::<Vec<_>>().join("\n  "),
+        offenders
+            .iter()
+            .take(20)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n  "),
     );
 }

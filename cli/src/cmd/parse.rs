@@ -13,14 +13,20 @@ pub fn run(file: &OsString) -> Result<()> {
     let tokens = match lexer::lex(&src) {
         Ok(t) => t,
         Err(errors) => {
-            report(&mut r, errors.iter().map(|e| (e.span.clone(), e.to_string())));
+            report(
+                &mut r,
+                errors.iter().map(|e| (e.span.clone(), e.to_string())),
+            );
             std::process::exit(1);
         }
     };
 
     let (module, errors) = parser::parse(&tokens, src.len());
     if !errors.is_empty() {
-        report(&mut r, errors.iter().map(|e| (e.span.clone(), e.to_string())));
+        report(
+            &mut r,
+            errors.iter().map(|e| (e.span.clone(), e.to_string())),
+        );
         std::process::exit(1);
     }
     println!("{:#?}", module.expect("no errors means a module"));

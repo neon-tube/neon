@@ -44,10 +44,15 @@ use unicode_normalization::UnicodeNormalization;
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Mode {
     Code,
-    Str { open: usize },
+    Str {
+        open: usize,
+    },
     /// Inside `#{ ... }`, counting braces so a record literal in a hole
     /// (`#{Point { x: 1 }}`) finds its own `}` before the hole's.
-    Interp { open: usize, depth: usize },
+    Interp {
+        open: usize,
+        depth: usize,
+    },
 }
 
 /// Tokens only. The parser wants nothing else.
@@ -118,7 +123,11 @@ impl<'a> Lexer<'a> {
                 .filter(|(_, b)| *b == b'\n')
                 .map(|(i, _)| i + 1),
         );
-        Ok(Lexed { tokens: self.out, trivia: self.trivia, line_starts })
+        Ok(Lexed {
+            tokens: self.out,
+            trivia: self.trivia,
+            line_starts,
+        })
     }
 
     /// Report whatever was still open at EOF, blaming the right thing.
@@ -176,7 +185,10 @@ impl<'a> Lexer<'a> {
     }
 
     fn push(&mut self, token: Token, start: usize) {
-        self.out.push(Spanned { token, span: start..self.pos });
+        self.out.push(Spanned {
+            token,
+            span: start..self.pos,
+        });
     }
 
     fn err(&mut self, kind: LexErrorKind, span: Span) {
@@ -240,7 +252,11 @@ impl<'a> Lexer<'a> {
                         self.pos += 1;
                     }
                     self.trivia.push(Trivia {
-                        kind: if doc { TriviaKind::Doc } else { TriviaKind::Line },
+                        kind: if doc {
+                            TriviaKind::Doc
+                        } else {
+                            TriviaKind::Line
+                        },
                         span: start..self.pos,
                         text: self.text[text_start..self.pos].to_string(),
                     });
@@ -446,7 +462,10 @@ impl<'a> Lexer<'a> {
             b']' => Token::RBracket,
             b'{' => {
                 if let Mode::Interp { open, depth } = self.mode() {
-                    *self.modes.last_mut().expect("mode") = Mode::Interp { open, depth: depth + 1 };
+                    *self.modes.last_mut().expect("mode") = Mode::Interp {
+                        open,
+                        depth: depth + 1,
+                    };
                 }
                 Token::LBrace
             }
@@ -459,7 +478,10 @@ impl<'a> Lexer<'a> {
                         return;
                     }
                     Mode::Interp { open, depth } => {
-                        *self.modes.last_mut().expect("mode") = Mode::Interp { open, depth: depth - 1 };
+                        *self.modes.last_mut().expect("mode") = Mode::Interp {
+                            open,
+                            depth: depth - 1,
+                        };
                     }
                     _ => {}
                 }

@@ -22,26 +22,106 @@ pub struct BinOpInfo {
 /// Loosest first. `and` binds tighter than `or`; `|>` binds tighter than
 /// comparison, because a pipe is a call and calls bind tighter than comparison.
 pub const BINARY_OPS: &[BinOpInfo] = &[
-    BinOpInfo { op: BinOp::Orelse, prec: 1, text: "orelse" },
-    BinOpInfo { op: BinOp::Or, prec: 2, text: "or" },
-    BinOpInfo { op: BinOp::And, prec: 3, text: "and" },
-    BinOpInfo { op: BinOp::Eq, prec: 4, text: "==" },
-    BinOpInfo { op: BinOp::Ne, prec: 4, text: "!=" },
-    BinOpInfo { op: BinOp::Le, prec: 4, text: "<=" },
-    BinOpInfo { op: BinOp::Ge, prec: 4, text: ">=" },
-    BinOpInfo { op: BinOp::Lt, prec: 4, text: "<" },
-    BinOpInfo { op: BinOp::Gt, prec: 4, text: ">" },
-    BinOpInfo { op: BinOp::Pipe, prec: 5, text: "|>" },
-    BinOpInfo { op: BinOp::Bor, prec: 6, text: "bor" },
-    BinOpInfo { op: BinOp::Bxor, prec: 7, text: "bxor" },
-    BinOpInfo { op: BinOp::Band, prec: 8, text: "band" },
-    BinOpInfo { op: BinOp::Bsl, prec: 9, text: "bsl" },
-    BinOpInfo { op: BinOp::Bsr, prec: 9, text: "bsr" },
-    BinOpInfo { op: BinOp::Add, prec: 10, text: "+" },
-    BinOpInfo { op: BinOp::Sub, prec: 10, text: "-" },
-    BinOpInfo { op: BinOp::Mul, prec: 11, text: "*" },
-    BinOpInfo { op: BinOp::Div, prec: 11, text: "/" },
-    BinOpInfo { op: BinOp::Rem, prec: 11, text: "%" },
+    BinOpInfo {
+        op: BinOp::Orelse,
+        prec: 1,
+        text: "orelse",
+    },
+    BinOpInfo {
+        op: BinOp::Or,
+        prec: 2,
+        text: "or",
+    },
+    BinOpInfo {
+        op: BinOp::And,
+        prec: 3,
+        text: "and",
+    },
+    BinOpInfo {
+        op: BinOp::Eq,
+        prec: 4,
+        text: "==",
+    },
+    BinOpInfo {
+        op: BinOp::Ne,
+        prec: 4,
+        text: "!=",
+    },
+    BinOpInfo {
+        op: BinOp::Le,
+        prec: 4,
+        text: "<=",
+    },
+    BinOpInfo {
+        op: BinOp::Ge,
+        prec: 4,
+        text: ">=",
+    },
+    BinOpInfo {
+        op: BinOp::Lt,
+        prec: 4,
+        text: "<",
+    },
+    BinOpInfo {
+        op: BinOp::Gt,
+        prec: 4,
+        text: ">",
+    },
+    BinOpInfo {
+        op: BinOp::Pipe,
+        prec: 5,
+        text: "|>",
+    },
+    BinOpInfo {
+        op: BinOp::Bor,
+        prec: 6,
+        text: "bor",
+    },
+    BinOpInfo {
+        op: BinOp::Bxor,
+        prec: 7,
+        text: "bxor",
+    },
+    BinOpInfo {
+        op: BinOp::Band,
+        prec: 8,
+        text: "band",
+    },
+    BinOpInfo {
+        op: BinOp::Bsl,
+        prec: 9,
+        text: "bsl",
+    },
+    BinOpInfo {
+        op: BinOp::Bsr,
+        prec: 9,
+        text: "bsr",
+    },
+    BinOpInfo {
+        op: BinOp::Add,
+        prec: 10,
+        text: "+",
+    },
+    BinOpInfo {
+        op: BinOp::Sub,
+        prec: 10,
+        text: "-",
+    },
+    BinOpInfo {
+        op: BinOp::Mul,
+        prec: 11,
+        text: "*",
+    },
+    BinOpInfo {
+        op: BinOp::Div,
+        prec: 11,
+        text: "/",
+    },
+    BinOpInfo {
+        op: BinOp::Rem,
+        prec: 11,
+        text: "%",
+    },
 ];
 
 /// The loosest binary level.
@@ -153,7 +233,11 @@ mod tests {
     fn table_covers_every_operator() {
         assert_eq!(ALL.len(), BINARY_OPS.len());
         for op in ALL {
-            assert_eq!(BINARY_OPS.iter().filter(|i| i.op == *op).count(), 1, "{op:?}");
+            assert_eq!(
+                BINARY_OPS.iter().filter(|i| i.op == *op).count(),
+                1,
+                "{op:?}"
+            );
         }
     }
 
@@ -169,7 +253,9 @@ mod tests {
         for prec in MIN_PREC..=MAX_PREC {
             assert!(ops_at(prec).next().is_some(), "level {prec} is empty");
         }
-        assert!(BINARY_OPS.iter().all(|i| (MIN_PREC..=MAX_PREC).contains(&i.prec)));
+        assert!(BINARY_OPS
+            .iter()
+            .all(|i| (MIN_PREC..=MAX_PREC).contains(&i.prec)));
     }
 
     /// The ladder documented in decisions.md.

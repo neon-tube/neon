@@ -139,9 +139,8 @@ pub fn parse(tokens: &[Spanned], eoi: usize) -> (Option<Module>, Vec<ParseError>
         // The other direction would be unsound and is not done: nothing is ever
         // transmuted *up* to `'static`, and the borrow of `owned` ends with
         // this call.
-        let parser: &CachedParser<'_> = unsafe {
-            std::mem::transmute::<&CachedParser<'static>, &CachedParser<'_>>(parser)
-        };
+        let parser: &CachedParser<'_> =
+            unsafe { std::mem::transmute::<&CachedParser<'static>, &CachedParser<'_>>(parser) };
         parser.parse(input).into_output_errors()
     });
     // Numbered here so no consumer can forget to: an UNSET id is not an absent
@@ -239,7 +238,10 @@ where
             test_decl(block),
             enum_decl(),
         ))
-        .map_with(|kind, e| Decl { kind, span: e.span() })
+        .map_with(|kind, e| Decl {
+            kind,
+            span: e.span(),
+        })
         .boxed();
 
         // Skipping a bad declaration has to respect braces two ways.
@@ -258,7 +260,10 @@ where
         // retry at the same token, fail identically, and get abandoned.
         let recovery = none_of([Token::RBrace])
             .then(choice((nested_braces(), none_of(DECL_STOP).ignored())).repeated())
-            .map_with(|_, e| Decl { kind: DeclKind::Error, span: e.span() })
+            .map_with(|_, e| Decl {
+                kind: DeclKind::Error,
+                span: e.span(),
+            })
             .boxed();
 
         inner.recover_with(via_parser(recovery)).boxed()
@@ -290,12 +295,17 @@ where
             .collect::<Vec<AnnArg>>()
             .delimited_by(just(Token::LParen), just(Token::RParen));
         choice((
-            path().then(group.or_not()).map_with(|(path, args), e| AnnArg::Item {
-                path,
-                args: args.unwrap_or_default(),
+            path()
+                .then(group.or_not())
+                .map_with(|(path, args), e| AnnArg::Item {
+                    path,
+                    args: args.unwrap_or_default(),
+                    span: e.span(),
+                }),
+            plain_str().map_with(|text, e| AnnArg::Str {
+                text,
                 span: e.span(),
             }),
-            plain_str().map_with(|text, e| AnnArg::Str { text, span: e.span() }),
         ))
         .boxed()
     });
@@ -415,7 +425,11 @@ where
     ident()
         .then_ignore(just(Token::Colon))
         .then(ty)
-        .map_with(|(name, ty), e| Param { name, ty, span: e.span() })
+        .map_with(|(name, ty), e| Param {
+            name,
+            ty,
+            span: e.span(),
+        })
         .boxed()
 }
 
@@ -426,7 +440,11 @@ where
     ident()
         .then_ignore(just(Token::Colon))
         .then(ty)
-        .map_with(|(name, ty), e| Field { name, ty, span: e.span() })
+        .map_with(|(name, ty), e| Field {
+            name,
+            ty,
+            span: e.span(),
+        })
         .boxed()
 }
 
@@ -447,17 +465,19 @@ where
                 .collect::<Vec<_>>()
                 .delimited_by(just(Token::LBrace), just(Token::RBrace)),
         )
-        .map(|(((((annotations, sealed), opaque), name), generics), fields)| RecordDecl {
-            name,
-            generics,
-            // `sealed` implies `opaque` semantically; the flag records only what was
-            // written, so the formatter reproduces the source. Semantic sites ask
-            // `opaque || sealed`.
-            opaque,
-            sealed,
-            fields,
-            annotations,
-        })
+        .map(
+            |(((((annotations, sealed), opaque), name), generics), fields)| RecordDecl {
+                name,
+                generics,
+                // `sealed` implies `opaque` semantically; the flag records only what was
+                // written, so the formatter reproduces the source. Semantic sites ask
+                // `opaque || sealed`.
+                opaque,
+                sealed,
+                fields,
+                annotations,
+            },
+        )
         .boxed()
 }
 
@@ -519,15 +539,17 @@ where
                 .collect::<Vec<_>>()
                 .delimited_by(just(Token::LBrace), just(Token::RBrace)),
         )
-        .map(|((((annotations, name), (subject, subject_arity)), wheres), methods)| ProtocolDecl {
-            name,
-            subject,
-            subject_arity,
-            wheres,
-            methods,
-            annotations,
-            is_marker: false,
-        })
+        .map(
+            |((((annotations, name), (subject, subject_arity)), wheres), methods)| ProtocolDecl {
+                name,
+                subject,
+                subject_arity,
+                wheres,
+                methods,
+                annotations,
+                is_marker: false,
+            },
+        )
         .boxed()
 }
 
@@ -557,7 +579,15 @@ where
         )
         .map(
             |((((((annotations, orphan), generics), protocol), target), wheres), methods)| {
-                ImplDecl { orphan, protocol, generics, target, wheres, methods, annotations }
+                ImplDecl {
+                    orphan,
+                    protocol,
+                    generics,
+                    target,
+                    wheres,
+                    methods,
+                    annotations,
+                }
             },
         )
         .boxed()
@@ -572,7 +602,11 @@ where
         .then(generic_params())
         .then_ignore(just(Token::Eq))
         .then(ty)
-        .map(|((name, generics), value)| AliasDecl { name, generics, value })
+        .map(|((name, generics), value)| AliasDecl {
+            name,
+            generics,
+            value,
+        })
         .boxed()
 }
 
@@ -614,7 +648,12 @@ where
     just(Token::Use)
         .ignore_then(use_tree())
         .then_ignore(just(Token::Semi).or_not())
-        .map_with(|tree, e| DeclKind::Use(UseDecl { tree, span: e.span() }))
+        .map_with(|tree, e| {
+            DeclKind::Use(UseDecl {
+                tree,
+                span: e.span(),
+            })
+        })
         .boxed()
 }
 
@@ -650,7 +689,11 @@ where
             .map(|(prefix, children)| UseTree::Group { prefix, children });
 
         let leaf = path()
-            .then(just(Token::As).ignore_then(select! { Token::Ident(s) => s }).or_not())
+            .then(
+                just(Token::As)
+                    .ignore_then(select! { Token::Ident(s) => s })
+                    .or_not(),
+            )
             .map(|(path, alias)| UseTree::Leaf { path, alias });
 
         choice((glob, group, leaf)).boxed()
@@ -671,7 +714,12 @@ where
                 .delimited_by(just(Token::LBrace), just(Token::RBrace)),
         )
         .map(|(((annotations, internal), name), decls)| {
-            DeclKind::Mod(ModDecl { name, internal, decls, annotations })
+            DeclKind::Mod(ModDecl {
+                name,
+                internal,
+                decls,
+                annotations,
+            })
         })
         .boxed()
 }
@@ -747,8 +795,7 @@ where
 /// `()` is unit, `(A)` is a grouping, `(A, B)` is a tuple. There is nothing at
 /// arity one, so `(A,)` is an error rather than a quietly-different type.
 fn one_element_tuple(span: Span, items: usize, trailing: bool) -> Option<ParseError> {
-    (items == 1 && trailing)
-        .then(|| ParseError::new(span, ParseErrorKind::OneElementTuple))
+    (items == 1 && trailing).then(|| ParseError::new(span, ParseErrorKind::OneElementTuple))
 }
 
 /// A tuple, or a grouping when there is one item. Never an arrow.
@@ -804,7 +851,10 @@ where
     let any = ident_named("any").to(TypeSpecKind::Any);
 
     choice((null, any, atom, structural, parens, named))
-        .map_with(|kind, e| TypeSpec { kind, span: e.span() })
+        .map_with(|kind, e| TypeSpec {
+            kind,
+            span: e.span(),
+        })
         .boxed()
 }
 
@@ -830,7 +880,10 @@ where
             if v.len() == 1 {
                 v.pop().expect("len 1")
             } else {
-                TypeSpec { kind: TypeSpecKind::Intersect(v), span: e.span() }
+                TypeSpec {
+                    kind: TypeSpecKind::Intersect(v),
+                    span: e.span(),
+                }
             }
         })
         .boxed();
@@ -843,7 +896,10 @@ where
             if v.len() == 1 {
                 v.pop().expect("len 1")
             } else {
-                TypeSpec { kind: TypeSpecKind::Union(v), span: e.span() }
+                TypeSpec {
+                    kind: TypeSpecKind::Union(v),
+                    span: e.span(),
+                }
             }
         })
         .labelled("a type")
@@ -985,12 +1041,19 @@ where
                                     ));
                                 }
                                 let span = x.span.clone();
-                                stmts.push(Stmt { kind: StmtKind::Expr(x), span });
+                                stmts.push(Stmt {
+                                    kind: StmtKind::Expr(x),
+                                    span,
+                                });
                             }
                         }
                     }
                 }
-                Block { stmts, tail, span: e.span() }
+                Block {
+                    stmts,
+                    tail,
+                    span: e.span(),
+                }
             })
             .boxed(),
     );
@@ -1064,7 +1127,11 @@ where
     // It must come before `rest`, which would otherwise parse the whole thing as
     // a binary expression.
     let block_like_stmt = keyword_block_like(expr.clone(), cond, block, ty.clone())
-        .map_with(|kind, e| Expr { kind, span: e.span(), id: ExprId::UNSET })
+        .map_with(|kind, e| Expr {
+            kind,
+            span: e.span(),
+            id: ExprId::UNSET,
+        })
         .then(just(Token::Semi).or_not())
         .map(|(e, semi)| Item::Expr(e, semi.is_some()))
         .boxed();
@@ -1076,7 +1143,10 @@ where
         .then(expr.clone())
         .then_ignore(just(Token::Semi).or_not())
         .map_with(|((pat, ty), value), e| {
-            Item::Stmt(Stmt { kind: StmtKind::Let { pat, ty, value }, span: e.span() })
+            Item::Stmt(Stmt {
+                kind: StmtKind::Let { pat, ty, value },
+                span: e.span(),
+            })
         })
         .boxed();
 
@@ -1094,26 +1164,38 @@ where
             // are mutation, and records and lists are values, but people will
             // type them and a parse failure is a bad way to find that out.
             let kind = match target.kind {
-                ExprKind::Path(mut segments) if segments.len() == 1 => {
-                    StmtKind::Assign { name: segments.pop().expect("len 1"), value }
-                }
+                ExprKind::Path(mut segments) if segments.len() == 1 => StmtKind::Assign {
+                    name: segments.pop().expect("len 1"),
+                    value,
+                },
                 ExprKind::Field { .. } => {
-                    emitter.emit(ParseError::new(target.span, ParseErrorKind::FieldAssignment));
+                    emitter.emit(ParseError::new(
+                        target.span,
+                        ParseErrorKind::FieldAssignment,
+                    ));
                     StmtKind::Error
                 }
                 ExprKind::Index { .. } => {
-                    emitter.emit(ParseError::new(target.span, ParseErrorKind::IndexAssignment));
+                    emitter.emit(ParseError::new(
+                        target.span,
+                        ParseErrorKind::IndexAssignment,
+                    ));
                     StmtKind::Error
                 }
                 // A qualified name, or anything else: only a binding can be
                 // rebound.
                 _ => {
-                    emitter
-                        .emit(ParseError::new(target.span, ParseErrorKind::InvalidAssignTarget));
+                    emitter.emit(ParseError::new(
+                        target.span,
+                        ParseErrorKind::InvalidAssignTarget,
+                    ));
                     StmtKind::Error
                 }
             };
-            Item::Stmt(Stmt { kind, span: e.span() })
+            Item::Stmt(Stmt {
+                kind,
+                span: e.span(),
+            })
         })
         .boxed();
 
@@ -1137,7 +1219,11 @@ where
         // `Point { x, y }` — `x` alone binds the field to `x`.
         let field_pat = ident()
             .then(just(Token::Colon).ignore_then(pat.clone()).or_not())
-            .map_with(|(name, pat), e| FieldPat { name, pat, span: e.span() })
+            .map_with(|(name, pat), e| FieldPat {
+                name,
+                pat,
+                span: e.span(),
+            })
             .boxed();
 
         let record_pat = path()
@@ -1173,7 +1259,11 @@ where
         let bind = ident().map(PatternKind::Bind);
 
         choice((wildcard, is_pat, record_pat, tuple_pat, literal, bind))
-            .map_with(|kind, e| Pattern { kind, span: e.span(), id: ExprId::UNSET })
+            .map_with(|kind, e| Pattern {
+                kind,
+                span: e.span(),
+                id: ExprId::UNSET,
+            })
             .labelled("a pattern")
             .boxed()
     })
@@ -1192,7 +1282,11 @@ where
         .map_with(|kind, e| Expr {
             kind: ExprKind::Unary {
                 op: UnOp::Neg,
-                rhs: Box::new(Expr { kind, span: e.span(), id: ExprId::UNSET }),
+                rhs: Box::new(Expr {
+                    kind,
+                    span: e.span(),
+                    id: ExprId::UNSET,
+                }),
             },
             span: e.span(),
             id: ExprId::UNSET,
@@ -1215,7 +1309,11 @@ where
         Token::False => ExprKind::Bool(false),
         Token::Null => ExprKind::Null,
     }
-    .map_with(|kind, e| Expr { kind, span: e.span(), id: ExprId::UNSET })
+    .map_with(|kind, e| Expr {
+        kind,
+        span: e.span(),
+        id: ExprId::UNSET,
+    })
 }
 
 /// Reassembles the lexer's flat string token run into parts.
@@ -1232,7 +1330,11 @@ where
         .repeated()
         .collect::<Vec<_>>()
         .delimited_by(just(Token::StrStart), just(Token::StrEnd))
-        .map_with(|parts, e| Expr { kind: ExprKind::Str(parts), span: e.span(), id: ExprId::UNSET })
+        .map_with(|parts, e| Expr {
+            kind: ExprKind::Str(parts),
+            span: e.span(),
+            id: ExprId::UNSET,
+        })
         .boxed()
 }
 
@@ -1262,7 +1364,9 @@ where
         .boxed();
 
     let list = choice((
-        just(Token::DotDot).ignore_then(expr.clone()).map(Elem::Spread),
+        just(Token::DotDot)
+            .ignore_then(expr.clone())
+            .map(Elem::Spread),
         expr.clone().map(Elem::Value),
     ))
     .separated_by(just(Token::Comma))
@@ -1275,7 +1379,11 @@ where
     let field_init = ident()
         .then_ignore(just(Token::Colon))
         .then(expr.clone())
-        .map_with(|(name, value), e| FieldInit { name, value, span: e.span() })
+        .map_with(|(name, value), e| FieldInit {
+            name,
+            value,
+            span: e.span(),
+        })
         .boxed();
 
     // `Point { x: 1, ..base }`, or `{ x: 1 }` with no path.
@@ -1308,7 +1416,10 @@ where
         .delimited_by(just(Token::LParen), just(Token::RParen))
         .then_ignore(just(Token::FatArrow))
         .then(expr.clone())
-        .map(|(params, body)| ExprKind::Lambda { params, body: Box::new(body) })
+        .map(|(params, body)| ExprKind::Lambda {
+            params,
+            body: Box::new(body),
+        })
         .boxed();
 
     let break_expr = just(Token::Break)
@@ -1381,7 +1492,11 @@ where
         literal_token().map(|e| e.kind).boxed(),
         path_expr,
     ))
-    .map_with(|kind, e| Expr { kind, span: e.span(), id: ExprId::UNSET })
+    .map_with(|kind, e| Expr {
+        kind,
+        span: e.span(),
+        id: ExprId::UNSET,
+    })
     .labelled("an expression")
     .boxed()
 }
@@ -1399,7 +1514,10 @@ where
     .repeated()
     .foldr_with(postfixed, |op, rhs, e| Expr {
         id: ExprId::UNSET,
-        kind: ExprKind::Unary { op, rhs: Box::new(rhs) },
+        kind: ExprKind::Unary {
+            op,
+            rhs: Box::new(rhs),
+        },
         span: e.span(),
     })
     .boxed()
@@ -1434,13 +1552,21 @@ where
                 .then(just(Token::If).ignore_then(expr.clone()).or_not())
                 .then_ignore(just(Token::FatArrow))
                 .then(expr.clone())
-                .map_with(|((pat, guard), body), e| MatchArm { pat, guard, body, span: e.span() })
+                .map_with(|((pat, guard), body), e| MatchArm {
+                    pat,
+                    guard,
+                    body,
+                    span: e.span(),
+                })
                 .separated_by(just(Token::Comma))
                 .allow_trailing()
                 .collect::<Vec<_>>()
                 .delimited_by(just(Token::LBrace), just(Token::RBrace)),
         )
-        .map(|(scrutinee, arms)| ExprKind::Match { scrutinee: Box::new(scrutinee), arms })
+        .map(|(scrutinee, arms)| ExprKind::Match {
+            scrutinee: Box::new(scrutinee),
+            arms,
+        })
         .boxed();
 
     let loop_expr = just(Token::Loop)
@@ -1451,7 +1577,10 @@ where
     let while_expr = just(Token::While)
         .ignore_then(cond.clone())
         .then(block.clone())
-        .map(|(cond, body)| ExprKind::While { cond: Box::new(cond), body })
+        .map(|(cond, body)| ExprKind::While {
+            cond: Box::new(cond),
+            body,
+        })
         .boxed();
 
     let for_expr = just(Token::For)
@@ -1459,7 +1588,11 @@ where
         .then_ignore(just(Token::In))
         .then(cond)
         .then(block.clone())
-        .map(|((pat, iter), body)| ExprKind::For { pat, iter: Box::new(iter), body })
+        .map(|((pat, iter), body)| ExprKind::For {
+            pat,
+            iter: Box::new(iter),
+            body,
+        })
         .boxed();
 
     choice((if_expr, match_expr, loop_expr, while_expr, for_expr)).boxed()
@@ -1483,7 +1616,11 @@ where
                 just(Token::Else)
                     .ignore_then(choice((
                         if_chain
-                            .map_with(|kind, e| Expr { kind, span: e.span(), id: ExprId::UNSET })
+                            .map_with(|kind, e| Expr {
+                                kind,
+                                span: e.span(),
+                                id: ExprId::UNSET,
+                            })
                             .boxed(),
                         block
                             .map_with(|b, e| Expr {
@@ -1530,10 +1667,18 @@ where
             just(Token::Catch)
                 .ignore_then(ident().delimited_by(just(Token::LParen), just(Token::RParen)))
                 .then(block)
-                .map_with(|(binding, body), e| CatchArm { binding, body, span: e.span() })
+                .map_with(|(binding, body), e| CatchArm {
+                    binding,
+                    body,
+                    span: e.span(),
+                })
                 .or_not(),
         )
-        .map(|((form, body), catch)| ExprKind::Try { form, body: Box::new(body), catch })
+        .map(|((form, body), catch)| ExprKind::Try {
+            form,
+            body: Box::new(body),
+            catch,
+        })
         .boxed()
 }
 
@@ -1582,8 +1727,14 @@ where
         .map(Post::Index)
         .boxed();
 
-    let field = just(Token::Dot).ignore_then(ident()).map(Post::Field).boxed();
-    let is_op = just(Token::Is).ignore_then(ty.clone()).map(Post::Is).boxed();
+    let field = just(Token::Dot)
+        .ignore_then(ident())
+        .map(Post::Field)
+        .boxed();
+    let is_op = just(Token::Is)
+        .ignore_then(ty.clone())
+        .map(Post::Is)
+        .boxed();
     // The cast triad, distinguished exactly as `try`/`try?`/`try!` is: a `?` or `!`
     // token straight after `as`.
     let as_op = just(Token::As)
@@ -1600,17 +1751,34 @@ where
         choice((call, index, field, is_op, as_op)).repeated(),
         |lhs, post, e| {
             let kind = match post {
-                Post::Call(generics, args) => {
-                    ExprKind::Call { callee: Box::new(lhs), generics, args }
-                }
-                Post::Index(index) => {
-                    ExprKind::Index { base: Box::new(lhs), index: Box::new(index) }
-                }
-                Post::Field(name) => ExprKind::Field { base: Box::new(lhs), name },
-                Post::Is(ty) => ExprKind::Is { lhs: Box::new(lhs), ty },
-                Post::As(form, ty) => ExprKind::As { form, lhs: Box::new(lhs), ty },
+                Post::Call(generics, args) => ExprKind::Call {
+                    callee: Box::new(lhs),
+                    generics,
+                    args,
+                },
+                Post::Index(index) => ExprKind::Index {
+                    base: Box::new(lhs),
+                    index: Box::new(index),
+                },
+                Post::Field(name) => ExprKind::Field {
+                    base: Box::new(lhs),
+                    name,
+                },
+                Post::Is(ty) => ExprKind::Is {
+                    lhs: Box::new(lhs),
+                    ty,
+                },
+                Post::As(form, ty) => ExprKind::As {
+                    form,
+                    lhs: Box::new(lhs),
+                    ty,
+                },
             };
-            Expr { kind, span: e.span(), id: ExprId::UNSET }
+            Expr {
+                kind,
+                span: e.span(),
+                id: ExprId::UNSET,
+            }
         },
     )
     .boxed()
@@ -1638,21 +1806,30 @@ where
             _ => Err(ParseError::new(
                 span,
                 ParseErrorKind::Expected {
-                    expected: ops::ops_at(prec).map(|o| Expected::Token(o.token())).collect(),
+                    expected: ops::ops_at(prec)
+                        .map(|o| Expected::Token(o.token()))
+                        .collect(),
                     found: Some(t),
                 },
             )),
         });
         let operand = level.clone();
         level = level
-            .foldl(op.then(operand).repeated(), |lhs, (op, rhs): (BinOp, Expr)| {
-                let span = lhs.span.start..rhs.span.end;
-                Expr {
-                    kind: ExprKind::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs) },
-                    span,
-                    id: ExprId::UNSET,
-                }
-            })
+            .foldl(
+                op.then(operand).repeated(),
+                |lhs, (op, rhs): (BinOp, Expr)| {
+                    let span = lhs.span.start..rhs.span.end;
+                    Expr {
+                        kind: ExprKind::Binary {
+                            op,
+                            lhs: Box::new(lhs),
+                            rhs: Box::new(rhs),
+                        },
+                        span,
+                        id: ExprId::UNSET,
+                    }
+                },
+            )
             .boxed();
     }
     level

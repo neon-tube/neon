@@ -148,7 +148,8 @@ fn bdd_empty(b: super::bdd::BddId) -> bool {
 /// type that really is `A ∧ ¬B` has no single set of fields to hand back.
 fn single_record(t: &Types, ty: TyId) -> Option<Vec<(NameId, TyId)>> {
     let d = t.data(ty);
-    if d.base != 0 || !t.atomset_of(d.atoms).is_empty_set() || !t.atomset_of(d.vars).is_empty_set() {
+    if d.base != 0 || !t.atomset_of(d.atoms).is_empty_set() || !t.atomset_of(d.vars).is_empty_set()
+    {
         return None;
     }
     if !bdd_empty(d.tuples) || !bdd_empty(d.arrows) {

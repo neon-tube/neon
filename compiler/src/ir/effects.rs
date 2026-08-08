@@ -44,8 +44,11 @@ pub fn analyze(program: &Program) -> HashMap<String, bool> {
     // something effectful or reaches one that does, to a fixpoint. Monotone, so it
     // converges.
     let diverging = may_diverge(program);
-    let mut pure: HashMap<String, bool> =
-        program.funcs.iter().map(|f| (f.name.clone(), !diverging.contains(&f.name))).collect();
+    let mut pure: HashMap<String, bool> = program
+        .funcs
+        .iter()
+        .map(|f| (f.name.clone(), !diverging.contains(&f.name)))
+        .collect();
 
     loop {
         let mut changed = false;
@@ -54,7 +57,9 @@ pub fn analyze(program: &Program) -> HashMap<String, bool> {
                 continue; // already effectful
             }
             let effectful = f.blocks.iter().any(|b| {
-                b.insts.iter().any(|inst| op_is_effectful(f, &inst.op, &pure, &program.pure_natives))
+                b.insts
+                    .iter()
+                    .any(|inst| op_is_effectful(f, &inst.op, &pure, &program.pure_natives))
             });
             if effectful {
                 pure.insert(f.name.clone(), false);
@@ -91,8 +96,12 @@ pub fn analyze(program: &Program) -> HashMap<String, bool> {
 ///
 /// `Op::CallClosure` needs no arm: an indirect call is already unconditionally effectful.
 fn may_diverge(program: &Program) -> HashSet<String> {
-    let mut out: HashSet<String> =
-        program.funcs.iter().filter(|f| has_back_edge(f)).map(|f| f.name.clone()).collect();
+    let mut out: HashSet<String> = program
+        .funcs
+        .iter()
+        .filter(|f| has_back_edge(f))
+        .map(|f| f.name.clone())
+        .collect();
 
     // Direct-call edges, restricted to callees the program defines. A call to anything
     // else is effectful already, by `op_is_effectful`'s unknown-callee rule.
@@ -172,9 +181,11 @@ fn successors(term: &Term) -> Vec<BlockId> {
     match term {
         Term::Jump(t) => vec![t.to],
         Term::Branch { then, els, .. } => vec![then.to, els.to],
-        Term::Switch { arms, default, .. } => {
-            arms.iter().map(|(_, t)| t.to).chain(std::iter::once(default.to)).collect()
-        }
+        Term::Switch { arms, default, .. } => arms
+            .iter()
+            .map(|(_, t)| t.to)
+            .chain(std::iter::once(default.to))
+            .collect(),
         Term::Ret(_) | Term::Throw(_) | Term::Unreachable => vec![],
     }
 }
@@ -233,7 +244,9 @@ pub fn op_is_effectful(
         Op::Prim(
             PrimOp::Add | PrimOp::Sub | PrimOp::Mul | PrimOp::Div | PrimOp::Rem | PrimOp::Neg,
             operands,
-        ) => operands.iter().any(|&v| matches!(f.value_repr(v), Repr::I64)),
+        ) => operands
+            .iter()
+            .any(|&v| matches!(f.value_repr(v), Repr::I64)),
         // Everything else is a pure function of its operands.
         _ => false,
     }
@@ -287,7 +300,11 @@ mod tests {
              fn scale(x: f64) -> f64 { x * 2.0 }
              fn compare(a: i64, b: i64) -> bool { a < b }",
         );
-        assert_eq!(e.get("double"), Some(&false), "i64 `+` is listed conservatively");
+        assert_eq!(
+            e.get("double"),
+            Some(&false),
+            "i64 `+` is listed conservatively"
+        );
         assert_eq!(e.get("scale"), Some(&true), "f64 arithmetic cannot trap");
         assert_eq!(e.get("compare"), Some(&true), "a comparison cannot trap");
     }
@@ -298,7 +315,11 @@ mod tests {
             "@pure @native(\"neon_str_concat\") fn concat(a: str, b: str) -> str
              fn greet(n: str) -> str { concat(\"hi \", n) }",
         );
-        assert_eq!(e.get("greet"), Some(&true), "string concat is declared pure");
+        assert_eq!(
+            e.get("greet"),
+            Some(&true),
+            "string concat is declared pure"
+        );
     }
 
     /// The polarity that matters: an unannotated native is effectful, so a caller of one
@@ -335,9 +356,25 @@ mod tests {
              fn pong(n: f64) -> f64 { ping(n) }
              fn straight(n: f64) -> f64 { n * 2.0 }",
         );
-        assert_eq!(e.get("loops"), Some(&false), "a CFG back edge is not provably finite");
-        assert_eq!(e.get("ping"), Some(&false), "mutual recursion is not provably finite");
-        assert_eq!(e.get("pong"), Some(&false), "mutual recursion is not provably finite");
-        assert_eq!(e.get("straight"), Some(&true), "no loop and no recursion: still pure");
+        assert_eq!(
+            e.get("loops"),
+            Some(&false),
+            "a CFG back edge is not provably finite"
+        );
+        assert_eq!(
+            e.get("ping"),
+            Some(&false),
+            "mutual recursion is not provably finite"
+        );
+        assert_eq!(
+            e.get("pong"),
+            Some(&false),
+            "mutual recursion is not provably finite"
+        );
+        assert_eq!(
+            e.get("straight"),
+            Some(&true),
+            "no loop and no recursion: still pure"
+        );
     }
 }

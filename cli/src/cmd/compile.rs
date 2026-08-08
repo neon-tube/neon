@@ -13,7 +13,9 @@ pub fn run(file: &OsString, output: Option<OsString>, flags: BuildFlags) -> Resu
     let cfg = BuildConfig::resolve(&path, flags)?;
     let checked = frontend::check(&path, false, &cfg.cfg)?;
     let out = emit::executable_path(
-        output.map(PathBuf::from).unwrap_or_else(|| path.with_extension("")),
+        output
+            .map(PathBuf::from)
+            .unwrap_or_else(|| path.with_extension("")),
     );
     emit::to_executable(&checked, &out, &cfg)
 }

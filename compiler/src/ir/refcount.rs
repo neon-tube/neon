@@ -114,9 +114,7 @@ fn erasing_casts(f: &Func) -> HashSet<Value> {
         for inst in &b.insts {
             if let (Some(v), Op::Cast(base)) = (inst.result, &inst.op) {
                 let src = f.value_repr(*base);
-                if matches!(f.value_repr(v), Repr::Any)
-                    && !matches!(src, Repr::Any | Repr::Never)
-                {
+                if matches!(f.value_repr(v), Repr::Any) && !matches!(src, Repr::Any | Repr::Never) {
                     out.insert(v);
                 }
             }
@@ -184,7 +182,10 @@ struct Plan {
 /// they are created, so a block's id remains its index in `f.blocks` — the invariant
 /// `Func::block` indexes on.
 fn insert_fn(f: &mut Func) {
-    let ptr: HashSet<Value> = f.values().filter(|&v| f.value_repr(v).is_counted()).collect();
+    let ptr: HashSet<Value> = f
+        .values()
+        .filter(|&v| f.value_repr(v).is_counted())
+        .collect();
     if ptr.is_empty() {
         return;
     }
@@ -195,8 +196,14 @@ fn insert_fn(f: &mut Func) {
     let env_param: Option<Value> = f.env.is_some().then(|| f.params[0]);
     let (live_in, live_out) = liveness(f, &ptr, &bases, &erasing);
 
-    let release = |v: Value| Inst { result: None, op: Op::Release(v) };
-    let retain = |v: Value| Inst { result: None, op: Op::Retain(v) };
+    let release = |v: Value| Inst {
+        result: None,
+        op: Op::Release(v),
+    };
+    let retain = |v: Value| Inst {
+        result: None,
+        op: Op::Retain(v),
+    };
 
     let mut plans: Vec<Plan> = Vec::with_capacity(f.blocks.len());
     for b in &f.blocks {
@@ -346,9 +353,15 @@ fn insert_fn(f: &mut Func) {
             id,
             params: vec![],
             insts: code,
-            term: Term::Jump(Target { to: target.to, args: std::mem::take(&mut target.args) }),
+            term: Term::Jump(Target {
+                to: target.to,
+                args: std::mem::take(&mut target.args),
+            }),
         });
-        *target = Target { to: id, args: vec![] };
+        *target = Target {
+            to: id,
+            args: vec![],
+        };
     };
     for (b, plan) in f.blocks.iter_mut().zip(plans) {
         b.insts = plan.body;
@@ -390,7 +403,10 @@ fn liveness(
     ptr: &HashSet<Value>,
     bases: &HashMap<Value, Value>,
     erasing: &HashSet<Value>,
-) -> (HashMap<BlockId, HashSet<Value>>, HashMap<BlockId, HashSet<Value>>) {
+) -> (
+    HashMap<BlockId, HashSet<Value>>,
+    HashMap<BlockId, HashSet<Value>>,
+) {
     let mut live_in: HashMap<_, HashSet<Value>> =
         f.blocks.iter().map(|b| (b.id, HashSet::new())).collect();
     let mut live_out: HashMap<_, HashSet<Value>> = live_in.clone();
@@ -402,7 +418,9 @@ fn liveness(
             for (succ, args) in successor_edges(&b.term) {
                 out.extend(live_in[&succ].iter().copied());
                 out.extend(
-                    args.iter().filter(|v| ptr.contains(v)).map(|&v| root_base(bases, v)),
+                    args.iter()
+                        .filter(|v| ptr.contains(v))
+                        .map(|&v| root_base(bases, v)),
                 );
             }
 
@@ -473,14 +491,14 @@ fn operand_uses(
         // stays live across it — a retain-per-write here is exactly the traffic
         // `ir::unique` exists to remove, and would leak besides.
         Op::Native { symbol, args }
-            if symbol == "neon_list_set_inplace"
-                || symbol == super::partial::SET_FIELD_INPLACE =>
+            if symbol == "neon_list_set_inplace" || symbol == super::partial::SET_FIELD_INPLACE =>
         {
             borrowing.extend(args.iter().copied())
         }
-        Op::Call { args, .. } | Op::Native { args, .. } | Op::MakeTuple(args) | Op::MakeList(args) => {
-            consuming.extend(args.iter().copied())
-        }
+        Op::Call { args, .. }
+        | Op::Native { args, .. }
+        | Op::MakeTuple(args)
+        | Op::MakeList(args) => consuming.extend(args.iter().copied()),
         Op::CallClosure { callee, args } => {
             borrowing.push(*callee);
             consuming.extend(args.iter().copied());

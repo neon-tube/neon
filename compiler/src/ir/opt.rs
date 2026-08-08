@@ -200,11 +200,7 @@ pub mod verify {
 
 /// Remove instructions whose result is unused and whose op is pure. Effectful
 /// instructions stay even when their result is dead. Returns whether anything changed.
-fn dead_code(
-    f: &mut Func,
-    pure: &HashMap<String, bool>,
-    pure_natives: &HashSet<String>,
-) -> bool {
+fn dead_code(f: &mut Func, pure: &HashMap<String, bool>, pure_natives: &HashSet<String>) -> bool {
     let used = used_values(f);
 
     // Decide first, then mutate. The effect test reads operand reprs out of `f` — an i64
@@ -409,7 +405,11 @@ fn merge_single_pred(f: &mut Func) -> bool {
             }
         }
         let Some((ai, b_id, args)) = fuse else { break };
-        let bi = f.blocks.iter().position(|b| b.id == b_id).expect("target exists");
+        let bi = f
+            .blocks
+            .iter()
+            .position(|b| b.id == b_id)
+            .expect("target exists");
 
         // Substitute B's parameters with the arguments A passed, then splice B's body and
         // terminator into A. B is left unreachable for the DCE pass to remove.
@@ -418,8 +418,7 @@ fn merge_single_pred(f: &mut Func) -> bool {
         // spliced: B's parameters stop existing once B is merged away, and any block after
         // it that still reads one would refer to a value nothing defines. That produced a
         // program that silently computed with an uninitialised local.
-        let subst: HashMap<Value, Value> =
-            f.blocks[bi].params.iter().copied().zip(args).collect();
+        let subst: HashMap<Value, Value> = f.blocks[bi].params.iter().copied().zip(args).collect();
         let insts = f.blocks[bi].insts.clone();
         let term = f.blocks[bi].term.clone();
         f.blocks[ai].insts.extend(insts);
@@ -461,9 +460,11 @@ fn targets_mut(term: &mut Term) -> Vec<&mut super::ssa::Target> {
     match term {
         Term::Jump(t) => vec![t],
         Term::Branch { then, els, .. } => vec![then, els],
-        Term::Switch { arms, default, .. } => {
-            arms.iter_mut().map(|(_, t)| t).chain(std::iter::once(default)).collect()
-        }
+        Term::Switch { arms, default, .. } => arms
+            .iter_mut()
+            .map(|(_, t)| t)
+            .chain(std::iter::once(default))
+            .collect(),
         Term::Ret(_) | Term::Throw(_) | Term::Unreachable => vec![],
     }
 }
@@ -570,8 +571,12 @@ fn drop_unreachable_blocks(f: &mut Func) -> bool {
     f.blocks.retain(|b| reachable.contains(&b.id));
 
     // Renumber to contiguous ids and remap every reference.
-    let remap: HashMap<BlockId, BlockId> =
-        f.blocks.iter().enumerate().map(|(i, b)| (b.id, BlockId(i as u32))).collect();
+    let remap: HashMap<BlockId, BlockId> = f
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.id, BlockId(i as u32)))
+        .collect();
     for b in &mut f.blocks {
         b.id = remap[&b.id];
         for t in targets_mut(&mut b.term) {
@@ -589,9 +594,11 @@ fn successors(term: &Term) -> Vec<BlockId> {
     match term {
         Term::Jump(t) => vec![t.to],
         Term::Branch { then, els, .. } => vec![then.to, els.to],
-        Term::Switch { arms, default, .. } => {
-            arms.iter().map(|(_, t)| t.to).chain(std::iter::once(default.to)).collect()
-        }
+        Term::Switch { arms, default, .. } => arms
+            .iter()
+            .map(|(_, t)| t.to)
+            .chain(std::iter::once(default.to))
+            .collect(),
         Term::Ret(_) | Term::Throw(_) | Term::Unreachable => vec![],
     }
 }

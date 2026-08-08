@@ -86,20 +86,27 @@ fn assert_links_and_runs(tag: &str, args: &[&str]) -> String {
 fn full_set_links_and_runs() {
     for (tag, args) in [
         ("both_comma", &["--sanitize", "address,undefined"][..]),
-        ("both_repeated", &["--sanitize", "address", "--sanitize", "undefined"][..]),
+        (
+            "both_repeated",
+            &["--sanitize", "address", "--sanitize", "undefined"][..],
+        ),
     ] {
         let stderr = assert_links_and_runs(tag, args);
         // Nothing was widened, so nothing should be announced.
-        assert!(!stderr.contains("also enabling"), "unexpected widening note:\n{stderr}");
+        assert!(
+            !stderr.contains("also enabling"),
+            "unexpected widening note:\n{stderr}"
+        );
     }
 }
 
 /// The regression: each sanitizer alone. These are the two spellings that failed to link.
 #[test]
 fn each_sanitizer_alone_links_and_runs_and_says_it_widened() {
-    for (tag, one, other) in
-        [("address_only", "address", "undefined"), ("undefined_only", "undefined", "address")]
-    {
+    for (tag, one, other) in [
+        ("address_only", "address", "undefined"),
+        ("undefined_only", "undefined", "address"),
+    ] {
         let stderr = assert_links_and_runs(tag, &["--sanitize", one]);
         // Widening to the archive's full set is safe but must not be silent.
         assert!(
@@ -114,9 +121,15 @@ fn each_sanitizer_alone_links_and_runs_and_says_it_widened() {
 #[test]
 fn an_unsupported_sanitizer_is_refused_with_our_error() {
     let (out, exe) = compile("thread", &["--sanitize", "thread"]);
-    assert!(!out.status.success(), "`--sanitize thread` must not succeed");
+    assert!(
+        !out.status.success(),
+        "`--sanitize thread` must not succeed"
+    );
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("thread"), "the error must name the sanitizer:\n{stderr}");
+    assert!(
+        stderr.contains("thread"),
+        "the error must name the sanitizer:\n{stderr}"
+    );
     assert!(
         stderr.contains("libneon_rt_san.a"),
         "the error must say which variants exist:\n{stderr}"
@@ -125,7 +138,10 @@ fn an_unsupported_sanitizer_is_refused_with_our_error() {
         !stderr.contains("undefined reference") && !stderr.contains("/usr/bin/ld"),
         "must fail with our error, not a linker dump:\n{stderr}"
     );
-    assert!(!exe.is_file(), "a refused build must not leave an executable");
+    assert!(
+        !exe.is_file(),
+        "a refused build must not leave an executable"
+    );
 }
 
 /// The unsanitized modes still link their own archives.
@@ -133,7 +149,10 @@ fn an_unsupported_sanitizer_is_refused_with_our_error() {
 fn unsanitized_modes_link_and_run() {
     for mode in ["debug", "release", "opt-release"] {
         let stderr = assert_links_and_runs(mode, &["--mode", mode]);
-        assert!(!stderr.contains("also enabling"), "no sanitizers, no widening:\n{stderr}");
+        assert!(
+            !stderr.contains("also enabling"),
+            "no sanitizers, no widening:\n{stderr}"
+        );
     }
 }
 
@@ -154,8 +173,15 @@ fn every_variant_is_staged() {
     for flavor in &staged {
         for archive in ["libneon_rt.a", "libneon_rt_debug.a", "libneon_rt_san.a"] {
             let path: PathBuf = sysroot().join("lib").join(flavor).join(archive);
-            assert!(path.is_file(), "missing staged runtime variant {}", path.display());
+            assert!(
+                path.is_file(),
+                "missing staged runtime variant {}",
+                path.display()
+            );
         }
     }
-    assert!(Path::new(&sysroot().join("stdlib")).is_dir(), "stdlib not staged");
+    assert!(
+        Path::new(&sysroot().join("stdlib")).is_dir(),
+        "stdlib not staged"
+    );
 }

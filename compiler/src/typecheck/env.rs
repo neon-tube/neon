@@ -64,64 +64,119 @@ pub enum TypeErrorKind {
     /// Accepted silently before this existed: a marker declares no methods, so there is
     /// nothing for the impl to leave unimplemented, and it sat inert while reading as
     /// though it granted the bound.
-    ImplForMarker { marker: String },
+    ImplForMarker {
+        marker: String,
+    },
     Duplicate(String),
-    Arity { name: String, expected: usize, found: usize },
+    Arity {
+        name: String,
+        expected: usize,
+        found: usize,
+    },
     DuplicateField(String),
     /// A plain `type` that names itself. Recursion is declared, not inferred.
     RecursiveAlias(String),
     /// `newtype T = List[T]`. Recursion is `mu type`'s job.
     RecursiveNewtype(String),
     MuWithoutRecursion(String),
-    MuMutual { name: String, other: String },
+    MuMutual {
+        name: String,
+        other: String,
+    },
     MuUnguarded(String),
     MuUnderNegation(String),
     MuInParameter(String),
     /// `orphan impl` in something another program may depend on.
     OrphanInLibrary(String),
     /// `actual` is not a subtype of `expected`. The one rule the checker rests on.
-    Mismatch { expected: String, found: String },
+    Mismatch {
+        expected: String,
+        found: String,
+    },
     /// A record-literal field whose value does not fit the field's declared type.
     /// Named so the diagnostic points at the field, not just the type pair.
-    FieldTypeMismatch { field: String, expected: String, found: String },
+    FieldTypeMismatch {
+        field: String,
+        expected: String,
+        found: String,
+    },
     /// `match s { ... }` leaves `missing` unhandled. The residual IS the message.
-    NotExhaustive { missing: String },
+    NotExhaustive {
+        missing: String,
+    },
     /// An `if` with no `else`, consumed as a value.
     IfWithoutElse,
     /// `x as T` where the value could never be a `T`.
-    ImpossibleCast { from: String, to: String },
+    ImpossibleCast {
+        from: String,
+        to: String,
+    },
     /// A bare `as` on a cast that can fail at runtime. Bare `as` is for casts that
     /// cannot fail; a fallible one must wear its failure policy (`as?` or `as!`).
-    FallibleCast { from: String, to: String },
+    FallibleCast {
+        from: String,
+        to: String,
+    },
     /// `as?` where the target overlaps `null`: the softened result cannot say which
     /// null it is.
-    SoftCastNullOverlap { to: String },
+    SoftCastNullOverlap {
+        to: String,
+    },
     /// Two protocols answer. `A::go(r)` picks one.
-    AmbiguousCall { method: String, protocols: Vec<String> },
-    NoImpl { protocol: String, method: String, uncovered: String },
+    AmbiguousCall {
+        method: String,
+        protocols: Vec<String>,
+    },
+    NoImpl {
+        protocol: String,
+        method: String,
+        uncovered: String,
+    },
     NoReceiver(String),
     /// A field read that nothing in the subject has.
-    NoField { field: String, on: String },
+    NoField {
+        field: String,
+        on: String,
+    },
     /// `x.f(..)` where `f` is not a field: method-call syntax, which Neon lacks.
-    DotCall { method: String, on: String },
+    DotCall {
+        method: String,
+        on: String,
+    },
     /// Assigning, inside a closure, to a name captured from the enclosing scope.
     /// `origin` is where the name was bound, for a "captured here" secondary label.
-    RebindCapture { name: String, origin: Option<Span> },
+    RebindCapture {
+        name: String,
+        origin: Option<Span>,
+    },
     /// A call whose callee is not a function.
-    NotCallable { what: String, ty: String },
+    NotCallable {
+        what: String,
+        ty: String,
+    },
     /// A lambda parameter with no annotation and no expected type to infer it from.
     LambdaParamNeedsType(String),
     /// `a == b` / `a < b` where the operands share no common type.
-    Incomparable { left: String, right: String },
+    Incomparable {
+        left: String,
+        right: String,
+    },
     /// `a < b` where the operands do share a type, but that type has no order.
-    Unordered { ty: String },
+    Unordered {
+        ty: String,
+    },
     /// `a == b` on a type the backend cannot compare structurally.
-    Unequatable { ty: String },
+    Unequatable {
+        ty: String,
+    },
     /// A function value flowing into an arrow type with a *different* `throws`.
     /// The clause is part of the calling convention — a throwing closure returns
     /// a tagged result — and there is no adapter between the two conventions, so
     /// the subtyping the types would allow cannot be realised at run time.
-    ArrowThrowsMismatch { expected: String, found: String },
+    ArrowThrowsMismatch {
+        expected: String,
+        found: String,
+    },
     /// An `opaque` record's *contents* reached from outside the module that declares it —
     /// read, built, or destructured. A value of the type may still be held and passed
     /// around freely; only its insides are private.
@@ -129,20 +184,34 @@ pub enum TypeErrorKind {
     /// Opacity is what lets a module hold an invariant its callers cannot break: a
     /// descriptor that must not be forged from an integer, a guard that must not be
     /// disarmed behind the module's back.
-    OpaqueRecord { record: String, module: String, what: String },
+    OpaqueRecord {
+        record: String,
+        module: String,
+        what: String,
+    },
     /// `sealed` is opacity plus a trust boundary: outsiders may not assert the type
     /// out of an erased value, and may not order values of it. Testing (`is`, `as?`)
     /// stays legal — a test can only recognise a value the owner really built.
-    SealedRecord { record: String, module: String, what: String },
+    SealedRecord {
+        record: String,
+        module: String,
+        what: String,
+    },
     /// A match arm below an unguarded binder or `_`: the arm above swallows every
     /// value, so this one can never run. `names_type` is the trap that motivates the
     /// diagnostic — `match x { A => .., B => .. }` parses `A` as a fresh binding
     /// shadowing the type, and the second arm silently died.
-    UnreachableArm { pattern: String, names_type: bool },
+    UnreachableArm {
+        pattern: String,
+        names_type: bool,
+    },
     /// A generic call where no argument or expected type pins a parameter the result
     /// mentions. Every pre-existing variant misdescribed this — it is not a mismatch,
     /// not an arity error, and (before this) it reached codegen as an ICE.
-    CannotInferTypeParam { param: String, function: String },
+    CannotInferTypeParam {
+        param: String,
+        function: String,
+    },
     /// `break` or `continue` with no enclosing loop -- including one that only *looks*
     /// enclosing, because a lambda sits in between.
     OutsideLoop(String),
@@ -155,27 +224,48 @@ pub enum TypeErrorKind {
     /// A call to a throwing function outside any `try`.
     BareThrowingCall,
     /// `throw e` of a type the enclosing function does not declare in `throws`.
-    Throws { thrown: String, declared: String },
+    Throws {
+        thrown: String,
+        declared: String,
+    },
     /// An error escaping `main` that does not implement `Error`. `main` must render
     /// whatever reaches it, so it is the one place the language demands the interface.
-    NotAnError { thrown: String },
+    NotAnError {
+        thrown: String,
+    },
     /// `impl Sub for X` without the `impl Super for X` that Sub's `where` requires.
-    MissingSupertrait { sub: String, required: String, ty: String },
+    MissingSupertrait {
+        sub: String,
+        required: String,
+        ty: String,
+    },
     /// A generic call whose `where T: P` bound the argument type does not satisfy.
-    UnsatisfiedBound { ty: String, protocol: String },
+    UnsatisfiedBound {
+        ty: String,
+        protocol: String,
+    },
     /// A `where T: M` marker bound the type does not have. Distinct from
     /// `UnsatisfiedBound` because a marker cannot be implemented, so "write an impl" is
     /// not advice a reader can act on.
-    UnsatisfiedMarker { ty: String, marker: String },
+    UnsatisfiedMarker {
+        ty: String,
+        marker: String,
+    },
     /// `marker Foo` where the compiler has no rule for `Foo`. A marker is satisfied by a
     /// compiler-known property, so one it does not recognise could never be satisfied.
     UnknownMarker(String),
     /// An impl that does not provide a method its protocol requires.
-    ImplMissingMethod { protocol: String, method: String },
+    ImplMissingMethod {
+        protocol: String,
+        method: String,
+    },
     /// `main` with an explicit return type or throws clause -- both are fixed.
     MainSignatureFixed,
     /// A name that exists but sits inside an `internal` module the caller is outside of.
-    Internal { name: String, owner: String },
+    Internal {
+        name: String,
+        owner: String,
+    },
     /// A `mod` whose path is already a module of another compilation unit -- a program
     /// declaring `mod std { mod fs { .. } }`. Rejected because a module path is an
     /// *identity*: `opaque` is enforced by comparing the accessing module's path against
@@ -188,22 +278,35 @@ pub enum TypeErrorKind {
     Todo(String),
 
     /// A return-position dispatch onto a union that needs a different impl per variant.
-    NoSubjectToSwitch { protocol: String, method: String, subject: String },
+    NoSubjectToSwitch {
+        protocol: String,
+        method: String,
+        subject: String,
+    },
 
     /// An orphan that does not fill a gap. `overlap` is the values already covered
     /// — the intersection itself, which is what the representation is for.
-    OrphanOverlaps { protocol: String, overlap: String },
+    OrphanOverlaps {
+        protocol: String,
+        overlap: String,
+    },
     /// Two impls of one protocol answer for the same values, and neither is nested inside
     /// the other, so there is no most-specific one to pick. decisions.md permits overlap
     /// only when nested; this is the case it does not.
-    ImplOverlaps { protocol: String, overlap: String },
+    ImplOverlaps {
+        protocol: String,
+        overlap: String,
+    },
     TooDeep(String),
     /// A `const` written without `: T`. Required rather than inferred — see `ConstSig`.
     ConstNeedsType(String),
     /// A `const` initialiser that is not a compile-time constant. `what` names the
     /// construct that stopped it, so the message can point at the actual obstacle rather
     /// than saying "not constant" and leaving the author to guess.
-    ConstNotConstant { name: String, what: String },
+    ConstNotConstant {
+        name: String,
+        what: String,
+    },
     /// `const A = B + 1` where `B` eventually refers back to `A`. The chain is carried so
     /// the message can print the whole loop -- a cycle reported at one arbitrary member
     /// of it is much harder to act on.
@@ -214,7 +317,10 @@ pub enum TypeErrorKind {
     /// repr the context expected, so `[0, ..xs]` compiled, ran, and indexed a pointer.
     /// An error at the use site is honest until a lowering exists; `hint` says what to
     /// write today.
-    NotImplemented { what: String, hint: String },
+    NotImplemented {
+        what: String,
+        hint: String,
+    },
 }
 
 impl fmt::Display for TypeError {
@@ -229,7 +335,11 @@ impl fmt::Display for TypeError {
                  writing one would look like it granted the bound while doing nothing"
             ),
             TypeErrorKind::Duplicate(n) => write!(f, "`{n}` is already declared in this module"),
-            TypeErrorKind::Arity { name, expected, found } => write!(
+            TypeErrorKind::Arity {
+                name,
+                expected,
+                found,
+            } => write!(
                 f,
                 "`{name}` takes {expected} type argument(s), but {found} were given"
             ),
@@ -269,7 +379,11 @@ impl fmt::Display for TypeError {
             TypeErrorKind::Mismatch { expected, found } => {
                 write!(f, "expected `{expected}`, found `{found}`")
             }
-            TypeErrorKind::FieldTypeMismatch { field, expected, found } => write!(
+            TypeErrorKind::FieldTypeMismatch {
+                field,
+                expected,
+                found,
+            } => write!(
                 f,
                 "field `{field}` expects `{expected}`, but this is `{found}`"
             ),
@@ -303,7 +417,11 @@ impl fmt::Display for TypeError {
                  scope ({})",
                 protocols.join(", "),
             ),
-            TypeErrorKind::NoImpl { protocol, method, uncovered } => write!(
+            TypeErrorKind::NoImpl {
+                protocol,
+                method,
+                uncovered,
+            } => write!(
                 f,
                 "cannot call `{method}`: no impl of `{protocol}` for `{uncovered}`"
             ),
@@ -316,10 +434,9 @@ impl fmt::Display for TypeError {
                 write!(f, "`{t}` is not a collection and cannot be iterated")
             }
             TypeErrorKind::NotIndexable(t) => write!(f, "`{t}` cannot be indexed"),
-            TypeErrorKind::BareThrowingCall => write!(
-                f,
-                "this call throws, so it must be handled by a `try`"
-            ),
+            TypeErrorKind::BareThrowingCall => {
+                write!(f, "this call throws, so it must be handled by a `try`")
+            }
             TypeErrorKind::Throws { thrown, declared } => write!(
                 f,
                 "this throws `{thrown}`, but the function only declares `throws {declared}`"
@@ -344,12 +461,20 @@ impl fmt::Display for TypeError {
                  is no adapter between the two yet, so the clauses must match exactly. \
                  Wrap it in a lambda with the expected signature"
             ),
-            TypeErrorKind::OpaqueRecord { record, module, what } => write!(
+            TypeErrorKind::OpaqueRecord {
+                record,
+                module,
+                what,
+            } => write!(
                 f,
                 "`{record}` is opaque, so {what} only inside `{module}`. A value of it can \
                  be held and passed anywhere -- go through a function `{module}` provides"
             ),
-            TypeErrorKind::SealedRecord { record, module, what } => write!(
+            TypeErrorKind::SealedRecord {
+                record,
+                module,
+                what,
+            } => write!(
                 f,
                 "`{record}` is sealed, so {what} only inside `{module}`. A value of it can \
                  be held, passed, and tested (`is`, `as?`) anywhere -- go through a \
@@ -361,7 +486,10 @@ impl fmt::Display for TypeError {
                  or expected type pins it. Give the type arguments explicitly -- \
                  `{function}[...]` -- or use the result where its type is known"
             ),
-            TypeErrorKind::UnreachableArm { pattern, names_type } => {
+            TypeErrorKind::UnreachableArm {
+                pattern,
+                names_type,
+            } => {
                 if *names_type {
                     write!(
                         f,
@@ -482,7 +610,10 @@ impl fmt::Display for TypeError {
                  closure's captures are immutable inside it"
             ),
             TypeErrorKind::NotCallable { what, ty } => {
-                write!(f, "{what} is a `{ty}`, which is not a function and cannot be called")
+                write!(
+                    f,
+                    "{what} is a `{ty}`, which is not a function and cannot be called"
+                )
             }
             TypeErrorKind::LambdaParamNeedsType(n) => write!(
                 f,
@@ -500,7 +631,11 @@ impl fmt::Display for TypeError {
             }
             TypeErrorKind::Todo(msg) => write!(f, "TODO: {msg}"),
 
-            TypeErrorKind::NoSubjectToSwitch { protocol, method, subject } => write!(
+            TypeErrorKind::NoSubjectToSwitch {
+                protocol,
+                method,
+                subject,
+            } => write!(
                 f,
                 "`{method}` is dispatched on the type it RETURNS, and `{subject}` needs a \
                  different impl of `{protocol}` per variant -- so there is nothing in hand \
@@ -562,12 +697,14 @@ impl TypeError {
             TypeErrorKind::BareThrowingCall => {
                 "`try` propagates, `try?` softens to null, `try!` aborts".into()
             }
-            TypeErrorKind::NoImpl { protocol, uncovered, .. } => {
+            TypeErrorKind::NoImpl {
+                protocol,
+                uncovered,
+                ..
+            } => {
                 format!("add an `impl {protocol} for {uncovered}`")
             }
-            TypeErrorKind::MainSignatureFixed => {
-                "drop the return type and `throws` clause".into()
-            }
+            TypeErrorKind::MainSignatureFixed => "drop the return type and `throws` clause".into(),
             TypeErrorKind::UnsatisfiedBound { ty, protocol } => {
                 format!("add `{protocol}` to `{ty}`'s bounds, or `impl {protocol} for {ty}`")
             }
@@ -579,7 +716,10 @@ impl TypeError {
     /// most errors; a capture rebind points back at where the name was bound.
     pub fn labels(&self) -> Vec<(Span, String)> {
         match &self.kind {
-            TypeErrorKind::RebindCapture { origin: Some(origin), .. } => {
+            TypeErrorKind::RebindCapture {
+                origin: Some(origin),
+                ..
+            } => {
                 vec![(origin.clone(), "captured here".into())]
             }
             _ => vec![],
@@ -850,7 +990,7 @@ impl Env {
             depth: 0,
             error_ty,
             unit: Unit::RootApplication,
-        current_module: vec![],
+            current_module: vec![],
         }
     }
 
@@ -891,7 +1031,9 @@ impl Env {
             // one owner because the units here are FILES: making them claim `std`
             // individually just makes the stdlib collide with itself.
             for k in 1..prefix.len() {
-                env.module_unit.entry(prefix[..k].join("::")).or_insert(Self::LIBRARY_OWNER);
+                env.module_unit
+                    .entry(prefix[..k].join("::"))
+                    .or_insert(Self::LIBRARY_OWNER);
             }
             env.declare(prefix, &m.decls, n);
         }
@@ -912,7 +1054,9 @@ impl Env {
     /// yet — every declaration `Env` can see is local, so the question has only one
     /// answer and asking it would be theatre. It belongs here when `use` lands.
     fn check_coherence(&mut self) {
-        let orphans: Vec<usize> = (0..self.impls.len()).filter(|&n| self.impls[n].orphan).collect();
+        let orphans: Vec<usize> = (0..self.impls.len())
+            .filter(|&n| self.impls[n].orphan)
+            .collect();
 
         for n in orphans {
             let (protocol, span) = {
@@ -921,7 +1065,10 @@ impl Env {
             };
 
             if self.unit == Unit::Library {
-                self.error(span.clone(), TypeErrorKind::OrphanInLibrary(protocol.clone()));
+                self.error(
+                    span.clone(),
+                    TypeErrorKind::OrphanInLibrary(protocol.clone()),
+                );
             }
 
             // `target & OR(existing) = empty`. A constructor target (`impl C for Box`)
@@ -1016,7 +1163,10 @@ impl Env {
                 if !self.impls[n].methods.iter().any(|m| m.name == method) {
                     self.error(
                         span.clone(),
-                        TypeErrorKind::ImplMissingMethod { protocol: protocol.clone(), method },
+                        TypeErrorKind::ImplMissingMethod {
+                            protocol: protocol.clone(),
+                            method,
+                        },
                     );
                 }
             }
@@ -1029,12 +1179,17 @@ impl Env {
         for n in 0..self.impls.len() {
             let sub = self.impls[n].protocol;
             let supers = self.protocols[sub.0].supertraits.clone();
-            let Some(target) = self.impls[n].target else { continue };
+            let Some(target) = self.impls[n].target else {
+                continue;
+            };
             let module = self.impls[n].module.clone();
             let span = self.impls[n].span.clone();
             for spath in &supers {
                 let Some(super_id) = self.lookup_protocol(&module, spath) else {
-                    self.error(span.clone(), TypeErrorKind::UnknownProtocol(spath.join("::")));
+                    self.error(
+                        span.clone(),
+                        TypeErrorKind::UnknownProtocol(spath.join("::")),
+                    );
                     continue;
                 };
                 let targets: Vec<TyId> = self
@@ -1051,7 +1206,11 @@ impl Env {
                     let ty = super::print::print(&mut self.solver.t, target);
                     self.error(
                         span.clone(),
-                        TypeErrorKind::MissingSupertrait { sub: sub_name, required, ty },
+                        TypeErrorKind::MissingSupertrait {
+                            sub: sub_name,
+                            required,
+                            ty,
+                        },
                     );
                 }
             }
@@ -1125,7 +1284,11 @@ impl Env {
                 Some((m, n)) => (m, n),
                 None => ("", cand.as_str()),
             };
-            if let Some(f) = self.fns.iter().find(|f| f.name == name && f.module.join("::") == m) {
+            if let Some(f) = self
+                .fns
+                .iter()
+                .find(|f| f.name == name && f.module.join("::") == m)
+            {
                 return Some(f);
             }
         }
@@ -1141,8 +1304,10 @@ impl Env {
                 Some((m, n)) => (m, n),
                 None => ("", cand.as_str()),
             };
-            if let Some(c) =
-                self.consts.iter().find(|c| c.name == name && c.module.join("::") == m)
+            if let Some(c) = self
+                .consts
+                .iter()
+                .find(|c| c.name == name && c.module.join("::") == m)
             {
                 return Some(c);
             }
@@ -1204,14 +1369,19 @@ impl Env {
     /// key answers `false` rather than erroring — the missing name has its own
     /// diagnostic already.
     pub fn is_generic(&self, key: &str) -> bool {
-        self.decls.get(key).is_some_and(|d| !d.generics().is_empty())
+        self.decls
+            .get(key)
+            .is_some_and(|d| !d.generics().is_empty())
     }
 
     /// The generic parameter names of a declared type, in order. Position is the whole
     /// meaning: the checker pairs these with the argument list, so anything reordering
     /// them would silently substitute the wrong type.
     pub fn generic_names(&self, key: &str) -> Vec<String> {
-        self.decls.get(key).map(|d| d.generics().to_vec()).unwrap_or_default()
+        self.decls
+            .get(key)
+            .map(|d| d.generics().to_vec())
+            .unwrap_or_default()
     }
 
     /// Resolve written syntax to a type. Takes `&mut self` because resolving may
@@ -1246,7 +1416,10 @@ impl Env {
                     {
                         // Keyed by the qualified name, because `repr.rs` looks it up with
                         // the `#nominal` tag, which is now qualified.
-                        self.solver.t.runtime_types.insert(qualify(module, &r.name), sym);
+                        self.solver
+                            .t
+                            .runtime_types
+                            .insert(qualify(module, &r.name), sym);
                     }
                     self.declare_type(module, d.span.clone(), Sort::Record(r.clone()))
                 }
@@ -1265,8 +1438,7 @@ impl Env {
                     if self.protocol_ids.insert(key, id).is_some() {
                         self.error(d.span.clone(), TypeErrorKind::Duplicate(p.name.clone()));
                     }
-                    let supertraits =
-                        p.wheres.iter().filter_map(bound_path).collect();
+                    let supertraits = p.wheres.iter().filter_map(bound_path).collect();
                     self.protocols.push(Protocol {
                         name: p.name.clone(),
                         module: module.to_vec(),
@@ -1356,7 +1528,11 @@ impl Env {
     /// wins in the message but the *last* wins in the table; both readings name the same
     /// duplicate, and the program is already rejected either way.
     fn declare_type(&mut self, module: &[String], span: Span, sort: Sort) {
-        let d = TypeDecl { module: module.to_vec(), sort, span: span.clone() };
+        let d = TypeDecl {
+            module: module.to_vec(),
+            sort,
+            span: span.clone(),
+        };
         let key = qualify(module, d.name());
         let name = d.name().to_string();
         if self.decls.insert(key, d).is_some() {
@@ -1422,7 +1598,9 @@ impl Env {
                     // declaration's own errors are reported once, at the
                     // declaration, rather than at every use.
                     let key = qualify(module, decl_name(&d.kind));
-                    let Some(decl) = self.decls.get(&key) else { continue };
+                    let Some(decl) = self.decls.get(&key) else {
+                        continue;
+                    };
                     let generics = decl.generics().to_vec();
                     let scope = Scope::new(module).with_rigid(self, &generics);
                     let args: Vec<TyId> = scope.vars.iter().map(|v| v.ty).collect();
@@ -1457,7 +1635,9 @@ impl Env {
                 }
                 ast::DeclKind::Protocol(p) => {
                     let key = qualify(module, &p.name);
-                    let Some(&id) = self.protocol_ids.get(&key) else { continue };
+                    let Some(&id) = self.protocol_ids.get(&key) else {
+                        continue;
+                    };
                     let subject = ScopeVar {
                         name: p.subject.clone(),
                         ty: {
@@ -1472,8 +1652,12 @@ impl Env {
                         .map(|m| self.fn_sig(module, m, std::slice::from_ref(&subject), &d.span))
                         .collect();
                     self.protocols[id.0].methods = methods;
-                    self.protocols[id.0].defaults =
-                        p.methods.iter().filter(|m| m.body.is_some()).map(|m| m.name.clone()).collect();
+                    self.protocols[id.0].defaults = p
+                        .methods
+                        .iter()
+                        .filter(|m| m.body.is_some())
+                        .map(|m| m.name.clone())
+                        .collect();
                 }
                 ast::DeclKind::Impl(i) => self.impl_def(module, i, &d.span),
                 ast::DeclKind::Mod(m) => {
@@ -1529,7 +1713,11 @@ impl Env {
             Some(t) => self.resolve(&scope, t),
             None => self.solver.t.never(),
         };
-        let wheres = f.wheres.iter().filter_map(|w| bound_path(w).map(|p| (w.param.clone(), p))).collect();
+        let wheres = f
+            .wheres
+            .iter()
+            .filter_map(|w| bound_path(w).map(|p| (w.param.clone(), p)))
+            .collect();
         let ty = {
             let ps = params.iter().map(|p| p.1).collect();
             self.solver.t.arrow(ps, throws, ret)
@@ -1563,7 +1751,10 @@ impl Env {
     /// see an impl with no protocol to check it against.
     fn impl_def(&mut self, module: &[String], i: &ast::ImplDecl, span: &Span) {
         let Some(protocol) = self.lookup_protocol(module, &i.protocol) else {
-            self.error(span.clone(), TypeErrorKind::UnknownProtocol(i.protocol.join("::")));
+            self.error(
+                span.clone(),
+                TypeErrorKind::UnknownProtocol(i.protocol.join("::")),
+            );
             return;
         };
         // A marker has no methods, so an impl for one has nothing to fail on and was
@@ -1610,10 +1801,17 @@ impl Env {
         for g in &i.generics {
             let id = self.solver.t.name(g);
             let ty = self.solver.t.var(id);
-            vars.push(ScopeVar { name: g.clone(), ty, arity: 0 });
+            vars.push(ScopeVar {
+                name: g.clone(),
+                ty,
+                arity: 0,
+            });
         }
-        let mut methods: Vec<FnSig> =
-            i.methods.iter().map(|m| self.fn_sig(module, m, &vars, span)).collect();
+        let mut methods: Vec<FnSig> = i
+            .methods
+            .iter()
+            .map(|m| self.fn_sig(module, m, &vars, span))
+            .collect();
 
         // A method the impl does not write, but the protocol gives a body for, still belongs
         // to this impl. Its signature is the protocol's with the SUBJECT substituted for this
@@ -1661,8 +1859,11 @@ impl Env {
             }
         }
 
-        let wheres =
-            i.wheres.iter().filter_map(|w| bound_path(w).map(|p| (w.param.clone(), p))).collect();
+        let wheres = i
+            .wheres
+            .iter()
+            .filter_map(|w| bound_path(w).map(|p| (w.param.clone(), p)))
+            .collect();
 
         self.impls.push(ImplDef {
             protocol,
@@ -1829,8 +2030,9 @@ impl Env {
         let is_root_app = unit.is_none() || unit == self.root_unit;
         let same_unit = |_u: usize| !root_scope || is_root_app;
         if let (Some(first), Some(us)) = (path.first(), self.uses.get(scope)) {
-            if let Some((_, _, full)) =
-                us.iter().find(|(u, bound, _)| bound == first && same_unit(*u))
+            if let Some((_, _, full)) = us
+                .iter()
+                .find(|(u, bound, _)| bound == first && same_unit(*u))
             {
                 let mut key = full.clone();
                 for seg in &path[1..] {
@@ -1860,7 +2062,11 @@ impl Env {
         // Nothing but the program declares at the root, so nothing legitimate is lost.
         let foreign_scope = root_scope && !is_root_app && path.len() == 1;
         if !foreign_scope {
-            out.push(if scope.is_empty() { joined.clone() } else { format!("{scope}::{joined}") });
+            out.push(if scope.is_empty() {
+                joined.clone()
+            } else {
+                format!("{scope}::{joined}")
+            });
         }
         // A glob makes `prefix::path` reachable, below an explicit binding.
         if let Some(gs) = self.glob_uses.get(scope) {
@@ -1889,7 +2095,10 @@ impl Env {
             }
             let (m, name) = k.rsplit_once("::").unwrap_or(("", k.as_str()));
             let exists = self.decls.contains_key(&k)
-                || self.fns.iter().any(|f| f.name == name && f.module.join("::") == m);
+                || self
+                    .fns
+                    .iter()
+                    .any(|f| f.name == name && f.module.join("::") == m);
             if exists {
                 return Some(m.to_string());
             }
@@ -1901,13 +2110,17 @@ impl Env {
     /// The key is what every other table is indexed by, so callers pass this on rather
     /// than re-deriving a name from the written path.
     pub fn lookup(&self, module: &[String], path: &[String]) -> Option<String> {
-        self.candidates(module, path).into_iter().find(|k| self.decls.contains_key(k))
+        self.candidates(module, path)
+            .into_iter()
+            .find(|k| self.decls.contains_key(k))
     }
 
     /// A protocol path as seen from `module`. Public because `A::go(r)` — the
     /// escape from cross-protocol ambiguity — has to name one.
     pub fn lookup_protocol(&self, module: &[String], path: &[String]) -> Option<ProtocolId> {
-        self.candidates(module, path).into_iter().find_map(|k| self.protocol_ids.get(&k).copied())
+        self.candidates(module, path)
+            .into_iter()
+            .find_map(|k| self.protocol_ids.get(&k).copied())
     }
 
     /// Whether `sub` is `want` or transitively requires it through supertraits, so a
@@ -1940,7 +2153,9 @@ impl Env {
             return self.satisfies_marker(ty, protocol);
         }
         if self.protocols[protocol.0].subject_arity > 0 {
-            let Some(head) = crate::typecheck::nominal_head_of(self, ty) else { return false };
+            let Some(head) = crate::typecheck::nominal_head_of(self, ty) else {
+                return false;
+            };
             return self.impls.iter().any(|i| {
                 i.protocol == protocol && i.target_head.as_deref() == Some(head.as_str())
             });
@@ -2094,7 +2309,9 @@ impl Env {
         let unit = self.unit_of(module);
         for n in (0..=module.len()).rev() {
             let scope = module[..n].join("::");
-            let Some(us) = self.uses.get(&scope) else { continue };
+            let Some(us) = self.uses.get(&scope) else {
+                continue;
+            };
             if let Some((_, _, full)) = us
                 .iter()
                 .find(|(u, bound, _)| bound == name && unit.is_none_or(|mine| mine == *u))
@@ -2270,7 +2487,11 @@ impl Env {
     fn bind(&mut self, decl: &TypeDecl, args: &[TyId]) -> Scope {
         let mut scope = Scope::new(&decl.module);
         for (g, &a) in decl.generics().iter().zip(args) {
-            scope.vars.push(ScopeVar { name: g.clone(), ty: a, arity: 0 });
+            scope.vars.push(ScopeVar {
+                name: g.clone(),
+                ty: a,
+                arity: 0,
+            });
         }
         scope
     }
@@ -2282,7 +2503,13 @@ impl Env {
     /// Any poisoned field poisons the whole record. A record with one field missing would
     /// otherwise go on to produce a `NoField` at every use of that field, burying the one
     /// diagnostic that named the real problem.
-    fn record_body(&mut self, r: &ast::RecordDecl, key: &str, scope: &Scope, args: Vec<TyId>) -> TyId {
+    fn record_body(
+        &mut self,
+        r: &ast::RecordDecl,
+        key: &str,
+        scope: &Scope,
+        args: Vec<TyId>,
+    ) -> TyId {
         let mut fields: Vec<(super::types::NameId, TyId)> = Vec::new();
         let mut poison = false;
         for f in &r.fields {
@@ -2290,7 +2517,10 @@ impl Env {
             poison |= self.is_error(t);
             let l = self.solver.t.name(&f.name);
             if fields.iter().any(|(seen, _)| *seen == l) {
-                self.error(f.span.clone(), TypeErrorKind::DuplicateField(f.name.clone()));
+                self.error(
+                    f.span.clone(),
+                    TypeErrorKind::DuplicateField(f.name.clone()),
+                );
                 poison = true;
                 continue;
             }
@@ -2306,7 +2536,6 @@ impl Env {
         let n = self.solver.t.name(key);
         self.solver.t.nominal(n, args, fields)
     }
-
 }
 
 /// The generic parameters a body asserts with `as!` — the direct spelling only: a
@@ -2320,7 +2549,12 @@ fn asserted_params(f: &ast::FnDecl) -> Vec<String> {
     }
     impl<'a> Visitor<'a> for W<'_> {
         fn expr(&mut self, e: &'a ast::Expr) {
-            if let ast::ExprKind::As { form: ast::CastForm::Assert, ty, .. } = &e.kind {
+            if let ast::ExprKind::As {
+                form: ast::CastForm::Assert,
+                ty,
+                ..
+            } = &e.kind
+            {
                 if let ast::TypeSpecKind::Named { path, args } = &ty.kind {
                     if args.is_empty() {
                         if let [one] = path.as_slice() {
@@ -2335,7 +2569,10 @@ fn asserted_params(f: &ast::FnDecl) -> Vec<String> {
         }
     }
     let Some(body) = &f.body else { return vec![] };
-    let mut w = W { generics: &f.generics, out: vec![] };
+    let mut w = W {
+        generics: &f.generics,
+        out: vec![],
+    };
     walk_block(&mut w, body);
     w.out
 }
@@ -2400,8 +2637,7 @@ pub fn opacity_permits(module: &[String], owner: &[String]) -> bool {
     // With the prelude moved to its own path, `[]` means the program's own root and
     // nothing else, and its subtree — every module the program declares — is exactly
     // who should see into a record declared there.
-    let nested_in_owner =
-        module.len() >= owner.len() && module[..owner.len()] == *owner;
+    let nested_in_owner = module.len() >= owner.len() && module[..owner.len()] == *owner;
     let same = module == owner;
     same || nested_in_owner
 }
@@ -2427,7 +2663,12 @@ fn flatten_use(
     globs: &mut Vec<String>,
 ) {
     let joined = |extra: &[String]| {
-        prefix.iter().chain(extra).cloned().collect::<Vec<_>>().join("::")
+        prefix
+            .iter()
+            .chain(extra)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("::")
     };
     match tree {
         ast::UseTree::Leaf { path, alias } => {
@@ -2438,7 +2679,10 @@ fn flatten_use(
             }
         }
         ast::UseTree::Glob { prefix: p } => globs.push(joined(p)),
-        ast::UseTree::Group { prefix: p, children } => {
+        ast::UseTree::Group {
+            prefix: p,
+            children,
+        } => {
             let inner: Vec<String> = prefix.iter().chain(p).cloned().collect();
             for c in children {
                 flatten_use(c, &inner, binds, globs);
@@ -2498,7 +2742,9 @@ struct Contract<'a> {
 /// would make the caller report `MuWithoutRecursion` against it.
 fn contractivity(env: &Env, key: &str) -> (Vec<TypeError>, bool) {
     let decl = &env.decls[key];
-    let Sort::Mu(a) = &decl.sort else { return (vec![], true) };
+    let Sort::Mu(a) = &decl.sort else {
+        return (vec![], true);
+    };
     let mut c = Contract {
         env,
         key,
@@ -2508,8 +2754,19 @@ fn contractivity(env: &Env, key: &str) -> (Vec<TypeError>, bool) {
         errors: vec![],
         found: false,
     };
-    let ctx = Rc::new(Ctx { module: decl.module.clone(), subst: HashMap::new() });
-    c.walk(&a.value, &ctx, Pos { guarded: false, neg: false, contra: false });
+    let ctx = Rc::new(Ctx {
+        module: decl.module.clone(),
+        subst: HashMap::new(),
+    });
+    c.walk(
+        &a.value,
+        &ctx,
+        Pos {
+            guarded: false,
+            neg: false,
+            contra: false,
+        },
+    );
     // One occurrence is reached twice — once as a generic argument, once through
     // the field that argument is substituted into — and it is one mistake.
     let mut seen: Vec<TypeError> = Vec::new();
@@ -2527,7 +2784,10 @@ impl Contract<'_> {
     /// unfolds to itself and never makes progress, so they pass `pos` through unchanged
     /// while every genuine constructor sets `guarded`.
     fn walk(&mut self, spec: &ast::TypeSpec, ctx: &Rc<Ctx>, pos: Pos) {
-        let under = Pos { guarded: true, ..pos };
+        let under = Pos {
+            guarded: true,
+            ..pos
+        };
         match &spec.kind {
             ast::TypeSpecKind::Union(xs) | ast::TypeSpecKind::Intersect(xs) => {
                 for x in xs {
@@ -2545,13 +2805,20 @@ impl Contract<'_> {
                     self.walk(&f.ty, ctx, under);
                 }
             }
-            ast::TypeSpecKind::Fn { params, throws, ret } => {
+            ast::TypeSpecKind::Fn {
+                params,
+                throws,
+                ret,
+            } => {
                 // decisions.md rule 2: a parameter is contravariant and excluded, a
                 // return is covariant and allowed. The arrow guards the return like
                 // any other constructor — `ArrowAtom` holds it as a raw `TyId`, which
                 // is exactly the path a boolean op never snapshots, so the cycle
                 // closes there the same way it does through a field.
-                let param = Pos { contra: true, ..under };
+                let param = Pos {
+                    contra: true,
+                    ..under
+                };
                 for p in params {
                     self.walk(p, ctx, param);
                 }
@@ -2594,14 +2861,26 @@ impl Contract<'_> {
         // A generic argument is a guard whatever the head is — it is visible in the
         // type expression, and an unresolvable head does not change that.
         for a in args {
-            self.walk(a, ctx, Pos { guarded: true, ..pos });
+            self.walk(
+                a,
+                ctx,
+                Pos {
+                    guarded: true,
+                    ..pos
+                },
+            );
         }
-        let Some(key) = self.env.lookup(&ctx.module, path) else { return };
+        let Some(key) = self.env.lookup(&ctx.module, path) else {
+            return;
+        };
 
         if key == self.key {
             self.found = true;
             let kind = if let Some(other) = self.foreign.first() {
-                TypeErrorKind::MuMutual { name: self.name.clone(), other: other.clone() }
+                TypeErrorKind::MuMutual {
+                    name: self.name.clone(),
+                    other: other.clone(),
+                }
             } else if pos.neg {
                 TypeErrorKind::MuUnderNegation(self.name.clone())
             } else if pos.contra {
@@ -2611,7 +2890,11 @@ impl Contract<'_> {
             } else {
                 return;
             };
-            self.errors.push(TypeError { span: spec.span.clone(), kind, module: ctx.module.clone() });
+            self.errors.push(TypeError {
+                span: spec.span.clone(),
+                kind,
+                module: ctx.module.clone(),
+            });
             return;
         }
 
@@ -2649,7 +2932,14 @@ impl Contract<'_> {
                 self.foreign.pop();
             }
             // A data constructor with one field.
-            Sort::Newtype(a) => self.walk(&a.value, &inner, Pos { guarded: true, ..pos }),
+            Sort::Newtype(a) => self.walk(
+                &a.value,
+                &inner,
+                Pos {
+                    guarded: true,
+                    ..pos
+                },
+            ),
             // A nominal record is opaque here. The recursive variable must occur in
             // the `mu`'s own body -- as a generic argument, a tuple element, an arrow
             // -- not by reaching into a separate record's fields. A record that

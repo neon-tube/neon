@@ -26,9 +26,18 @@ pub fn program(p: &Program) -> String {
 /// the dump. A lambda's environment is still visible as its first parameter.
 pub fn func(f: &Func) -> String {
     let mut out = String::new();
-    let params: Vec<String> =
-        f.params.iter().map(|&p| format!("{} {}", val(p), repr(f.value_repr(p)))).collect();
-    let _ = writeln!(out, "fn @{}({}) -> {} {{", f.name, params.join(", "), repr(&f.ret));
+    let params: Vec<String> = f
+        .params
+        .iter()
+        .map(|&p| format!("{} {}", val(p), repr(f.value_repr(p))))
+        .collect();
+    let _ = writeln!(
+        out,
+        "fn @{}({}) -> {} {{",
+        f.name,
+        params.join(", "),
+        repr(&f.ret)
+    );
     for b in &f.blocks {
         block(&mut out, f, b);
     }
@@ -46,8 +55,11 @@ fn block(out: &mut String, f: &Func, b: &Block) {
     if b.id == f.entry || b.params.is_empty() {
         let _ = writeln!(out, "  block{}:", b.id.0);
     } else {
-        let params: Vec<String> =
-            b.params.iter().map(|&p| format!("{} {}", val(p), repr(f.value_repr(p)))).collect();
+        let params: Vec<String> = b
+            .params
+            .iter()
+            .map(|&p| format!("{} {}", val(p), repr(f.value_repr(p))))
+            .collect();
         let _ = writeln!(out, "  block{}({}):", b.id.0, params.join(", "));
     }
     for inst in &b.insts {
@@ -79,10 +91,15 @@ fn op(o: &Op) -> String {
         Op::Prim(p, args) => format!("prim.{} {}", prim(*p), vals(args)),
         Op::Call { func, args } => format!("call @{func}({})", vals(args)),
         Op::Native { symbol, args } => format!("native {symbol:?}({})", vals(args)),
-        Op::CallClosure { callee, args } => format!("call.closure {}({})", val(*callee), vals(args)),
+        Op::CallClosure { callee, args } => {
+            format!("call.closure {}({})", val(*callee), vals(args))
+        }
         Op::MakeClosure { func, captures } => format!("closure @{func}[{}]", vals(captures)),
         Op::MakeRecord { name, fields } => {
-            let fs: Vec<String> = fields.iter().map(|(n, v)| format!("{n}: {}", val(*v))).collect();
+            let fs: Vec<String> = fields
+                .iter()
+                .map(|(n, v)| format!("{n}: {}", val(*v)))
+                .collect();
             let n = name.as_deref().unwrap_or("");
             format!("record {n}{{{}}}", fs.join(", "))
         }
@@ -115,9 +132,16 @@ fn term(t: &Term) -> String {
             format!("branch {}, {}, {}", val(*cond), target(then), target(els))
         }
         Term::Switch { on, arms, default } => {
-            let arms: Vec<String> =
-                arms.iter().map(|(k, tgt)| format!("{} => {}", key(k), target(tgt))).collect();
-            format!("switch {} [{}] default {}", val(*on), arms.join(", "), target(default))
+            let arms: Vec<String> = arms
+                .iter()
+                .map(|(k, tgt)| format!("{} => {}", key(k), target(tgt)))
+                .collect();
+            format!(
+                "switch {} [{}] default {}",
+                val(*on),
+                arms.join(", "),
+                target(default)
+            )
         }
         Term::Unreachable => "unreachable".to_string(),
     }
@@ -197,17 +221,27 @@ pub fn repr(r: &Repr) -> String {
         // `Resource[i64, E]`, not `neon_resource[...]`.
         Repr::Runtime { nominal, args, .. } if args.is_empty() => nominal.clone(),
         Repr::Runtime { nominal, args, .. } => {
-            format!("{nominal}[{}]", args.iter().map(repr).collect::<Vec<_>>().join(", "))
+            format!(
+                "{nominal}[{}]",
+                args.iter().map(repr).collect::<Vec<_>>().join(", ")
+            )
         }
         Repr::BoxedRec(a) => format!("box#{a}"),
         Repr::Record { name, fields } => {
-            let fs: Vec<String> = fields.iter().map(|(n, r)| format!("{n}: {}", repr(r))).collect();
+            let fs: Vec<String> = fields
+                .iter()
+                .map(|(n, r)| format!("{n}: {}", repr(r)))
+                .collect();
             format!("{}{{{}}}", name.as_deref().unwrap_or(""), fs.join(", "))
         }
         Repr::Tuple(rs) => format!("({})", rs.iter().map(repr).collect::<Vec<_>>().join(", ")),
         Repr::List(e) => format!("list[{}]", repr(e)),
         Repr::Map(k, v) => format!("map[{}, {}]", repr(k), repr(v)),
-        Repr::Closure { params, throws, ret } => {
+        Repr::Closure {
+            params,
+            throws,
+            ret,
+        } => {
             let ps = params.iter().map(repr).collect::<Vec<_>>().join(", ");
             match throws.as_ref() {
                 Repr::Never => format!("fn({ps}) -> {}", repr(ret)),

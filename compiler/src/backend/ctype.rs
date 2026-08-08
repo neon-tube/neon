@@ -15,7 +15,12 @@ use std::fmt::Write;
 /// `(env, args…)` closure ABI, as opposed to ordinary functions that need an adapter
 /// thunk to be used as a closure value.
 pub fn lambda_names(program: &Program) -> HashSet<String> {
-    program.funcs.iter().filter(|f| f.env.is_some()).map(|f| f.name.clone()).collect()
+    program
+        .funcs
+        .iter()
+        .filter(|f| f.env.is_some())
+        .map(|f| f.name.clone())
+        .collect()
 }
 
 /// Names the aggregate structs a program needs and emits their C definitions.
@@ -86,7 +91,9 @@ impl TypeTable {
 
     /// Record that the program needs an entry-wise `Map` conversion.
     pub fn need_map_conv(&self, name: &str, src: &Repr, tgt: &Repr) {
-        self.map_convs.borrow_mut().insert(name.to_string(), (src.clone(), tgt.clone()));
+        self.map_convs
+            .borrow_mut()
+            .insert(name.to_string(), (src.clone(), tgt.clone()));
     }
 
     /// Every map conversion requested so far, as `(shim name, src map, tgt map)`.
@@ -127,7 +134,10 @@ impl TypeTable {
                 .funcs
                 .iter()
                 .map(|f| {
-                    (f.name.clone(), f.params.iter().map(|&p| f.value_repr(p).clone()).collect())
+                    (
+                        f.name.clone(),
+                        f.params.iter().map(|&p| f.value_repr(p).clone()).collect(),
+                    )
                 })
                 .collect(),
             key_witness_names: HashMap::new(),
@@ -204,7 +214,11 @@ impl TypeTable {
                 }
                 self.intern(r, "nu");
             }
-            Repr::Closure { params, throws, ret } => {
+            Repr::Closure {
+                params,
+                throws,
+                ret,
+            } => {
                 for p in params {
                     self.register(p);
                 }
@@ -214,7 +228,10 @@ impl TypeTable {
                 // even when this program never stores such a result itself.
                 if !matches!(throws.as_ref(), Repr::Never) {
                     self.register(throws);
-                    self.register(&Repr::Union(vec![ret.as_ref().clone(), throws.as_ref().clone()]));
+                    self.register(&Repr::Union(vec![
+                        ret.as_ref().clone(),
+                        throws.as_ref().clone(),
+                    ]));
                 }
             }
             // A back-edge carries no structure, so register the type it names instead —
@@ -503,9 +520,17 @@ impl TypeTable {
             // `as` trusts `is`, and the cast that follows hands a `neon_str` to a body
             // compiled for `int64_t`. Spelled by recursion like every other argument, so
             // nesting — `((i64) -> i64) -> i64` — is distinguished at every level too.
-            Repr::Closure { params, throws, ret } => format!(
+            Repr::Closure {
+                params,
+                throws,
+                ret,
+            } => format!(
                 "fn({})!{}->{}",
-                params.iter().map(|p| arg(p, open)).collect::<Vec<_>>().join(","),
+                params
+                    .iter()
+                    .map(|p| arg(p, open))
+                    .collect::<Vec<_>>()
+                    .join(","),
                 arg(throws, open),
                 arg(ret, open)
             ),
@@ -513,9 +538,14 @@ impl TypeTable {
             // `Box[str]` are both `Record { name: Some("Box"), .. }` — so the fields are
             // what distinguishes them. Spelled with names, since a record's identity
             // includes them.
-            Repr::Record { name: Some(n), fields } if !fields.is_empty() => {
-                let body: Vec<String> =
-                    fields.iter().map(|(f, t)| format!("{f}={}", arg(t, open))).collect();
+            Repr::Record {
+                name: Some(n),
+                fields,
+            } if !fields.is_empty() => {
+                let body: Vec<String> = fields
+                    .iter()
+                    .map(|(f, t)| format!("{f}={}", arg(t, open)))
+                    .collect();
                 format!("{n}[{}]", body.join(","))
             }
             Repr::Record { name: Some(n), .. } => n.clone(),
@@ -554,7 +584,10 @@ impl TypeTable {
             Repr::Runtime { nominal, args, .. } => {
                 format!(
                     "{nominal}[{}]",
-                    args.iter().map(|a| arg(a, open)).collect::<Vec<_>>().join(",")
+                    args.iter()
+                        .map(|a| arg(a, open))
+                        .collect::<Vec<_>>()
+                        .join(",")
                 )
             }
             // Anonymous shapes have no name to test against; their structure is the
@@ -693,7 +726,10 @@ impl TypeTable {
             // their tables together, so a miss means those two have drifted.
             Repr::BoxedRec(atom) => {
                 let Some(shape) = self.boxed.get(atom) else {
-                    ice(repr, "a boxed record whose pointee layout was never registered")
+                    ice(
+                        repr,
+                        "a boxed record whose pointee layout was never registered",
+                    )
                 };
                 if let Some(sname) = self.names.get(&key_with(shape, &self.recursive)) {
                     self.emit_one(out, &sname.clone(), shape, done);
@@ -703,7 +739,10 @@ impl TypeTable {
                 let _ = writeln!(out, "    {} value;", self.c_type(shape));
                 let _ = writeln!(out, "}};");
             }
-            Repr::Record { name: nominal, fields } => {
+            Repr::Record {
+                name: nominal,
+                fields,
+            } => {
                 if let Some(n) = nominal {
                     let _ = writeln!(out, "// {n}");
                 }
@@ -747,7 +786,10 @@ impl TypeTable {
 
 /// Whether a repr is a concrete value that can be boxed into `any`.
 fn is_boxable(r: &Repr) -> bool {
-    !matches!(r, Repr::Any | Repr::Never | Repr::Var(_) | Repr::Recursive(_))
+    !matches!(
+        r,
+        Repr::Any | Repr::Never | Repr::Var(_) | Repr::Recursive(_)
+    )
 }
 
 /// FNV-1a, the same 64-bit hash the atom tags use.
@@ -830,8 +872,11 @@ fn key_with(r: &Repr, rec: &HashMap<TyId, Repr>) -> String {
         return format!("Z{}", ty.0);
     }
     // Smallest id wins, so distinct types that unfold identically still agree on a key.
-    if let Some(ty) =
-        rec.iter().filter(|(_, u)| *u == r).map(|(t, _)| *t).min_by_key(|t| t.0)
+    if let Some(ty) = rec
+        .iter()
+        .filter(|(_, u)| *u == r)
+        .map(|(t, _)| *t)
+        .min_by_key(|t| t.0)
     {
         return format!("Z{}", ty.0);
     }
@@ -852,8 +897,16 @@ fn key_with(r: &Repr, rec: &HashMap<TyId, Repr>) -> String {
         // nominal alone would be safe today only because `c_type` is a function of
         // `nominal`; spelling both keeps the key honest if that ever stops holding, and
         // costs nothing since the key never leaves this table.
-        Repr::Runtime { nominal, c_type, args } if args.is_empty() => format!("N{nominal}@{c_type}"),
-        Repr::Runtime { nominal, c_type, args } => {
+        Repr::Runtime {
+            nominal,
+            c_type,
+            args,
+        } if args.is_empty() => format!("N{nominal}@{c_type}"),
+        Repr::Runtime {
+            nominal,
+            c_type,
+            args,
+        } => {
             format!(
                 "N{nominal}@{c_type}[{}]",
                 args.iter().map(key).collect::<Vec<_>>().join(",")
@@ -865,8 +918,10 @@ fn key_with(r: &Repr, rec: &HashMap<TyId, Repr>) -> String {
         Repr::Recursive(ty) => format!("Z{}", ty.0),
         Repr::BoxedRec(a) => format!("P{a}"),
         Repr::Record { name, fields } => {
-            let body: Vec<String> =
-                fields.iter().map(|(n, r)| format!("{n}={}", key(r))).collect();
+            let body: Vec<String> = fields
+                .iter()
+                .map(|(n, r)| format!("{n}={}", key(r)))
+                .collect();
             // CORRECT DEFAULT: an anonymous record has no name, and the empty string is
             // its name in the key. Two records share a C struct iff their keys match, and
             // a structural record must not collide with a nominal one that happens to have
@@ -878,7 +933,11 @@ fn key_with(r: &Repr, rec: &HashMap<TyId, Repr>) -> String {
         }
         Repr::List(e) => format!("L[{}]", key(e)),
         Repr::Map(k, v) => format!("M[{},{}]", key(k), key(v)),
-        Repr::Closure { params, throws, ret } => format!(
+        Repr::Closure {
+            params,
+            throws,
+            ret,
+        } => format!(
             "C[{}!{}=>{}]",
             params.iter().map(key).collect::<Vec<_>>().join(","),
             key(throws),

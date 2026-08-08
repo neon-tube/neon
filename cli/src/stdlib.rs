@@ -24,7 +24,8 @@ pub fn sources_from(root: &Path) -> Result<Vec<(String, String)>> {
 }
 
 fn collect(root: &Path, dir: &Path, out: &mut Vec<(String, String)>) -> Result<()> {
-    let entries = std::fs::read_dir(dir).wrap_err_with(|| format!("reading '{}'", dir.display()))?;
+    let entries =
+        std::fs::read_dir(dir).wrap_err_with(|| format!("reading '{}'", dir.display()))?;
     for entry in entries {
         let path = entry?.path();
         if path.is_dir() {
@@ -57,7 +58,10 @@ mod tests {
         // The repo stdlib directly, not via the install-layout probe.
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../stdlib");
         let sources = sources_from(&root).expect("stdlib on disk");
-        assert!(sources.iter().any(|(rel, _)| rel == "std/io.neon"), "io.neon is present");
+        assert!(
+            sources.iter().any(|(rel, _)| rel == "std/io.neon"),
+            "io.neon is present"
+        );
 
         let std_modules = stdlib::parse(&sources).expect("stdlib parses");
 

@@ -41,7 +41,8 @@ impl Sysroot {
             });
         }
 
-        let exe = std::env::current_exe().map_err(|e| eyre!("cannot locate the neon binary: {e}"))?;
+        let exe =
+            std::env::current_exe().map_err(|e| eyre!("cannot locate the neon binary: {e}"))?;
         let exe_dir = exe
             .parent()
             .ok_or_else(|| eyre!("the neon binary has no parent directory"))?;
@@ -83,12 +84,18 @@ impl Sysroot {
             // broken program instead of a misconfigured override.
             let dir = PathBuf::from(dir).join("stdlib");
             if !dir.is_dir() {
-                bail!("NEON_SYSROOT is set, but there is no stdlib/ at '{}'", dir.display());
+                bail!(
+                    "NEON_SYSROOT is set, but there is no stdlib/ at '{}'",
+                    dir.display()
+                );
             }
             return Ok(dir);
         }
-        let exe = std::env::current_exe().map_err(|e| eyre!("cannot locate the neon binary: {e}"))?;
-        let exe_dir = exe.parent().ok_or_else(|| eyre!("the neon binary has no parent directory"))?;
+        let exe =
+            std::env::current_exe().map_err(|e| eyre!("cannot locate the neon binary: {e}"))?;
+        let exe_dir = exe
+            .parent()
+            .ok_or_else(|| eyre!("the neon binary has no parent directory"))?;
         if let Some(found) = stdlib_beside(exe_dir) {
             return Ok(found);
         }
@@ -145,7 +152,11 @@ impl Sysroot {
     ///     runtimes; one family's instrumented archive does not link under the other's
     ///     driver, so the fallback would not be a slower build — it would be a broken
     ///     link or worse.
-    pub fn runtime_lib(&self, variant: RuntimeVariant, flavor: CcFlavor) -> Result<ResolvedRuntime> {
+    pub fn runtime_lib(
+        &self,
+        variant: RuntimeVariant,
+        flavor: CcFlavor,
+    ) -> Result<ResolvedRuntime> {
         let dir = self.lib_dir().join(flavor.dir());
         let path = dir.join(variant.archive());
         if path.is_file() {
@@ -323,7 +334,11 @@ const LLVM_WRAPPER: &[u8] = &[0xDE, 0xC0, 0x17, 0x0B];
 const LLVM_RAW: &[u8] = &[0x42, 0x43, 0xC0, 0xDE];
 
 fn inspect_archive_bytes(bytes: &[u8]) -> Option<ArchiveContents> {
-    let mut out = ArchiveContents { native_code: false, llvm_bitcode: false, gcc_lto: false };
+    let mut out = ArchiveContents {
+        native_code: false,
+        llvm_bitcode: false,
+        gcc_lto: false,
+    };
     for member in ar_members(bytes)? {
         if member.starts_with(LLVM_WRAPPER) || member.starts_with(LLVM_RAW) {
             out.llvm_bitcode = true;
@@ -378,7 +393,11 @@ fn ar_members(bytes: &[u8]) -> Option<Vec<&[u8]>> {
             return None;
         }
         let name = std::str::from_utf8(&header[0..16]).ok()?.trim_end();
-        let size: usize = std::str::from_utf8(&header[48..58]).ok()?.trim().parse().ok()?;
+        let size: usize = std::str::from_utf8(&header[48..58])
+            .ok()?
+            .trim()
+            .parse()
+            .ok()?;
         let start = pos + HEADER;
         let data = bytes.get(start..start.checked_add(size)?)?;
         // Members are padded to an even offset; the pad byte is not part of the data.
@@ -411,7 +430,10 @@ mod tests {
     /// A member header: name, mtime, uid, gid, mode, size, and the `` `\n `` terminator,
     /// in the fixed widths `ar` uses.
     fn header(name: &str, size: usize) -> String {
-        format!("{name:<16}{:<12}{:<6}{:<6}{:<8}{size:<10}`\n", 0, 0, 0, "644")
+        format!(
+            "{name:<16}{:<12}{:<6}{:<6}{:<8}{size:<10}`\n",
+            0, 0, 0, "644"
+        )
     }
 
     /// Build an `ar` archive with GNU-style short names around the given member bodies.
@@ -437,7 +459,14 @@ mod tests {
     fn bitcode_only_archive_is_llvm_lto_and_carries_no_machine_code() {
         let a = archive(&[("list.o", &[LLVM_RAW, b"body".as_slice()].concat())]);
         let c = inspect_archive_bytes(&a).expect("parses");
-        assert_eq!(c, ArchiveContents { native_code: false, llvm_bitcode: true, gcc_lto: false });
+        assert_eq!(
+            c,
+            ArchiveContents {
+                native_code: false,
+                llvm_bitcode: true,
+                gcc_lto: false
+            }
+        );
         assert!(c.lto_for(CcFlavor::Clang) && !c.lto_for(CcFlavor::Gcc));
     }
 
@@ -445,7 +474,14 @@ mod tests {
     fn gcc_fat_objects_carry_both_machine_code_and_gcc_lto() {
         let a = archive(&[("list.o", &elf(b"....gnu.lto_.symtab...."))]);
         let c = inspect_archive_bytes(&a).expect("parses");
-        assert_eq!(c, ArchiveContents { native_code: true, llvm_bitcode: false, gcc_lto: true });
+        assert_eq!(
+            c,
+            ArchiveContents {
+                native_code: true,
+                llvm_bitcode: false,
+                gcc_lto: true
+            }
+        );
         // The pair that used to be conflated: a gcc archive is linkable by clang, but
         // clang cannot inline through gcc's LTO.
         assert!(c.lto_for(CcFlavor::Gcc) && !c.lto_for(CcFlavor::Clang));
@@ -453,9 +489,19 @@ mod tests {
 
     #[test]
     fn plain_objects_carry_no_lto_for_either_family() {
-        let a = archive(&[("list.o", &elf(b"....text....")), ("gc.o", &elf(b"....data...."))]);
+        let a = archive(&[
+            ("list.o", &elf(b"....text....")),
+            ("gc.o", &elf(b"....data....")),
+        ]);
         let c = inspect_archive_bytes(&a).expect("parses");
-        assert_eq!(c, ArchiveContents { native_code: true, llvm_bitcode: false, gcc_lto: false });
+        assert_eq!(
+            c,
+            ArchiveContents {
+                native_code: true,
+                llvm_bitcode: false,
+                gcc_lto: false
+            }
+        );
         assert!(!c.lto_for(CcFlavor::Gcc) && !c.lto_for(CcFlavor::Clang));
     }
 
@@ -463,7 +509,10 @@ mod tests {
     /// contents as if they were object code. Members-only does not.
     #[test]
     fn the_symbol_table_is_not_mistaken_for_a_member() {
-        let a = archive(&[("", b"\x7FELF fake symtab .gnu.lto_"), ("list.o", &elf(b"..text.."))]);
+        let a = archive(&[
+            ("", b"\x7FELF fake symtab .gnu.lto_"),
+            ("list.o", &elf(b"..text..")),
+        ]);
         let c = inspect_archive_bytes(&a).expect("parses");
         assert!(!c.gcc_lto, "the `/` symbol table is skipped");
     }

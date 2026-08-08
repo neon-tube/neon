@@ -29,7 +29,11 @@ fn an_atom_and_a_union_of_atoms_are_one_tag() {
     let b = ty.atom(err);
     let u = ty.union(a, b);
     assert_eq!(repr_of(&ty, a), Repr::Tag);
-    assert_eq!(repr_of(&ty, u), Repr::Tag, "a union of atoms is still one discriminant");
+    assert_eq!(
+        repr_of(&ty, u),
+        Repr::Tag,
+        "a union of atoms is still one discriminant"
+    );
 }
 
 #[test]
@@ -97,7 +101,10 @@ fn list_and_map_are_runtime_containers() {
 
     let map_name = ty.name(crate::typecheck::env::Env::MAP);
     let map = ty.nominal(map_name, vec![s, i], vec![]);
-    assert_eq!(repr_of(&ty, map), Repr::Map(Box::new(Repr::Str), Box::new(Repr::I64)));
+    assert_eq!(
+        repr_of(&ty, map),
+        Repr::Map(Box::new(Repr::Str), Box::new(Repr::I64))
+    );
 }
 
 #[test]
@@ -202,13 +209,23 @@ fn one_of_each() -> Vec<(&'static str, Repr)> {
         ("Null", Repr::Null),
         ("Unit", Repr::Unit),
         ("Tag", Repr::Tag),
-        ("Record", Repr::Record { name: None, fields: vec![("a".into(), Repr::I64)] }),
+        (
+            "Record",
+            Repr::Record {
+                name: None,
+                fields: vec![("a".into(), Repr::I64)],
+            },
+        ),
         ("Tuple", Repr::Tuple(vec![Repr::I64])),
         ("List", Repr::List(Box::new(Repr::I64))),
         ("Map", Repr::Map(Box::new(Repr::Str), Box::new(Repr::I64))),
         (
             "Runtime",
-            Repr::Runtime { nominal: "R".into(), c_type: "neon_r".into(), args: vec![Repr::I64] },
+            Repr::Runtime {
+                nominal: "R".into(),
+                c_type: "neon_r".into(),
+                args: vec![Repr::I64],
+            },
         ),
         (
             "Closure",
@@ -222,7 +239,10 @@ fn one_of_each() -> Vec<(&'static str, Repr)> {
         ("Nullable", Repr::Nullable(Box::new(Repr::Str))),
         ("Var", Repr::Var("T".into())),
         ("BoxedRec", Repr::BoxedRec(0)),
-        ("Recursive", Repr::Recursive(crate::typecheck::types::TyId(0))),
+        (
+            "Recursive",
+            Repr::Recursive(crate::typecheck::types::TyId(0)),
+        ),
         ("Any", Repr::Any),
         ("Never", Repr::Never),
     ];
@@ -276,17 +296,37 @@ fn is_pointer_is_pinned_per_variant() {
 /// aggregates count when anything inside them does.
 #[test]
 fn is_counted_is_pinned_per_variant() {
-    let expected =
-        ["Str", "List", "Map", "Runtime", "Closure", "BoxedRec", "Any", "Recursive", "Nullable"];
+    let expected = [
+        "Str",
+        "List",
+        "Map",
+        "Runtime",
+        "Closure",
+        "BoxedRec",
+        "Any",
+        "Recursive",
+        "Nullable",
+    ];
     for (name, r) in one_of_each() {
-        assert_eq!(r.is_counted(), expected.contains(&name), "is_counted disagrees for {name}");
+        assert_eq!(
+            r.is_counted(),
+            expected.contains(&name),
+            "is_counted disagrees for {name}"
+        );
     }
     // Aggregates are counted exactly when a part is.
     assert!(!Repr::Tuple(vec![Repr::I64, Repr::Bool]).is_counted());
     assert!(Repr::Tuple(vec![Repr::I64, Repr::Str]).is_counted());
-    assert!(!Repr::Record { name: None, fields: vec![("a".into(), Repr::I64)] }.is_counted());
-    assert!(Repr::Record { name: None, fields: vec![("a".into(), Repr::List(Box::new(Repr::I64)))] }
-        .is_counted());
+    assert!(!Repr::Record {
+        name: None,
+        fields: vec![("a".into(), Repr::I64)]
+    }
+    .is_counted());
+    assert!(Repr::Record {
+        name: None,
+        fields: vec![("a".into(), Repr::List(Box::new(Repr::I64)))]
+    }
+    .is_counted());
     assert!(!Repr::Union(vec![Repr::I64, Repr::Null]).is_counted());
     assert!(Repr::Union(vec![Repr::I64, Repr::Str]).is_counted());
     assert!(!Repr::Nullable(Box::new(Repr::Unit)).is_counted());
@@ -297,7 +337,11 @@ fn is_counted_is_pinned_per_variant() {
 #[test]
 fn is_concrete_is_pinned_per_variant() {
     for (name, r) in one_of_each() {
-        assert_eq!(r.is_concrete(), name != "Var", "is_concrete disagrees for {name}");
+        assert_eq!(
+            r.is_concrete(),
+            name != "Var",
+            "is_concrete disagrees for {name}"
+        );
     }
     let v = Repr::Var("T".into());
     assert!(!Repr::List(Box::new(v.clone())).is_concrete());
@@ -305,7 +349,11 @@ fn is_concrete_is_pinned_per_variant() {
     assert!(!Repr::Nullable(Box::new(v.clone())).is_concrete());
     assert!(!Repr::Tuple(vec![Repr::I64, v.clone()]).is_concrete());
     assert!(!Repr::Union(vec![Repr::I64, v.clone()]).is_concrete());
-    assert!(!Repr::Record { name: None, fields: vec![("a".into(), v.clone())] }.is_concrete());
+    assert!(!Repr::Record {
+        name: None,
+        fields: vec![("a".into(), v.clone())]
+    }
+    .is_concrete());
     assert!(!Repr::Runtime {
         nominal: "R".into(),
         c_type: "neon_r".into(),
@@ -318,8 +366,12 @@ fn is_concrete_is_pinned_per_variant() {
         ret: Box::new(Repr::I64),
     }
     .is_concrete());
-    assert!(!Repr::Closure { params: vec![], throws: Box::new(Repr::Never), ret: Box::new(v) }
-        .is_concrete());
+    assert!(!Repr::Closure {
+        params: vec![],
+        throws: Box::new(Repr::Never),
+        ret: Box::new(v)
+    }
+    .is_concrete());
 }
 
 /// `normalize_union` claims to reproduce the order `repr_components` pushes its components
@@ -349,10 +401,20 @@ fn normalize_union_reproduces_the_order_repr_of_derives() {
     // Whatever order an instance's variants arrive in, re-normalising must land back on the
     // one `repr_of` derives for the same type.
     for start in [
-        vec![Repr::List(Box::new(Repr::I64)), Repr::Tuple(vec![Repr::I64, Repr::Str])],
-        vec![Repr::Tuple(vec![Repr::I64, Repr::Str]), Repr::List(Box::new(Repr::I64))],
+        vec![
+            Repr::List(Box::new(Repr::I64)),
+            Repr::Tuple(vec![Repr::I64, Repr::Str]),
+        ],
+        vec![
+            Repr::Tuple(vec![Repr::I64, Repr::Str]),
+            Repr::List(Box::new(Repr::I64)),
+        ],
     ] {
-        assert_eq!(normalize_union(start.clone()), direct, "normalize_union({start:?})");
+        assert_eq!(
+            normalize_union(start.clone()),
+            direct,
+            "normalize_union({start:?})"
+        );
     }
 }
 
@@ -372,6 +434,8 @@ fn a_cycle_through_an_arrows_throws_clause_is_cut() {
     assert!(ty.all_defined());
     // The whole assertion is that this returns at all.
     let r = repr_of(&ty, f);
-    assert!(r.is_concrete(), "a recursive arrow type is concrete, got {r:?}");
+    assert!(
+        r.is_concrete(),
+        "a recursive arrow type is concrete, got {r:?}"
+    );
 }
-

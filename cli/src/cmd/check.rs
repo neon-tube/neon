@@ -43,7 +43,11 @@ pub fn run(file: &OsString, lib: bool, cfg: &[String]) -> Result<()> {
         std::process::exit(1);
     }
 
-    let unit = if lib { Unit::Library } else { Unit::RootApplication };
+    let unit = if lib {
+        Unit::Library
+    } else {
+        Unit::RootApplication
+    };
 
     // The stdlib is declared alongside the program, so `use std::io` resolves.
     let std_sources = crate::stdlib::sources()?;

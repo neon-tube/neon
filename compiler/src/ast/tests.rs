@@ -74,5 +74,8 @@ fn nested_and_interpolated_expressions_are_numbered() {
     let m = parse(r##"fn f() { io::println("a #{1 + 2} b #{ g("x") }") }"##);
     let (total, unset) = debug_ids(&m);
     assert_eq!(unset, 0);
-    assert!(total >= 8, "interpolation holes are expressions too, saw {total}");
+    assert!(
+        total >= 8,
+        "interpolation holes are expressions too, saw {total}"
+    );
 }

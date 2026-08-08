@@ -54,7 +54,11 @@ fn stdlib_modules() -> (Vec<(Vec<String>, neon_compiler::ast::Module)>, u32) {
             if p.is_dir() {
                 collect(root, &p, out);
             } else if p.extension().is_some_and(|x| x == "neon") {
-                let rel = p.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
+                let rel = p
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/");
                 out.push((rel, std::fs::read_to_string(&p).expect("readable")));
             }
         }
@@ -73,7 +77,9 @@ fn report() {
 
     for path in corpus() {
         let src = std::fs::read_to_string(&path).expect("readable");
-        let Ok(tokens) = lexer::lex(&src) else { continue };
+        let Ok(tokens) = lexer::lex(&src) else {
+            continue;
+        };
         let (module, perrs) = parser::parse(&tokens, src.len());
         if !perrs.is_empty() {
             continue;
@@ -91,8 +97,7 @@ fn report() {
         if !errs.is_empty() {
             continue;
         }
-        let libs: Vec<(Vec<String>, &_)> =
-            std_owned.iter().map(|(p, m)| (p.clone(), m)).collect();
+        let libs: Vec<(Vec<String>, &_)> = std_owned.iter().map(|(p, m)| (p.clone(), m)).collect();
         // BEFORE refcounting, deliberately. The refcount pass inserts `retain` on the
         // very value the chain carries -- bookkeeping balanced by a matching release, not
         // a second live reference -- and no sound reading of a bare `Op::Retain` can tell
@@ -107,7 +112,9 @@ fn report() {
                 if !sets.is_empty() {
                     println!(
                         "  [dbg] {}: {} set call(s), {} back edge(s), headers {:?}",
-                        f.name, sets.len(), backs.len(),
+                        f.name,
+                        sets.len(),
+                        backs.len(),
                         backs.iter().map(|(_, h)| h.0).collect::<Vec<_>>()
                     );
                     for (r, a) in &sets {
@@ -120,9 +127,17 @@ fn report() {
             files_with += 1;
             total += found.len();
             let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-            let name = path.strip_prefix(&root).unwrap_or(&path).to_string_lossy().to_string();
+            let name = path
+                .strip_prefix(&root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .to_string();
             for c in &found {
-                let gate = if c.scalar { "rewritten" } else { "declined: counted element" };
+                let gate = if c.scalar {
+                    "rewritten"
+                } else {
+                    "declined: counted element"
+                };
                 rows.push(format!(
                     "  {name}: {} (block {:?}, {} writes, {gate})",
                     c.func, c.header, c.writes

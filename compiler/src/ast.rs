@@ -96,7 +96,11 @@ pub struct Annotation {
 #[derive(Debug, Clone, PartialEq)]
 pub enum AnnArg {
     /// `Display`, `std::fmt::Display`, `linux`, `not(windows)`, `all(linux, x86_64)`.
-    Item { path: Vec<String>, args: Vec<AnnArg>, span: Span },
+    Item {
+        path: Vec<String>,
+        args: Vec<AnnArg>,
+        span: Span,
+    },
     /// `"neon_str_len"`, `"NeonBytes*"`, `"Adds two numbers."`.
     Str { text: String, span: Span },
 }
@@ -221,11 +225,17 @@ pub struct UseDecl {
 pub enum UseTree {
     /// `a::b::c`, or `a::b as name`. Without an alias the bound name is the last
     /// segment. The last segment may name a fn, a type, or a protocol method.
-    Leaf { path: Vec<String>, alias: Option<String> },
+    Leaf {
+        path: Vec<String>,
+        alias: Option<String>,
+    },
     /// `prefix::*` — every name under `prefix` becomes visible.
     Glob { prefix: Vec<String> },
     /// `prefix::{ children }`.
-    Group { prefix: Vec<String>, children: Vec<UseTree> },
+    Group {
+        prefix: Vec<String>,
+        children: Vec<UseTree>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -267,7 +277,10 @@ pub struct TypeSpec {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeSpecKind {
     /// `i64`, `List[T]`, `std::io::Reader`
-    Named { path: Vec<String>, args: Vec<TypeSpec> },
+    Named {
+        path: Vec<String>,
+        args: Vec<TypeSpec>,
+    },
     /// `:ok` as a type — the singleton inhabited by that atom.
     Atom(String),
     Null,
@@ -282,7 +295,11 @@ pub enum TypeSpecKind {
     /// `!A`
     Negate(Box<TypeSpec>),
     /// `(A, B) throws E -> C`. An absent `throws` is `never`.
-    Fn { params: Vec<TypeSpec>, throws: Option<Box<TypeSpec>>, ret: Box<TypeSpec> },
+    Fn {
+        params: Vec<TypeSpec>,
+        throws: Option<Box<TypeSpec>>,
+        ret: Box<TypeSpec>,
+    },
     /// `(A, B)`
     Tuple(Vec<TypeSpec>),
     Error,
@@ -307,11 +324,18 @@ pub struct Stmt {
 #[derive(Debug, Clone, PartialEq)]
 pub enum StmtKind {
     /// Bindings rebind; there is no `mut`.
-    Let { pat: Pattern, ty: Option<TypeSpec>, value: Expr },
+    Let {
+        pat: Pattern,
+        ty: Option<TypeSpec>,
+        value: Expr,
+    },
     /// `x = e`. A single name, never a path: only a binding can be rebound, so
     /// `a::b = e` is meaningless and the parser rejects it rather than letting
     /// the tree carry something no later pass could act on.
-    Assign { name: String, value: Expr },
+    Assign {
+        name: String,
+        value: Expr,
+    },
     Expr(Expr),
     Error,
 }
@@ -353,45 +377,99 @@ pub enum ExprKind {
     Bool(bool),
     Null,
     Path(Vec<String>),
-    Unary { op: UnOp, rhs: Box<Expr> },
-    Binary { op: BinOp, lhs: Box<Expr>, rhs: Box<Expr> },
+    Unary {
+        op: UnOp,
+        rhs: Box<Expr>,
+    },
+    Binary {
+        op: BinOp,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+    },
     /// `f(a, b)`; `f[T](a)` carries turbofish args.
-    Call { callee: Box<Expr>, generics: Vec<TypeSpec>, args: Vec<Expr> },
+    Call {
+        callee: Box<Expr>,
+        generics: Vec<TypeSpec>,
+        args: Vec<Expr>,
+    },
     /// `xs[i]` — traps on a bad index rather than throwing.
-    Index { base: Box<Expr>, index: Box<Expr> },
+    Index {
+        base: Box<Expr>,
+        index: Box<Expr>,
+    },
     /// `p.field`
-    Field { base: Box<Expr>, name: String },
+    Field {
+        base: Box<Expr>,
+        name: String,
+    },
     /// `[1, 2, ..rest]`
     List(Vec<Elem>),
     /// `Point { x: 1, ..base }`, or `{ x: 1 }` with `path: None` — the
     /// anonymous record that optional parameters arrive in.
-    RecordLit { path: Option<Vec<String>>, fields: Vec<FieldInit>, spread: Option<Box<Expr>> },
+    RecordLit {
+        path: Option<Vec<String>>,
+        fields: Vec<FieldInit>,
+        spread: Option<Box<Expr>>,
+    },
     /// `(a, b)`
     Tuple(Vec<Expr>),
     /// `(x) => e`, `(x: i64) => e`
-    Lambda { params: Vec<LambdaParam>, body: Box<Expr> },
+    Lambda {
+        params: Vec<LambdaParam>,
+        body: Box<Expr>,
+    },
     /// `else` is required when the value is consumed; the parser records its
     /// absence rather than substituting null.
-    If { cond: Box<Expr>, then: Block, else_: Option<Box<Expr>> },
-    Match { scrutinee: Box<Expr>, arms: Vec<MatchArm> },
+    If {
+        cond: Box<Expr>,
+        then: Block,
+        else_: Option<Box<Expr>>,
+    },
+    Match {
+        scrutinee: Box<Expr>,
+        arms: Vec<MatchArm>,
+    },
     Block(Block),
-    Loop { body: Block },
-    While { cond: Box<Expr>, body: Block },
-    For { pat: Pattern, iter: Box<Expr>, body: Block },
+    Loop {
+        body: Block,
+    },
+    While {
+        cond: Box<Expr>,
+        body: Block,
+    },
+    For {
+        pat: Pattern,
+        iter: Box<Expr>,
+        body: Block,
+    },
     Break(Option<Box<Expr>>),
     Continue,
     Return(Option<Box<Expr>>),
     Throw(Box<Expr>),
     /// `try e`, `try? e`, `try! e`, and `try e catch (x) { .. }`. All forms
     /// accept a block.
-    Try { form: TryForm, body: Box<Expr>, catch: Option<CatchArm> },
+    Try {
+        form: TryForm,
+        body: Box<Expr>,
+        catch: Option<CatchArm>,
+    },
     /// `x is T`
-    Is { lhs: Box<Expr>, ty: TypeSpec },
+    Is {
+        lhs: Box<Expr>,
+        ty: TypeSpec,
+    },
     /// `x as T`, `x as? T`, `x as! T`
-    As { form: CastForm, lhs: Box<Expr>, ty: TypeSpec },
+    As {
+        form: CastForm,
+        lhs: Box<Expr>,
+        ty: TypeSpec,
+    },
     /// `assert(..)`, `assert_eq(..)` — intrinsics, so failures can report the
     /// actual values and a span.
-    Assert { kind: AssertKind, args: Vec<Expr> },
+    Assert {
+        kind: AssertKind,
+        args: Vec<Expr>,
+    },
     /// `TODO("why")` — an implementation that has not been written. It is a compile
     /// ERROR wherever it appears, so a hole cannot be shipped: the message says what is
     /// missing and the span says where. Its type is `never`, which is what lets it stand
@@ -502,7 +580,11 @@ pub enum PatternKind {
     Literal(Box<Expr>),
     /// `Point { x, y }` — field shorthand binds `x` to the field. `path: None`
     /// matches an anonymous record.
-    Record { path: Option<Vec<String>>, fields: Vec<FieldPat>, rest: bool },
+    Record {
+        path: Option<Vec<String>>,
+        fields: Vec<FieldPat>,
+        rest: bool,
+    },
     /// `(a, b)`
     Tuple(Vec<Pattern>),
     Error,

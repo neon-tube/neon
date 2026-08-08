@@ -28,7 +28,11 @@ fn survivors(m: &Module) -> Vec<String> {
 #[test]
 fn an_unknown_annotation_is_an_error() {
     let (_, _, errs) = run("@wat fn f() {}", Config::default());
-    assert!(errs.iter().any(|e| e.message.contains("unknown annotation `@wat`")), "{errs:?}");
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("unknown annotation `@wat`")),
+        "{errs:?}"
+    );
 }
 
 #[test]
@@ -44,23 +48,38 @@ fn native_wants_a_symbol_and_no_body() {
     assert!(errs.is_empty(), "{errs:?}");
     // A body is a contradiction.
     let (_, _, errs) = run(r#"@native("neon_f") fn f() { }"#, Config::default());
-    assert!(errs.iter().any(|e| e.message.contains("no body")), "{errs:?}");
+    assert!(
+        errs.iter().any(|e| e.message.contains("no body")),
+        "{errs:?}"
+    );
     // The symbol is required.
     let (_, _, errs) = run("@native fn f()", Config::default());
-    assert!(errs.iter().any(|e| e.message.contains("runtime symbol")), "{errs:?}");
+    assert!(
+        errs.iter().any(|e| e.message.contains("runtime symbol")),
+        "{errs:?}"
+    );
 }
 
 #[test]
 fn native_is_only_for_a_fn() {
     let (_, _, errs) = run(r#"@native("x") record R { a: i64 }"#, Config::default());
-    assert!(errs.iter().any(|e| e.message.contains("only for a `fn`")), "{errs:?}");
+    assert!(
+        errs.iter().any(|e| e.message.contains("only for a `fn`")),
+        "{errs:?}"
+    );
 }
 
 #[test]
 fn doc_pulls_text_into_metadata_and_keeps_the_node() {
-    let (m, meta, errs) = run(r#"@doc("a thing") record Thing { a: i64 }"#, Config::default());
+    let (m, meta, errs) = run(
+        r#"@doc("a thing") record Thing { a: i64 }"#,
+        Config::default(),
+    );
     assert!(errs.is_empty(), "{errs:?}");
-    assert_eq!(meta.docs, vec![("Thing".to_string(), "a thing".to_string())]);
+    assert_eq!(
+        meta.docs,
+        vec![("Thing".to_string(), "a thing".to_string())]
+    );
     assert_eq!(survivors(&m), vec!["Thing"]);
 }
 
@@ -74,7 +93,10 @@ fn cfg_keeps_when_the_key_is_active() {
 
 #[test]
 fn cfg_omits_when_the_key_is_inactive() {
-    let (m, _, errs) = run(r#"@cfg(windows) fn only_win() {} fn always() {}"#, Config::default());
+    let (m, _, errs) = run(
+        r#"@cfg(windows) fn only_win() {} fn always() {}"#,
+        Config::default(),
+    );
     assert!(errs.is_empty(), "{errs:?}");
     assert_eq!(survivors(&m), vec!["always"]);
 }
@@ -119,7 +141,10 @@ fn a_meaningless_cfg_condition_is_an_error_not_a_silent_drop() {
         "@cfg(linux, x86_64) fn f() {}",       // not an implicit `all`
     ] {
         let (m, _, errs) = run(src, Config::default());
-        assert!(errs.iter().any(|e| e.message.contains("`@cfg`")), "{src}: {errs:?}");
+        assert!(
+            errs.iter().any(|e| e.message.contains("`@cfg`")),
+            "{src}: {errs:?}"
+        );
         assert_eq!(survivors(&m), vec!["f"], "{src}");
     }
 }
@@ -144,17 +169,27 @@ fn cfg_reaches_methods_and_nested_mods() {
         DeclKind::Protocol(p) => Some(p),
         _ => None,
     });
-    let methods: Vec<_> = proto.unwrap().methods.iter().map(|f| f.name.as_str()).collect();
+    let methods: Vec<_> = proto
+        .unwrap()
+        .methods
+        .iter()
+        .map(|f| f.name.as_str())
+        .collect();
     assert_eq!(methods, vec!["common"]);
     // The mod keeps only `keep`.
     let inner = m.decls.iter().find_map(|d| match &d.kind {
         DeclKind::Mod(md) => Some(md),
         _ => None,
     });
-    let inner_names: Vec<_> = inner.unwrap().decls.iter().filter_map(|d| match &d.kind {
-        DeclKind::Fn(f) => Some(f.name.as_str()),
-        _ => None,
-    }).collect();
+    let inner_names: Vec<_> = inner
+        .unwrap()
+        .decls
+        .iter()
+        .filter_map(|d| match &d.kind {
+            DeclKind::Fn(f) => Some(f.name.as_str()),
+            _ => None,
+        })
+        .collect();
     assert_eq!(inner_names, vec!["keep"]);
 }
 
@@ -186,7 +221,10 @@ fn derived(m: &Module) -> Vec<(String, String, Vec<String>, Vec<String>)> {
 fn derive_generates_an_impl_for_the_record() {
     let (m, _, errs) = run(r#"@derive(Display) record P { x: i64 }"#, Config::default());
     assert!(errs.is_empty(), "{errs:?}");
-    assert_eq!(derived(&m), vec![("Display".into(), "P".into(), vec![], vec![])]);
+    assert_eq!(
+        derived(&m),
+        vec![("Display".into(), "P".into(), vec![], vec![])]
+    );
     // The record itself survives: a derive adds, it does not replace.
     assert_eq!(survivors(&m), vec!["P".to_string()]);
 }
@@ -195,18 +233,26 @@ fn derive_generates_an_impl_for_the_record() {
 /// call `to_string` on a field of type `T` at all, because `T` is rigid inside the impl.
 #[test]
 fn deriving_a_generic_record_bounds_each_parameter() {
-    let (m, _, errs) =
-        run(r#"@derive(Display) record Box[T, U] { a: T, b: U }"#, Config::default());
+    let (m, _, errs) = run(
+        r#"@derive(Display) record Box[T, U] { a: T, b: U }"#,
+        Config::default(),
+    );
     assert!(errs.is_empty(), "{errs:?}");
     let g = vec!["T".to_string(), "U".to_string()];
-    assert_eq!(derived(&m), vec![("Display".into(), "Box".into(), g.clone(), g)]);
+    assert_eq!(
+        derived(&m),
+        vec![("Display".into(), "Box".into(), g.clone(), g)]
+    );
 }
 
 #[test]
 fn one_derive_may_name_several_protocols() {
     // A list of arguments, not a list inside one argument: `@derive(Display, Display)` is
     // the grammar's comma, so the processor does no parsing of its own.
-    let (m, _, errs) = run("@derive(Display, Display) record P { x: i64 }", Config::default());
+    let (m, _, errs) = run(
+        "@derive(Display, Display) record P { x: i64 }",
+        Config::default(),
+    );
     assert!(errs.is_empty(), "{errs:?}");
     assert_eq!(derived(&m).len(), 2);
 }
@@ -216,17 +262,29 @@ fn one_derive_may_name_several_protocols() {
 /// identifier in the annotation from everything that reads identifiers.
 #[test]
 fn a_derived_protocol_is_a_name_not_a_string() {
-    let (_, _, errs) = run(r#"@derive("Display") record P { x: i64 }"#, Config::default());
-    assert!(errs.iter().any(|e| e.message.contains("names a protocol")), "{errs:?}");
+    let (_, _, errs) = run(
+        r#"@derive("Display") record P { x: i64 }"#,
+        Config::default(),
+    );
+    assert!(
+        errs.iter().any(|e| e.message.contains("names a protocol")),
+        "{errs:?}"
+    );
 }
 
 /// The path is carried into the generated impl rather than flattened to its last segment,
 /// so which `Display` the impl is for stays a question for resolution.
 #[test]
 fn a_derived_protocol_keeps_its_path() {
-    let (m, _, errs) = run("@derive(std::fmt::Display) record P { x: i64 }", Config::default());
+    let (m, _, errs) = run(
+        "@derive(std::fmt::Display) record P { x: i64 }",
+        Config::default(),
+    );
     assert!(errs.is_empty(), "{errs:?}");
-    assert_eq!(derived(&m), vec![("std::fmt::Display".into(), "P".into(), vec![], vec![])]);
+    assert_eq!(
+        derived(&m),
+        vec![("std::fmt::Display".into(), "P".into(), vec![], vec![])]
+    );
 }
 
 /// A `@cfg`-omitted record derives nothing, because it is gone before the derive pass runs.
@@ -243,20 +301,34 @@ fn a_dropped_record_derives_nothing() {
 #[test]
 fn derive_is_only_for_a_record() {
     let (_, _, errs) = run(r#"@derive(Display) fn f() {}"#, Config::default());
-    assert!(errs.iter().any(|e| e.message.contains("not a fn")), "{errs:?}");
+    assert!(
+        errs.iter().any(|e| e.message.contains("not a fn")),
+        "{errs:?}"
+    );
 }
 
 #[test]
 fn derive_needs_an_argument() {
     let (_, _, errs) = run("@derive record P { x: i64 }", Config::default());
-    assert!(errs.iter().any(|e| e.message.contains("needs the protocol")), "{errs:?}");
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("needs the protocol")),
+        "{errs:?}"
+    );
 }
 
 /// An underivable protocol is an error, not a silently missing impl -- which would surface
 /// as "no impl" against a call site that looks perfectly correct.
 #[test]
 fn an_underivable_protocol_is_an_error() {
-    let (m, _, errs) = run(r#"@derive(Serialize) record P { x: i64 }"#, Config::default());
-    assert!(errs.iter().any(|e| e.message.contains("cannot derive `Serialize`")), "{errs:?}");
+    let (m, _, errs) = run(
+        r#"@derive(Serialize) record P { x: i64 }"#,
+        Config::default(),
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("cannot derive `Serialize`")),
+        "{errs:?}"
+    );
     assert!(derived(&m).is_empty());
 }

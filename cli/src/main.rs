@@ -216,10 +216,18 @@ fn main() -> Result<()> {
         Command::Fmt { file, write, check } => cmd::fmt::run(&file, write, check),
         Command::Ir { file, stage } => cmd::ir::run(&file, stage.into()),
         Command::Init { name } => cmd::init::run(name),
-        Command::Compile { file, output, build } => cmd::compile::run(&file, output, build.into()),
+        Command::Compile {
+            file,
+            output,
+            build,
+        } => cmd::compile::run(&file, output, build.into()),
         Command::Build { build } => cmd::build::run(build.into()),
         Command::Run { path, build, args } => cmd::run::run(path, args, build.into()),
-        Command::Test { file, filter, build } => cmd::test::run(&file, filter, build.into()),
+        Command::Test {
+            file,
+            filter,
+            build,
+        } => cmd::test::run(&file, filter, build.into()),
         Command::Sysroot { stdlib } => cmd::sysroot::run(stdlib),
         Command::Doctor => cmd::doctor::run(),
     }

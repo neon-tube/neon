@@ -36,10 +36,17 @@ fn run(tag: &str, verb: &str, src: &str) -> (bool, String) {
         .env("NEON_SYSROOT", sysroot())
         .arg(verb)
         .arg(&file)
-        .args(if verb == "compile" { vec!["-o".into(), dir.join("out")] } else { vec![] })
+        .args(if verb == "compile" {
+            vec!["-o".into(), dir.join("out")]
+        } else {
+            vec![]
+        })
         .output()
         .expect("run neon");
-    (out.status.success(), String::from_utf8_lossy(&out.stderr).into_owned())
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
 }
 
 const UNKNOWN_IN_BODY: &str = "\
@@ -84,7 +91,10 @@ fn compile_reports_an_unknown_type_in_a_signature() {
     let src = "fn takes(x: AlsoMadeUp) -> i64 { 1 }\n\nfn main() {}\n";
     let (ok, err) = run("compile_sig", "compile", src);
     assert!(!ok, "stderr:\n{err}");
-    assert!(err.contains("unknown type") && err.contains("AlsoMadeUp"), "stderr:\n{err}");
+    assert!(
+        err.contains("unknown type") && err.contains("AlsoMadeUp"),
+        "stderr:\n{err}"
+    );
 }
 
 /// And a valid program still compiles — the guard against fixing this by rejecting

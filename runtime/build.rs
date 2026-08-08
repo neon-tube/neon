@@ -28,7 +28,10 @@ fn main() {
     // they thought they had turned off.
     println!("cargo:rerun-if-env-changed=NEON_RT_NATIVE");
     let native = std::env::var("NEON_RT_NATIVE").is_ok_and(|v| {
-        !matches!(v.trim().to_ascii_lowercase().as_str(), "" | "0" | "no" | "off" | "false")
+        !matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "" | "0" | "no" | "off" | "false"
+        )
     });
 
     let out = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));

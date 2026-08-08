@@ -181,7 +181,10 @@ fn exhaustiveness_falls_out_of_emptiness() {
     // Covering one leaves the other.
     let rest = s.t.diff(subject, a_ok);
     assert!(!s.is_empty(rest));
-    assert!(s.is_equiv(rest, a_err), "the diagnostic can name `:err` exactly");
+    assert!(
+        s.is_equiv(rest, a_err),
+        "the diagnostic can name `:err` exactly"
+    );
 }
 
 // ---- records ----
@@ -236,7 +239,10 @@ fn nominal_satisfies_structural() {
     let person = nominal(&mut s, "Person", &[("name", st), ("age", i)]);
     let has_name = structural(&mut s, &[("name", st)]);
 
-    assert!(s.is_subtype(person, has_name), "width subtyping: Person has a name");
+    assert!(
+        s.is_subtype(person, has_name),
+        "width subtyping: Person has a name"
+    );
     assert!(
         !s.is_subtype(has_name, person),
         "but an anonymous record with a name is not a Person"
@@ -425,7 +431,10 @@ fn arrow_intersection_is_overloading() {
     assert!(!s.is_empty(f));
 
     let ii = s.t.arrow(vec![i], nothrow, i);
-    assert!(s.is_subtype(f, ii), "the overload can be used at i64 -> i64");
+    assert!(
+        s.is_subtype(f, ii),
+        "the overload can be used at i64 -> i64"
+    );
 
     let u = s.t.union(i, st);
     let uu = s.t.arrow(vec![u], nothrow, u);
@@ -492,7 +501,10 @@ fn a_never_throws_does_not_mask_a_mismatched_return() {
 
     let to_i = s.t.arrow(vec![i], nothrow, i);
     let to_str = s.t.arrow(vec![i], nothrow, st);
-    assert!(!s.is_subtype(to_i, to_str), "(i64) -> i64 is not (i64) -> str");
+    assert!(
+        !s.is_subtype(to_i, to_str),
+        "(i64) -> i64 is not (i64) -> str"
+    );
     assert!(!s.is_subtype(to_str, to_i));
 }
 
@@ -505,7 +517,10 @@ fn throws_separates_two_otherwise_identical_arrows() {
 
     let pure = s.t.arrow(vec![i], nothrow, i);
     let throwing = s.t.arrow(vec![i], e, i);
-    assert!(!s.is_equiv(pure, throwing), "`throws` is part of the arrow's identity");
+    assert!(
+        !s.is_equiv(pure, throwing),
+        "`throws` is part of the arrow's identity"
+    );
 }
 
 #[test]
@@ -520,7 +535,10 @@ fn an_overload_may_throw_on_one_branch_only() {
     let pure = s.t.arrow(vec![i], nothrow, i);
     let throwing = s.t.arrow(vec![st], e, st);
     let f = s.t.intersect(pure, throwing);
-    assert!(!s.is_empty(f), "differing throws do not make the overload empty");
+    assert!(
+        !s.is_empty(f),
+        "differing throws do not make the overload empty"
+    );
 
     assert!(s.is_subtype(f, pure), "used at i64 it throws nothing");
     assert!(s.is_subtype(f, throwing));
@@ -687,7 +705,10 @@ fn a_type_variable_is_disjoint_from_concrete_types() {
     let v = s.t.var(t);
     let i = s.t.i64();
     let meet = s.t.intersect(v, i);
-    assert!(s.is_empty(meet), "T is opaque: it is not i64 until instantiated");
+    assert!(
+        s.is_empty(meet),
+        "T is opaque: it is not i64 until instantiated"
+    );
 }
 
 #[test]
@@ -725,7 +746,10 @@ fn a_type_variable_can_be_a_field_and_a_generic_argument() {
     let i = s.t.i64();
     let bi = boxed(&mut s, i);
     let meet = s.t.intersect(b, bi);
-    assert!(s.is_empty(meet), "Box[T] and Box[i64] are disjoint while T is rigid");
+    assert!(
+        s.is_empty(meet),
+        "Box[T] and Box[i64] are disjoint while T is rigid"
+    );
 }
 /// A reserved id read by a boolean operation before it is defined.
 ///
@@ -854,7 +878,10 @@ fn a_pure_function_is_a_member_of_a_throwing_mu() {
     let null = s.t.null();
     let nothrow = s.t.never();
     let pure = s.t.arrow(vec![i], nothrow, null);
-    assert!(s.is_subtype(pure, f), "`(i64) -> null` throws less than `:err`");
+    assert!(
+        s.is_subtype(pure, f),
+        "`(i64) -> null` throws less than `:err`"
+    );
 }
 
 #[test]
@@ -911,7 +938,10 @@ fn a_defined_id_is_the_canonical_one() {
     // whole reason to hash-cons, silently answers no.
     let never = s.t.never();
     let through_union = s.t.union(never, a);
-    assert_eq!(through_union, a, "`t | never` must be `t`, by id and not merely by meaning");
+    assert_eq!(
+        through_union, a,
+        "`t | never` must be `t`, by id and not merely by meaning"
+    );
 
     let rebuilt = s.t.nominal(n, vec![i], vec![]);
     assert_eq!(rebuilt, a, "rebuilding the shape reaches the defined id");
@@ -934,11 +964,21 @@ fn substitute_reaches_into_a_generic_argument() {
     let mut s = s();
     let t = s.t.name("T");
     let v = s.t.var(t);
-    let box_t = { let n = s.t.name("Box"); s.t.nominal(n, vec![v], vec![]) };
+    let box_t = {
+        let n = s.t.name("Box");
+        s.t.nominal(n, vec![v], vec![])
+    };
     let i = s.t.i64();
-    let box_i = { let n = s.t.name("Box"); s.t.nominal(n, vec![i], vec![]) };
+    let box_i = {
+        let n = s.t.name("Box");
+        s.t.nominal(n, vec![i], vec![])
+    };
     let sub = std::collections::HashMap::from([(t, i)]);
-    assert_eq!(s.t.substitute(box_t, &sub), box_i, "Box[T] with T:=i64 is Box[i64]");
+    assert_eq!(
+        s.t.substitute(box_t, &sub),
+        box_i,
+        "Box[T] with T:=i64 is Box[i64]"
+    );
 }
 
 #[test]

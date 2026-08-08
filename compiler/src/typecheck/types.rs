@@ -101,10 +101,16 @@ pub struct AtomSet {
 
 impl AtomSet {
     fn empty() -> Self {
-        AtomSet { neg: false, names: vec![] }
+        AtomSet {
+            neg: false,
+            names: vec![],
+        }
     }
     fn all() -> Self {
-        AtomSet { neg: true, names: vec![] }
+        AtomSet {
+            neg: true,
+            names: vec![],
+        }
     }
     /// Only a positive set with no names is empty. A negated set never is, however many
     /// names it excludes, because the universe of atom names is infinite — which is also
@@ -647,7 +653,10 @@ impl Types {
     /// mutually exclusive without an enum rule, and what carries nominal identity in the
     /// `#nominal` field.
     pub fn atom(&mut self, n: NameId) -> TyId {
-        let atoms = self.atomset(AtomSet { neg: false, names: vec![n] });
+        let atoms = self.atomset(AtomSet {
+            neg: false,
+            names: vec![n],
+        });
         let vars = self.atomset(AtomSet::empty());
         self.intern(TyData {
             base: 0,
@@ -667,7 +676,10 @@ impl Types {
     /// hold for every `T`, but it means narrowing a type parameter is not a thing.
     pub fn var(&mut self, n: NameId) -> TyId {
         let atoms = self.atomset(AtomSet::empty());
-        let vars = self.atomset(AtomSet { neg: false, names: vec![n] });
+        let vars = self.atomset(AtomSet {
+            neg: false,
+            names: vec![n],
+        });
         self.intern(TyData {
             base: 0,
             atoms,
@@ -717,7 +729,11 @@ impl Types {
     /// A single function shape. `throws` is `never` for a function that cannot fail; see
     /// `ArrowAtom::throws` for why that must not default to `any`.
     pub fn arrow(&mut self, params: Vec<TyId>, throws: TyId, ret: TyId) -> TyId {
-        let id = self.arrow_atom(ArrowAtom { params, throws, ret });
+        let id = self.arrow_atom(ArrowAtom {
+            params,
+            throws,
+            ret,
+        });
         let b = self.arrow_bdd.atom(id);
         let atoms = self.atomset(AtomSet::empty());
         let vars = self.atomset(AtomSet::empty());
@@ -814,17 +830,30 @@ impl Types {
     fn union_eager(&mut self, a: TyId, b: TyId) -> TyId {
         let (x, y) = (self.data(a), self.data(b));
         let atoms = {
-            let (p, q) = (self.atomset_of(x.atoms).clone(), self.atomset_of(y.atoms).clone());
+            let (p, q) = (
+                self.atomset_of(x.atoms).clone(),
+                self.atomset_of(y.atoms).clone(),
+            );
             self.atomset(atomset_or(&p, &q))
         };
         let vars = {
-            let (p, q) = (self.atomset_of(x.vars).clone(), self.atomset_of(y.vars).clone());
+            let (p, q) = (
+                self.atomset_of(x.vars).clone(),
+                self.atomset_of(y.vars).clone(),
+            );
             self.atomset(atomset_or(&p, &q))
         };
         let records = self.rec_bdd.or(x.records, y.records);
         let tuples = self.tup_bdd.or(x.tuples, y.tuples);
         let arrows = self.arrow_bdd.or(x.arrows, y.arrows);
-        self.intern(TyData { base: x.base | y.base, atoms, vars, records, tuples, arrows })
+        self.intern(TyData {
+            base: x.base | y.base,
+            atoms,
+            vars,
+            records,
+            tuples,
+            arrows,
+        })
     }
 
     /// Intersection, deferring on an undefined operand for the same reason `union` does.
@@ -843,17 +872,30 @@ impl Types {
     fn intersect_eager(&mut self, a: TyId, b: TyId) -> TyId {
         let (x, y) = (self.data(a), self.data(b));
         let atoms = {
-            let (p, q) = (self.atomset_of(x.atoms).clone(), self.atomset_of(y.atoms).clone());
+            let (p, q) = (
+                self.atomset_of(x.atoms).clone(),
+                self.atomset_of(y.atoms).clone(),
+            );
             self.atomset(atomset_and(&p, &q))
         };
         let vars = {
-            let (p, q) = (self.atomset_of(x.vars).clone(), self.atomset_of(y.vars).clone());
+            let (p, q) = (
+                self.atomset_of(x.vars).clone(),
+                self.atomset_of(y.vars).clone(),
+            );
             self.atomset(atomset_and(&p, &q))
         };
         let records = self.rec_bdd.and(x.records, y.records);
         let tuples = self.tup_bdd.and(x.tuples, y.tuples);
         let arrows = self.arrow_bdd.and(x.arrows, y.arrows);
-        self.intern(TyData { base: x.base & y.base, atoms, vars, records, tuples, arrows })
+        self.intern(TyData {
+            base: x.base & y.base,
+            atoms,
+            vars,
+            records,
+            tuples,
+            arrows,
+        })
     }
 
     /// Complement within ⊤. `B_UNDEF` is included: a field's negation has to be able
@@ -874,16 +916,29 @@ impl Types {
         let x = self.data(a);
         let atoms = {
             let p = self.atomset_of(x.atoms).clone();
-            self.atomset(AtomSet { neg: !p.neg, names: p.names })
+            self.atomset(AtomSet {
+                neg: !p.neg,
+                names: p.names,
+            })
         };
         let vars = {
             let p = self.atomset_of(x.vars).clone();
-            self.atomset(AtomSet { neg: !p.neg, names: p.names })
+            self.atomset(AtomSet {
+                neg: !p.neg,
+                names: p.names,
+            })
         };
         let records = self.rec_bdd.not(x.records);
         let tuples = self.tup_bdd.not(x.tuples);
         let arrows = self.arrow_bdd.not(x.arrows);
-        self.intern(TyData { base: !x.base & B_ALL, atoms, vars, records, tuples, arrows })
+        self.intern(TyData {
+            base: !x.base & B_ALL,
+            atoms,
+            vars,
+            records,
+            tuples,
+            arrows,
+        })
     }
 
     /// `a ∖ b`. The operation narrowing is written in — `x is T` leaves `t ∧ T` on one
@@ -979,7 +1034,9 @@ impl Types {
         for (pos, neg) in self.rec_bdd.paths(d.records) {
             for i in pos.iter().chain(&neg) {
                 let a = &self.rec_atoms[*i as usize];
-                if a.fields.iter().any(|&(_, t)| self.mentions_var_rec(t, subst, visited))
+                if a.fields
+                    .iter()
+                    .any(|&(_, t)| self.mentions_var_rec(t, subst, visited))
                     || self.mentions_var_rec(a.rest, subst, visited)
                 {
                     return true;
@@ -989,7 +1046,10 @@ impl Types {
         for (pos, neg) in self.tup_bdd.paths(d.tuples) {
             for i in pos.iter().chain(&neg) {
                 let a = &self.tup_atoms[*i as usize];
-                if a.elems.iter().any(|&t| self.mentions_var_rec(t, subst, visited)) {
+                if a.elems
+                    .iter()
+                    .any(|&t| self.mentions_var_rec(t, subst, visited))
+                {
                     return true;
                 }
             }
@@ -997,7 +1057,9 @@ impl Types {
         for (pos, neg) in self.arrow_bdd.paths(d.arrows) {
             for i in pos.iter().chain(&neg) {
                 let a = &self.arrow_atoms[*i as usize];
-                if a.params.iter().any(|&t| self.mentions_var_rec(t, subst, visited))
+                if a.params
+                    .iter()
+                    .any(|&t| self.mentions_var_rec(t, subst, visited))
                     || self.mentions_var_rec(a.throws, subst, visited)
                     || self.mentions_var_rec(a.ret, subst, visited)
                 {
@@ -1075,8 +1137,11 @@ impl Types {
             // result is the same either way, but the *intermediate* types it interns are
             // not, and iteration order would otherwise leak into the arena's id numbering
             // and make a build unreproducible.
-            let mut bound: Vec<TyId> =
-                subst.iter().filter(|(n, _)| vars.has(**n)).map(|(_, &t)| t).collect();
+            let mut bound: Vec<TyId> = subst
+                .iter()
+                .filter(|(n, _)| vars.has(**n))
+                .map(|(_, &t)| t)
+                .collect();
             bound.sort_unstable();
             for t in bound {
                 acc = self.union(acc, t);
@@ -1099,7 +1164,14 @@ impl Types {
     fn empty_data(&mut self) -> TyData {
         let atoms = self.atomset(AtomSet::empty());
         let vars = self.atomset(AtomSet::empty());
-        TyData { base: 0, atoms, vars, records: bdd::FALSE, tuples: bdd::FALSE, arrows: bdd::FALSE }
+        TyData {
+            base: 0,
+            atoms,
+            vars,
+            records: bdd::FALSE,
+            tuples: bdd::FALSE,
+            arrows: bdd::FALSE,
+        }
     }
 
     /// ⊤ restricted to one kind: every record, or every tuple, or every function, and
@@ -1176,13 +1248,20 @@ impl Types {
             }
             Kind::Tuple => {
                 let a = self.tup_atoms[idx as usize].clone();
-                let elems = a.elems.iter().map(|&t| self.subst_rec(t, subst, p)).collect();
+                let elems = a
+                    .elems
+                    .iter()
+                    .map(|&t| self.subst_rec(t, subst, p))
+                    .collect();
                 self.tuple(elems)
             }
             Kind::Arrow => {
                 let a = self.arrow_atoms[idx as usize].clone();
-                let params =
-                    a.params.iter().map(|&t| self.subst_rec(t, subst, p)).collect();
+                let params = a
+                    .params
+                    .iter()
+                    .map(|&t| self.subst_rec(t, subst, p))
+                    .collect();
                 let throws = self.subst_rec(a.throws, subst, p);
                 let ret = self.subst_rec(a.ret, subst, p);
                 self.arrow(params, throws, ret)
@@ -1221,7 +1300,9 @@ impl Types {
                         return true;
                     }
                 }
-                if a.fields.iter().any(|&(_, t)| self.mentions_rec(t, hidden, visited))
+                if a.fields
+                    .iter()
+                    .any(|&(_, t)| self.mentions_rec(t, hidden, visited))
                     || self.mentions_rec(a.rest, hidden, visited)
                 {
                     return true;
@@ -1231,7 +1312,10 @@ impl Types {
         for (pos, neg) in self.tup_bdd.paths(d.tuples) {
             for i in pos.iter().chain(&neg) {
                 let a = &self.tup_atoms[*i as usize];
-                if a.elems.iter().any(|&t| self.mentions_rec(t, hidden, visited)) {
+                if a.elems
+                    .iter()
+                    .any(|&t| self.mentions_rec(t, hidden, visited))
+                {
                     return true;
                 }
             }
@@ -1239,7 +1323,9 @@ impl Types {
         for (pos, neg) in self.arrow_bdd.paths(d.arrows) {
             for i in pos.iter().chain(&neg) {
                 let a = &self.arrow_atoms[*i as usize];
-                if a.params.iter().any(|&t| self.mentions_rec(t, hidden, visited))
+                if a.params
+                    .iter()
+                    .any(|&t| self.mentions_rec(t, hidden, visited))
                     || self.mentions_rec(a.throws, hidden, visited)
                     || self.mentions_rec(a.ret, hidden, visited)
                 {
@@ -1406,12 +1492,20 @@ impl Types {
             }
             Kind::Tuple => {
                 let a = self.tup_atoms[idx as usize].clone();
-                let elems = a.elems.iter().map(|&t| self.seal_rec(t, hidden, p)).collect();
+                let elems = a
+                    .elems
+                    .iter()
+                    .map(|&t| self.seal_rec(t, hidden, p))
+                    .collect();
                 self.tuple(elems)
             }
             Kind::Arrow => {
                 let a = self.arrow_atoms[idx as usize].clone();
-                let params = a.params.iter().map(|&t| self.seal_rec(t, hidden, p)).collect();
+                let params = a
+                    .params
+                    .iter()
+                    .map(|&t| self.seal_rec(t, hidden, p))
+                    .collect();
                 let throws = self.seal_rec(a.throws, hidden, p);
                 let ret = self.seal_rec(a.ret, hidden, p);
                 self.arrow(params, throws, ret)
@@ -1460,12 +1554,22 @@ fn atomset_or(a: &AtomSet, b: &AtomSet) -> AtomSet {
         // ¬{a} ∪ ¬{b} = ¬({a} ∩ {b})
         (true, true) => AtomSet {
             neg: true,
-            names: a.names.iter().filter(|n| b.names.contains(n)).copied().collect(),
+            names: a
+                .names
+                .iter()
+                .filter(|n| b.names.contains(n))
+                .copied()
+                .collect(),
         },
         // {a} ∪ ¬{b} = ¬({b} ∖ {a})
         (false, true) => AtomSet {
             neg: true,
-            names: b.names.iter().filter(|n| !a.names.contains(n)).copied().collect(),
+            names: b
+                .names
+                .iter()
+                .filter(|n| !a.names.contains(n))
+                .copied()
+                .collect(),
         },
         (true, false) => atomset_or(b, a),
     }
@@ -1479,7 +1583,12 @@ fn atomset_and(a: &AtomSet, b: &AtomSet) -> AtomSet {
     match (a.neg, b.neg) {
         (false, false) => AtomSet {
             neg: false,
-            names: a.names.iter().filter(|n| b.names.contains(n)).copied().collect(),
+            names: a
+                .names
+                .iter()
+                .filter(|n| b.names.contains(n))
+                .copied()
+                .collect(),
         },
         // ¬{a} ∩ ¬{b} = ¬({a} ∪ {b})
         (true, true) => AtomSet {
@@ -1489,7 +1598,12 @@ fn atomset_and(a: &AtomSet, b: &AtomSet) -> AtomSet {
         // {a} ∩ ¬{b} = {a} ∖ {b}
         (false, true) => AtomSet {
             neg: false,
-            names: a.names.iter().filter(|n| !b.names.contains(n)).copied().collect(),
+            names: a
+                .names
+                .iter()
+                .filter(|n| !b.names.contains(n))
+                .copied()
+                .collect(),
         },
         (true, false) => atomset_and(b, a),
     }
@@ -1532,7 +1646,10 @@ mod tests {
 
         let u = s.t.name("U");
         let uv = s.t.var(u);
-        assert!(s.is_subtype(uv, out), "a rigid variable is still a member of any");
+        assert!(
+            s.is_subtype(uv, out),
+            "a rigid variable is still a member of any"
+        );
     }
 
     /// The same loss, one level down: an open structural record's `rest` is
@@ -1568,8 +1685,14 @@ mod tests {
         let i = s.t.i64();
         let sub = HashMap::from([(t, i)]);
         let out = s.t.substitute(node, &sub);
-        assert!(s.t.all_defined(), "the cycle guard's reserved id was filled in");
-        assert!(s.is_equiv(out, node), "Node mentions no T, so sigma(Node) is Node");
+        assert!(
+            s.t.all_defined(),
+            "the cycle guard's reserved id was filled in"
+        );
+        assert!(
+            s.is_equiv(out, node),
+            "Node mentions no T, so sigma(Node) is Node"
+        );
     }
 
     /// The recursive *and* generic case: the walk has real work to do at every level, so
@@ -1592,13 +1715,21 @@ mod tests {
         let sub = HashMap::from([(t, i)]);
         let out = s.t.substitute(tree, &sub);
         assert!(s.t.all_defined());
-        assert!(!s.is_equiv(out, tree), "T was rewritten, so this is a different type");
+        assert!(
+            !s.is_equiv(out, tree),
+            "T was rewritten, so this is a different type"
+        );
 
         // The `#0` generic argument and the `v` field both came out as `i64`.
         let od = s.t.data(out);
         let paths = s.t.rec_bdd.paths(od.records);
-        let [(pos, neg)] = paths.as_slice() else { panic!("expected one cube: {paths:?}") };
-        assert!(neg.is_empty() && pos.len() == 1, "expected a single record shape");
+        let [(pos, neg)] = paths.as_slice() else {
+            panic!("expected one cube: {paths:?}")
+        };
+        assert!(
+            neg.is_empty() && pos.len() == 1,
+            "expected a single record shape"
+        );
         let atom = s.t.rec_atoms[pos[0] as usize].clone();
         let arg0 = s.t.arg_label(0);
         assert_eq!(atom.get(arg0), i, "Tree[T] with T:=i64 is Tree[i64]");

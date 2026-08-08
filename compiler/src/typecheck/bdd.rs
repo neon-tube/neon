@@ -54,8 +54,15 @@ impl Bdd {
         // 0 and 1 are the terminals; the entries are never read. Every site that indexes
         // `nodes` rules terminals out first. `u32::MAX` is chosen anyway so that a
         // terminal could never win the `min` that picks the next atom to split on.
-        let dummy = Node { atom: u32::MAX, high: FALSE, low: FALSE };
-        Bdd { nodes: vec![dummy, dummy], ..Default::default() }
+        let dummy = Node {
+            atom: u32::MAX,
+            high: FALSE,
+            low: FALSE,
+        };
+        Bdd {
+            nodes: vec![dummy, dummy],
+            ..Default::default()
+        }
     }
 
     /// The single place a node is created, and therefore the single place canonicity is

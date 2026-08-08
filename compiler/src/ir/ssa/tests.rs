@@ -47,17 +47,29 @@ fn control_flow_uses_block_arguments() {
     b.switch_to(BlockId(0));
     b.terminate(Term::Branch {
         cond: c,
-        then: Target { to: then_b, args: vec![] },
-        els: Target { to: else_b, args: vec![] },
+        then: Target {
+            to: then_b,
+            args: vec![],
+        },
+        els: Target {
+            to: else_b,
+            args: vec![],
+        },
     });
 
     b.switch_to(then_b);
     let one = b.emit(Op::ConstI64(1), Repr::I64, i64ty);
-    b.terminate(Term::Jump(Target { to: join, args: vec![one] }));
+    b.terminate(Term::Jump(Target {
+        to: join,
+        args: vec![one],
+    }));
 
     b.switch_to(else_b);
     let two = b.emit(Op::ConstI64(2), Repr::I64, i64ty);
-    b.terminate(Term::Jump(Target { to: join, args: vec![two] }));
+    b.terminate(Term::Jump(Target {
+        to: join,
+        args: vec![two],
+    }));
 
     b.switch_to(join);
     b.terminate(Term::Ret(Some(result)));

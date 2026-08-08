@@ -23,13 +23,23 @@ fn infer_reaches_into_a_generic_argument() {
     let mut t = setup();
     let tn = t.name("T");
     let v = t.var(tn);
-    let list_t = { let n = t.name("List"); t.nominal(n, vec![v], vec![]) };
+    let list_t = {
+        let n = t.name("List");
+        t.nominal(n, vec![v], vec![])
+    };
     let i = t.i64();
-    let list_i = { let n = t.name("List"); t.nominal(n, vec![i], vec![]) };
+    let list_i = {
+        let n = t.name("List");
+        t.nominal(n, vec![i], vec![])
+    };
     let vars = HashSet::from([tn]);
     let mut subst = HashMap::new();
     infer(&mut t, list_t, list_i, &vars, &mut subst);
-    assert_eq!(subst.get(&tn), Some(&i), "T inferred from List[T] vs List[i64]");
+    assert_eq!(
+        subst.get(&tn),
+        Some(&i),
+        "T inferred from List[T] vs List[i64]"
+    );
 }
 
 #[test]
