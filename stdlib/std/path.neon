@@ -306,8 +306,8 @@ internal mod raw {
     fn trim_seps(s: str) -> str {
         let out = s;
         while string::ends_with(out, plat::sep()) or string::ends_with(out, "/") {
-            out = string::trim_end_of(out, plat::sep());
-            out = string::trim_end_of(out, "/");
+            out = string::strip_suffix(out, plat::sep());
+            out = string::strip_suffix(out, "/");
         };
         out
     }

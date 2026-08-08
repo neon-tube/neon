@@ -116,9 +116,9 @@ fn lines(s: str) -> List[str] {
     } else {
         // Before the split rather than after: dropping the empty tail afterwards would
         // need a list slice, and this needs nothing.
-        let body = trim_end_of(s, "\n");
+        let body = strip_suffix(s, "\n");
         for part in split(body, "\n") {
-            out = std::list::push(out, trim_end_of(part, "\r"));
+            out = std::list::push(out, strip_suffix(part, "\r"));
         };
         out
     }
@@ -154,10 +154,23 @@ fn trim(s: str) -> str {
 }
 
 /// Drop one trailing occurrence of `suffix`, if present. Not general trimming -- `lines`
-/// wants exactly this for `\r` and for the final newline.
-fn trim_end_of(s: str, suffix: str) -> str {
+/// wants exactly this for `\r` and for the final newline. Named for what it does to the
+/// value, not for a family with `trim_end`, which strips a *class* repeatedly; this
+/// strips one exact string once.
+fn strip_suffix(s: str, suffix: str) -> str {
     if !is_empty(suffix) and ends_with(s, suffix) {
         raw::slice_unchecked(s, 0, byte_len(s) - byte_len(suffix))
+    } else {
+        s
+    }
+}
+
+/// Drop one leading occurrence of `prefix`, if present. `strip_suffix`'s mirror; asking
+/// "is it there" and "remove it" as one question is what keeps call sites from writing
+/// the `starts_with`-then-`slice` pair with an off-by-one in the middle.
+fn strip_prefix(s: str, prefix: str) -> str {
+    if !is_empty(prefix) and starts_with(s, prefix) {
+        raw::slice_unchecked(s, byte_len(prefix), byte_len(s))
     } else {
         s
     }

@@ -107,6 +107,7 @@ collections/nested_write_in_place.neon
 collections/partial_record_write_across_distinct_slots.neon
 collections/partial_record_write_keeps_stale_fields.neon
 collections/stdlib_breadth.neon
+collections/stdlib_breadth_lists_and_math.neon
 control/for_break_continue.neon
 control/for_empty_list.neon
 control/for_list.neon

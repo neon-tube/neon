@@ -2,8 +2,8 @@
 //
 // Kept small on purpose. A name here is a name no program can declare, so the bar is
 // "syntax needs it", not "it is useful". Everything else lives in the module that owns it:
-// `ParseError` in `std::string`, `KeyError` in `std::map`, `IoError`, `Bytes`
-// and `IoList` in `std::fs`, `Mappable` in `std::list`.
+// `ParseError` in `std::string`, `KeyError` in `std::map`, `IoError` in `std::io`,
+// `Bytes` and `IoList` in `std::fs`, `Mappable` in `std::list`.
 //
 // What is here, and why:
 //   Display, Error      `#{x}` desugars to `to_string(x)`; `main`'s implicit channel

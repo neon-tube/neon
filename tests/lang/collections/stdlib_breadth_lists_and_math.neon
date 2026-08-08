@@ -1,0 +1,60 @@
+// The additions of 2026-08-08: the rest of the list toolkit, real math, and exact-string
+// stripping. One program, like stdlib_breadth.neon, because the point is composition --
+// `filter` feeds `map` feeds `sum` through `|>`, `zip` feeds destructuring.
+
+use std::io;
+use std::string;
+use std::math;
+use std::list;
+use std::fmt;
+
+fn main() {
+    let xs = [3, 1, 4, 1, 5];
+
+    // The pipeline idiom the Mappable protocol exists for.
+    io::println("#{xs |> list::filter((x: i64) => x > 1) |> list::map((x: i64) => x * 10) |> list::sum()}");
+    io::println("#{list::fold(xs, 100, (acc: i64, x: i64) => acc + x)}");
+
+    // `any` stops at the first hit, `all` at the first miss; empty is the identity.
+    let empty: List[i64] = [];
+    io::println("#{list::any(xs, (x: i64) => x > 4)} #{list::any(empty, (x: i64) => true)}");
+    io::println("#{list::all(xs, (x: i64) => x > 0)} #{list::all(empty, (x: i64) => false)}");
+
+    // `zip` runs to the SHORTER list; the longer tail has no partner.
+    let pairs = list::zip([1, 2], ["a", "b", "c"]);
+    let (n, s) = pairs[1];
+    io::println("#{list::len(pairs)} #{n} #{s}");
+
+    // `take` and `drop` clamp -- "the first up-to-ten" is a question, not an assertion.
+    io::println("#{list::take(xs, 2)} #{list::drop(xs, 3)}");
+    io::println("#{list::take(xs, 99)} #{list::drop(xs, 99)} #{list::drop(xs, -1)}");
+
+    // One level of `flatten`; the empty inner list contributes nothing.
+    io::println("#{list::flatten[i64]([[1], [2, 3], []])}");
+
+    // `min`/`max` answer `null` on empty, like `first`; ties keep the earliest.
+    io::println("#{list::min(xs) orelse -1} #{list::max(xs) orelse -1} #{list::min(empty) orelse -1}");
+
+    // Exact-string stripping: one occurrence, only if present.
+    io::println(string::strip_prefix("neon-file", "neon-"));
+    io::println(string::strip_prefix("file", "neon-"));
+    io::println(string::strip_suffix("file.txt", ".txt"));
+    io::println(string::strip_suffix("file.txt", ".png"));
+
+    // Math grows up: logs, exp, trig, the constants they need.
+    io::println("#{math::round(math::ln(math::E))} #{math::round(math::log10(1000.0))}");
+    io::println("#{math::round(math::exp(0.0))}");
+    io::println("#{math::round(math::sin(math::PI / 2.0))} #{math::round(math::cos(0.0))}");
+    io::println("#{math::round(math::atan2(0.0, 1.0))}");
+
+    // Float min/max follow libm's NaN rule: one NaN yields the OTHER operand.
+    let nan = 0.0 / 0.0;
+    io::println("#{math::min(1.0, 2.0)} #{math::max(1.0, nan)} #{math::is_nan(math::min(nan, nan))}");
+
+    // Clamping, in both numeric flavours; a NaN `x` comes back `lo`.
+    io::println("#{math::clamp_int(15, 0, 10)} #{math::clamp_int(-3, 0, 10)} #{math::clamp_int(5, 0, 10)}");
+    io::println("#{math::clamp(0.5, 1.0, 2.0)} #{math::clamp(nan, 1.0, 2.0)}");
+
+    // `pad_left_with` says which side it pads, unlike the name it replaced.
+    io::println(fmt::pad_left_with("7", 3, "0"));
+}

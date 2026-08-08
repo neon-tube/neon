@@ -164,16 +164,16 @@ Module headers are the reference. The shape:
     std::io              println, print, eprintln
     std::string          byte_len, concat, slice, char_at, to_int, join, find, contains,
                          starts_with, ends_with, to_upper, to_lower, repeat, is_empty,
-                         split, lines, trim, trim_start, trim_end, trim_end_of, replace,
+                         split, lines, trim, trim_start, trim_end, strip_suffix, replace,
                          ParseError
     std::list
                          Mappable (map/filter/fold), new, new_with_capacity, len, get, set,
                          push, concat, sort, sort_by, merge, is_empty, first, last,
-                         contains, index_of, reverse, slice, sum
+                         contains, find, reverse, slice, sum
     std::map
                          new, len, get, get_or, set, contains, remove, keys, values,
                          is_empty, KeyError
-    std::fs              File, IoError, Bytes, IoList, open, create, open_append, close,
+    std::fs              File, Bytes, IoList, open, create, open_append, close,
                          fd_of, read_all, write_all, flatten, exists, remove,
                          read, read_bytes, read_lines, write, append
     std::path            is_absolute, is_relative, components, join, parent, file_name,
@@ -182,7 +182,7 @@ Module headers are the reference. The shape:
     std::math            sqrt, pow, floor, ceil, round, abs, is_nan, is_infinite,
                          abs_int, to_f64, to_int
     std::cmp             max, min, max_by, min_by
-    std::fmt             pad, pad_left, pad_with, fixed
+    std::fmt             pad, pad_left, pad_left_with, fixed
 
 There is **no `std::exit`**, contrary to earlier drafts of this file. Abnormal termination
 is `neon_trap`, which `_exit`s 101 on stderr (`docs/decisions.md`).

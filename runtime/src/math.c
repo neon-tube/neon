@@ -22,6 +22,18 @@ double neon_f64_round(double x) { return round(x); }
 double neon_f64_abs(double x) { return fabs(x); }
 bool neon_f64_is_nan(double x) { return x != x; }
 bool neon_f64_is_infinite(double x) { return isinf(x) != 0; }
+double neon_f64_ln(double x) { return log(x); }
+double neon_f64_log10(double x) { return log10(x); }
+double neon_f64_exp(double x) { return exp(x); }
+double neon_f64_sin(double x) { return sin(x); }
+double neon_f64_cos(double x) { return cos(x); }
+double neon_f64_tan(double x) { return tan(x); }
+double neon_f64_atan2(double y, double x) { return atan2(y, x); }
+// fmin/fmax, with libm's NaN rule: one NaN answers the OTHER operand, both-NaN answers
+// NaN. That treats NaN as "no data" rather than poison -- the useful reading for "the
+// smaller of these" -- and it is the same rule Rust's f64::min chose.
+double neon_f64_min(double a, double b) { return fmin(a, b); }
+double neon_f64_max(double a, double b) { return fmax(a, b); }
 
 int64_t neon_i64_abs(int64_t a) {
     if (a == INT64_MIN) {

@@ -228,7 +228,7 @@ fn merge[T](a: List[T], b: List[T], cmp: (T, T) -> Ordering) -> List[T] {
 
 // ---- queries ----
 //
-// `contains` and `index_of` compare with `==`, which is structural on every type but a
+// `contains` and `find` compare with `==`, which is structural on every type but a
 // closure and needs no bound (equality is total by design -- see docs/decisions.md), so
 // neither takes a `where`. Both walk the whole list even once the answer is settled: they
 // are O(n) on a hit as well as a miss.
@@ -260,7 +260,7 @@ fn contains[T](xs: List[T], v: T) -> bool {
 
 /// The first index holding `v`, or `null`. Mirrors `string::find`, which answers the same
 /// question about bytes and returns the same shape.
-fn index_of[T](xs: List[T], v: T) -> i64 | null {
+fn find[T](xs: List[T], v: T) -> i64 | null {
     let at: i64 | null = null;
     let i = 0;
     for x in xs {
@@ -306,4 +306,117 @@ fn sum(xs: List[i64]) -> i64 {
         total = total + x;
     };
     total
+}
+
+/// Whether `pred` holds for at least one element. Stops at the first hit, so a predicate
+/// with effects runs only up to there -- the same interleaving pipelines already promise.
+/// Empty list: `false`, the identity of `or`.
+fn any[T](xs: List[T], pred: (T) -> bool) -> bool {
+    let found = false;
+    for x in xs {
+        if pred(x) {
+            found = true;
+            break;
+        };
+    };
+    found
+}
+
+/// Whether `pred` holds for every element. Stops at the first miss. Empty list: `true`,
+/// the identity of `and` -- "all zero of them" is vacuously so, as everywhere else.
+fn all[T](xs: List[T], pred: (T) -> bool) -> bool {
+    let ok = true;
+    for x in xs {
+        if !pred(x) {
+            ok = false;
+            break;
+        };
+    };
+    ok
+}
+
+/// Pairs, element by element, as long as the SHORTER list: the tail of the longer one has
+/// no partner, and inventing a filler would need a `T` from nowhere. Callers who care that
+/// the lengths matched can compare `len` first.
+fn zip[A, B](a: List[A], b: List[B]) -> List[(A, B)] {
+    let n = if len(a) < len(b) { len(a) } else { len(b) };
+    let out: List[(A, B)] = new_with_capacity(n);
+    let i = 0;
+    while i < n {
+        out = push(out, (a[i], b[i]));
+        i = i + 1;
+    };
+    out
+}
+
+/// The first `n` elements -- or all of them when `n` exceeds the length, or none when
+/// `n <= 0`. Clamping rather than throwing is the point of `take`: "the first up-to-ten"
+/// is the question being asked, and `slice`, which throws, already serves exact bounds.
+fn take[T](xs: List[T], n: i64) -> List[T] {
+    let stop = if n < len(xs) { n } else { len(xs) };
+    let out: List[T] = [];
+    let i = 0;
+    while i < stop {
+        out = push(out, xs[i]);
+        i = i + 1;
+    };
+    out
+}
+
+/// Everything after the first `n` -- the whole list when `n <= 0`, empty when `n` exceeds
+/// the length. Clamps, like `take`, and for the same reason.
+fn drop[T](xs: List[T], n: i64) -> List[T] {
+    let out: List[T] = [];
+    let start = if n < 0 { 0 } else { n };
+    let i = if start < len(xs) { start } else { len(xs) };
+    while i < len(xs) {
+        out = push(out, xs[i]);
+        i = i + 1;
+    };
+    out
+}
+
+/// One level, not recursive: `List[List[T]]` to `List[T]`. A recursive flatten has no
+/// type -- each level changes the element type -- which is the usual sign the recursive
+/// version was the wrong ask.
+fn flatten[T](xss: List[List[T]]) -> List[T] {
+    let out: List[T] = [];
+    for xs in xss {
+        out = concat(out, xs);
+    };
+    out
+}
+
+/// The smallest element, or `null` for the empty list -- the caller usually has an answer
+/// for "nothing there", and `first`/`last` already answer the same way. Ties keep the
+/// earliest, matching `sort`'s stability and `cmp::min`.
+fn min[T](xs: List[T]) -> T | null where T: Ord {
+    let best: T | null = null;
+    for x in xs {
+        let b = best;
+        if b is null {
+            best = x;
+        } else {
+            if x < b {
+                best = x;
+            };
+        };
+    };
+    best
+}
+
+/// The largest element, or `null` for the empty list. Ties keep the earliest.
+fn max[T](xs: List[T]) -> T | null where T: Ord {
+    let best: T | null = null;
+    for x in xs {
+        let b = best;
+        if b is null {
+            best = x;
+        } else {
+            if b < x {
+                best = x;
+            };
+        };
+    };
+    best
 }

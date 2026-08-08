@@ -26,10 +26,10 @@ fn pad_left(s: str, width: i64) -> str {
     if n >= width { s } else { string::concat(string::repeat(" ", width - n), s) }
 }
 
-/// Pad on the left with `fill` rather than spaces: `pad_with("7", 3, "0")` is `"007"`. An
+/// Pad on the left with `fill` rather than spaces: `pad_left_with("7", 3, "0")` is `"007"`. An
 /// empty `fill` returns the input unchanged, since repeating nothing cannot reach the width.
 /// `fill` is repeated whole, so a multi-byte one can overshoot.
-fn pad_with(s: str, width: i64, fill: str) -> str {
+fn pad_left_with(s: str, width: i64, fill: str) -> str {
     let n = string::byte_len(s);
     if n >= width or string::is_empty(fill) {
         s

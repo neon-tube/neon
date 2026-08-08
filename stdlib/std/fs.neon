@@ -23,14 +23,11 @@
 use std::string;
 use std::resource;
 use std::path;
-
-/// Thrown by everything here that can fail. Its `message` names the operation, the path and
-/// the `strerror` text, so a caller has nothing to reassemble. A `File` does not remember
-/// the path it was opened with, so failures on a handle say `<file>` instead; keep the path
-/// yourself if the message has to identify it.
-record IoError { message: str }
-impl Display for IoError { fn to_string(v: IoError) -> str { v.message } }
-impl Error for IoError { fn message(v: IoError) -> str { v.message } }
+// `IoError` is `std::io`'s: it is the error type for IO as a whole, and the dependency
+// arrow has to point from the module that can fail in more ways (files) toward the one
+// that names the failure, not the other way around. The bare-name `use` keeps every
+// signature below reading as it always has.
+use std::io::IoError;
 
 /// Bytes that are not text. `str` already holds arbitrary bytes -- slicing it may split a
 /// UTF-8 sequence and nothing validates -- so this is a *nominal* distinction rather than a

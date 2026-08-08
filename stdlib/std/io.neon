@@ -9,8 +9,19 @@
 // genuine read error (a descriptor closed mid-read) reads as end of input too, which is
 // the one lie this module tells to stay total. Files, which can fail in ways a caller
 // must hear about, are `std::fs`.
+//
+// `IoError` is declared HERE all the same: it is the error type for IO as a whole, and
+// `std::fs` uses it. When it lived in `fs`, any fallible operation this module might
+// grow would have needed `io` to depend on `fs` -- the arrow pointing backwards.
 
 use std::string;
+
+/// Thrown by fallible IO wherever it lives (today, `std::fs`). Its `message` arrives
+/// fully assembled -- operation, path, `strerror` text -- so a caller has nothing to
+/// reconstruct.
+record IoError { message: str }
+impl Display for IoError { fn to_string(v: IoError) -> str { v.message } }
+impl Error for IoError { fn message(v: IoError) -> str { v.message } }
 
 @native("neon_io_println") fn println(s: str)
 @native("neon_io_print") fn print(s: str)
@@ -33,7 +44,7 @@ fn read_line() -> str | null {
     if string::is_empty(line) {
         null
     } else {
-        string::trim_end_of(string::trim_end_of(line, "\n"), "\r")
+        string::strip_suffix(string::strip_suffix(line, "\n"), "\r")
     }
 }
 

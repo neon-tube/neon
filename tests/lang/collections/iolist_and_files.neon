@@ -14,7 +14,7 @@
 // `Bytes` is a newtype over `str`: same representation, different type, so a PNG is not
 // something you would call `to_upper` on.
 //
-// Note the qualification: `IoList`, `IoError` and `Bytes` live in `std::fs`, not the
+// Note the qualification: `IoList` and `Bytes` live in `std::fs` and `IoError` in `std::io`, not the
 // prelude. A name in the prelude is a name no program can declare, so only what syntax
 // actually needs is up there.
 
@@ -24,7 +24,7 @@ use std::string;
 use std::fs;
 use std::list;
 
-fn write_via_handle(p: path::Path, doc: fs::IoList) throws fs::IoError -> null {
+fn write_via_handle(p: path::Path, doc: fs::IoList) throws io::IoError -> null {
     let f = try fs::create(p);
     try fs::write_all(f, doc);
     try fs::write_all(f, ["more", ["and", "more"]]);
