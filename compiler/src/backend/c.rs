@@ -51,7 +51,9 @@ pub fn emit_tests(program: &Program, tests: &[crate::ir::lower::TestEntry]) -> S
 fn emit_with(program: &Program, tests: Option<&[crate::ir::lower::TestEntry]>) -> String {
     let types = TypeTable::build(program);
     let mut out = String::new();
-    out.push_str("#include \"libneon_rt.h\"\n\n");
+    // <math.h> for `fmod`, float `%`'s spelling; `-lm` is already on the link line for
+    // the runtime's own math.c.
+    out.push_str("#include \"libneon_rt.h\"\n#include <math.h>\n\n");
 
     // Aggregate struct definitions, before any function that uses them.
     types.emit_defs(&mut out);
@@ -2815,6 +2817,11 @@ fn prim(types: &TypeTable, f: &Func, op: PrimOp, args: &[Value]) -> String {
         PrimOp::Mul => format!("neon_i64_mul({a}, {b})"),
         PrimOp::Div if is_float => format!("({a} / {b})"),
         PrimOp::Div => format!("neon_i64_div({a}, {b})"),
+        // `fmod` is the truncating remainder — result takes the dividend's sign — which
+        // matches `neon_i64_rem` and `/`'s truncation toward zero. This arm was MISSING:
+        // the i64 line below took floats too, and C converted each `double` argument to
+        // `int64_t` without a word, so `5.5 % 2.5` compiled, ran, and printed `1`.
+        PrimOp::Rem if is_float => format!("fmod({a}, {b})"),
         PrimOp::Rem => format!("neon_i64_rem({a}, {b})"),
         PrimOp::Neg if is_float => format!("(-{a})"),
         PrimOp::Neg => format!("neon_i64_neg({a})"),

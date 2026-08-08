@@ -1,0 +1,22 @@
+// `%` on floats is the truncating remainder, `fmod`: the result carries the
+// DIVIDEND's sign, matching integer `%` and `/`'s truncation toward zero.
+//
+// This file exists because the float arm of `%` was once missing entirely:
+// codegen emitted the i64 remainder for every `%`, and C converted the double
+// arguments to int64_t without a diagnostic — `5.5 % 2.5` compiled, ran, and
+// printed `1`. The values below would all have been silently wrong.
+
+use std::io;
+
+fn main() {
+    io::println("#{5.5 % 2.5}");
+    io::println("#{-5.5 % 2.5}");
+    io::println("#{5.5 % -2.5}");
+    io::println("#{7.75 % 0.5}");
+
+    // Through variables and expressions, not just literals.
+    let a = 9.5;
+    let b = 3.0;
+    io::println("#{a % b}");
+    io::println("#{(a + 0.25) % b}");
+}

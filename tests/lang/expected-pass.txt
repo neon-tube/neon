@@ -194,6 +194,7 @@ operators/bitwise.neon
 operators/bool_ops.neon
 operators/comparison.neon
 operators/float_arith.neon
+operators/float_rem.neon
 operators/float_special_values.neon
 operators/int_arith.neon
 operators/marker_ord_bound.neon
