@@ -72,54 +72,62 @@ pub const BINARY_OPS: &[BinOpInfo] = &[
         prec: 5,
         text: "|>",
     },
+    // Looser than arithmetic so `a + 1..n * 2` ranges over the sums; tighter than `|>`
+    // so `0..n |> list::map(f)` pipes the range. `a..b..c` therefore parses as
+    // `(a..b)..c`, which the checker rejects — a range of ranges has no type.
+    BinOpInfo {
+        op: BinOp::Range,
+        prec: 6,
+        text: "..",
+    },
     BinOpInfo {
         op: BinOp::Bor,
-        prec: 6,
+        prec: 7,
         text: "bor",
     },
     BinOpInfo {
         op: BinOp::Bxor,
-        prec: 7,
+        prec: 8,
         text: "bxor",
     },
     BinOpInfo {
         op: BinOp::Band,
-        prec: 8,
+        prec: 9,
         text: "band",
     },
     BinOpInfo {
         op: BinOp::Bsl,
-        prec: 9,
+        prec: 10,
         text: "bsl",
     },
     BinOpInfo {
         op: BinOp::Bsr,
-        prec: 9,
+        prec: 10,
         text: "bsr",
     },
     BinOpInfo {
         op: BinOp::Add,
-        prec: 10,
+        prec: 11,
         text: "+",
     },
     BinOpInfo {
         op: BinOp::Sub,
-        prec: 10,
+        prec: 11,
         text: "-",
     },
     BinOpInfo {
         op: BinOp::Mul,
-        prec: 11,
+        prec: 12,
         text: "*",
     },
     BinOpInfo {
         op: BinOp::Div,
-        prec: 11,
+        prec: 12,
         text: "/",
     },
     BinOpInfo {
         op: BinOp::Rem,
-        prec: 11,
+        prec: 12,
         text: "%",
     },
 ];
@@ -128,7 +136,7 @@ pub const BINARY_OPS: &[BinOpInfo] = &[
 pub const MIN_PREC: u8 = 1;
 
 /// The tightest binary level. Anything above this is not a binary operator.
-pub const MAX_PREC: u8 = 11;
+pub const MAX_PREC: u8 = 12;
 
 impl BinOp {
     fn info(self) -> &'static BinOpInfo {
@@ -172,6 +180,7 @@ impl BinOp {
             BinOp::Bsr => Token::Bsr,
             BinOp::Orelse => Token::Orelse,
             BinOp::Pipe => Token::Pipe,
+            BinOp::Range => Token::DotDot,
         }
     }
 
@@ -227,6 +236,7 @@ mod tests {
         BinOp::Bsr,
         BinOp::Orelse,
         BinOp::Pipe,
+        BinOp::Range,
     ];
 
     #[test]
@@ -265,7 +275,8 @@ mod tests {
         assert!(BinOp::Or.prec() < BinOp::And.prec());
         assert!(BinOp::And.prec() < BinOp::Eq.prec());
         assert!(BinOp::Eq.prec() < BinOp::Pipe.prec());
-        assert!(BinOp::Pipe.prec() < BinOp::Bor.prec());
+        assert!(BinOp::Pipe.prec() < BinOp::Range.prec());
+        assert!(BinOp::Range.prec() < BinOp::Bor.prec());
         assert!(BinOp::Bor.prec() < BinOp::Bxor.prec());
         assert!(BinOp::Bxor.prec() < BinOp::Band.prec());
         assert!(BinOp::Band.prec() < BinOp::Bsl.prec());

@@ -106,6 +106,7 @@ collections/nested_write_depth3.neon
 collections/nested_write_in_place.neon
 collections/partial_record_write_across_distinct_slots.neon
 collections/partial_record_write_keeps_stale_fields.neon
+collections/range_is_a_list_everywhere_else.neon
 collections/stdlib_breadth.neon
 collections/stdlib_breadth_lists_and_math.neon
 control/for_break_continue.neon
@@ -123,6 +124,7 @@ control/loop_break_value.neon
 control/loop_break_value_union.neon
 control/narrowing_in_if_and_while.neon
 control/nested_loops.neon
+control/range_loop_counts_without_a_list.neon
 control/while_break_continue.neon
 control/while_condition_false_never_runs.neon
 control/while_is_guard_on_nullable.neon
@@ -229,6 +231,7 @@ operators/pipe_chain.neon
 operators/pipe_orelse_precedence.neon
 operators/precedence_arith.neon
 operators/precedence_ladder.neon
+operators/range_ends_must_be_i64.neon
 operators/shift.neon
 operators/short_circuit.neon
 operators/structural_equality.neon

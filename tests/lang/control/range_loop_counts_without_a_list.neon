@@ -1,0 +1,46 @@
+// `for i in a..b` never builds a list: lowering counts from `a` while `< b`, so the
+// loop variable IS the induction variable and a range in the millions allocates
+// nothing. Half-open like `slice` and `range(a, b)`; an empty or backwards range is
+// zero iterations, not an error.
+
+use std::io;
+
+fn main() {
+    for i in 2..5 {
+        io::println("#{i}");
+    };
+
+    // Negative bounds count like any others.
+    for i in -2..1 {
+        io::println("#{i}");
+    };
+
+    // `a..a` and a backwards range are both empty.
+    let n = 3;
+    for i in n..n {
+        io::println("never");
+    };
+    for i in 5..3 {
+        io::println("never");
+    };
+
+    // `break`, `continue` and carried rebinds work as in every loop: the counted
+    // form changes where the bound comes from, not what a loop is.
+    let total = 0;
+    for i in 0..10 {
+        if i % 2 == 0 {
+            continue;
+        };
+        if i == 7 {
+            break;
+        };
+        total = total + i;
+    };
+    io::println("#{total}");
+
+    // The bounds are expressions, evaluated once, left to right.
+    let lo = 1;
+    for i in lo + 1..lo + 4 {
+        io::println("#{i}");
+    };
+}

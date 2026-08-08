@@ -324,6 +324,25 @@ through the closure. Shadowing is allowed.
 A pipe is a call, and calls bind tighter than comparison. One precedence table, consumed by
 both the parser and the formatter, so they cannot diverge.
 
+### `a..b` is a range: half-open, `i64`, and a `List` everywhere but `for`
+
+`5..10` is the integers five through nine. It is not a new type: in value position it is
+exactly the prelude's `range(a, b)` — the same `List[i64]`, so equality, spread, `|>` and
+every list function already work, and there is no second range semantics to learn. The
+one place the list is never built is a `for`'s iterable, where lowering counts from `a`
+while `< b` and the loop variable is the induction variable — a range in the millions
+allocates nothing, which un-writes the caveat `range`'s doc used to carry.
+
+Half-open because `slice`, `range` and everything else here is, and **there is no `..=`**:
+one range form that composes (`a..b + 1` when you mean inclusive) beats two forms whose
+difference is a fencepost. No float ranges — what would the step be — and `a..b..c` is
+left-association handing a `List[i64]` to a range end, rejected by the ordinary operand
+check.
+
+It binds looser than arithmetic and tighter than `|>` (`1 + 1..n * 2` ranges over the
+sums; `0..n |> list::map(f)` pipes the range), and the formatter prints it tight —
+`5..10`, not `5 .. 10` — because a range is one thing, not an operation on two.
+
 ### `else` is required when an `if` is consumed
 
 Statement position without `else` is fine. In value position — let init, argument, return

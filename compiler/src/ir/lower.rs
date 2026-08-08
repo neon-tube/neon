@@ -2402,8 +2402,24 @@ impl Lower<'_> {
             BinOp::And | BinOp::Or => self.lower_and_or(op, lhs, rhs, ty),
             BinOp::Orelse => self.lower_orelse(lhs, rhs, repr, ty),
             BinOp::Pipe => self.lower_pipe(lhs, rhs, repr, ty),
+            // `a..b` in value position IS the prelude's `range(a, b)` — one list, same
+            // semantics, no second implementation to drift. The one place the list is
+            // never built is a `for`'s iterable, which `lower_for` intercepts before
+            // this runs.
+            BinOp::Range => {
+                let lo = self.lower_expr(lhs);
+                let hi = self.lower_expr(rhs);
+                self.b.emit(
+                    Op::Call {
+                        func: mangle(&[Env::PRELUDE.to_string()], "range"),
+                        args: vec![lo, hi],
+                    },
+                    repr,
+                    ty,
+                )
+            }
             // `bin_prim` answered for every other operator above.
-            _ => unreachable!("bin_prim covers every operator but the four special forms"),
+            _ => unreachable!("bin_prim covers every operator but the five special forms"),
         }
     }
 
@@ -3959,20 +3975,37 @@ impl Lower<'_> {
     /// length. The index and any reassigned locals are block parameters; the latch block
     /// increments the index and is where `continue` lands.
     fn lower_for(&mut self, pat: &ast::Pattern, iter: &Expr, body: &Block, ty: TyId) -> Value {
-        let list = self.lower_expr(iter);
-        let elem_repr = match self.b.value_repr(list) {
-            Repr::List(e) => (**e).clone(),
-            _ => Repr::Any,
+        // `for i in a..b` never builds the list `a..b` denotes everywhere else: the loop
+        // is already an index walk from `start` to `bound`, so a range just sets those
+        // bounds directly and the loop variable IS the index. Everything below is shared
+        // with list iteration — one copy of the carried-variable scaffolding.
+        let (list, start, bound) = if let ExprKind::Binary {
+            op: ast::BinOp::Range,
+            lhs,
+            rhs,
+        } = &iter.kind
+        {
+            let lo = self.lower_expr(lhs);
+            let hi = self.lower_expr(rhs);
+            (None, lo, hi)
+        } else {
+            let list = self.lower_expr(iter);
+            let len = self.b.emit(
+                Op::Native {
+                    symbol: "neon_list_len".into(),
+                    args: vec![list],
+                },
+                Repr::I64,
+                ty,
+            );
+            let zero = self.b.emit(Op::ConstI64(0), Repr::I64, ty);
+            (Some(list), zero, len)
         };
-        let len = self.b.emit(
-            Op::Native {
-                symbol: "neon_list_len".into(),
-                args: vec![list],
-            },
-            Repr::I64,
-            ty,
-        );
-        let zero = self.b.emit(Op::ConstI64(0), Repr::I64, ty);
+        let elem_repr = match list.map(|l| self.b.value_repr(l)) {
+            Some(Repr::List(e)) => (**e).clone(),
+            Some(_) => Repr::Any,
+            None => Repr::I64,
+        };
 
         let carried = self.carried_vars(body);
         let inits: Vec<Value> = carried.iter().map(|n| self.lookup(n).unwrap()).collect();
@@ -3997,7 +4030,7 @@ impl Lower<'_> {
             latch_params.push(self.b.block_param(latch, r, vty));
         }
 
-        let mut entry_args = vec![zero];
+        let mut entry_args = vec![start];
         entry_args.extend(inits);
         self.b.terminate(Term::Jump(Target {
             to: header,
@@ -4013,7 +4046,7 @@ impl Lower<'_> {
         }
         let cond = self
             .b
-            .emit(Op::Prim(PrimOp::Lt, vec![i_param, len]), Repr::Bool, ty);
+            .emit(Op::Prim(PrimOp::Lt, vec![i_param, bound]), Repr::Bool, ty);
         // Exhausting the list exits, handing the carried variables out to the exit block.
         self.b.terminate(Term::Branch {
             cond,
@@ -4027,18 +4060,21 @@ impl Lower<'_> {
             },
         });
 
-        // body: bind the element and run.
+        // body: bind the element — for a range, the index IS the element — and run.
         self.b.switch_to(body_b);
         self.terminated = false;
         self.scope.push(vec![]);
-        let elem = self.b.emit(
-            Op::Index {
-                base: list,
-                index: i_param,
-            },
-            elem_repr,
-            ty,
-        );
+        let elem = match list {
+            Some(list) => self.b.emit(
+                Op::Index {
+                    base: list,
+                    index: i_param,
+                },
+                elem_repr,
+                ty,
+            ),
+            None => i_param,
+        };
         self.bind_pattern(pat, elem);
         self.loops.push(LoopCtx {
             continue_target: latch,
@@ -4709,8 +4745,8 @@ fn bin_prim(op: BinOp) -> Option<PrimOp> {
         BinOp::Bxor => PrimOp::Bxor,
         BinOp::Bsl => PrimOp::Bsl,
         BinOp::Bsr => PrimOp::Bsr,
-        // Short-circuit and null/pipe forms desugar; not a plain prim.
-        BinOp::And | BinOp::Or | BinOp::Orelse | BinOp::Pipe => return None,
+        // Short-circuit, null/pipe and range forms desugar; not a plain prim.
+        BinOp::And | BinOp::Or | BinOp::Orelse | BinOp::Pipe | BinOp::Range => return None,
     })
 }
 

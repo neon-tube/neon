@@ -670,4 +670,7 @@ pub enum BinOp {
     /// Tests a nullable union's tag. Never "if truthy".
     Orelse,
     Pipe,
+    /// `a..b`, the half-open range as a `List[i64]` — except as a `for`'s iterable,
+    /// where lowering counts instead of building the list. There is no inclusive form.
+    Range,
 }

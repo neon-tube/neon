@@ -11,8 +11,8 @@
 //   Ord                 the `where T: Ord` bound; ordering is a language rule.
 //   List, Map           `record_repr` matches these two names literally and gives them
 //                       their runtime representations, so they must be unambiguous.
-//   range               `for i in range(a, b)` is the loop idiom; moving it would put an
-//                       import in front of every counted loop.
+//   range               what `a..b` desugars to in value position, so syntax depends on
+//                       it by name; moving it would break every range expression.
 //   IndexError          thrown by both `std::string` and `std::list`, so it
 //                       has no single owner to move to. A shared `std::error` would be the
 //                       home if one existed.
@@ -30,14 +30,12 @@
 /// takes. Nothing in the language depends on it.
 type Ordering = :lt | :eq | :gt
 
-/// `for i in range(a, b)` -- the half-open range [a, b) as a list, empty when `to <= from`.
-/// Written in Neon rather than as a native: a C function cannot build a `List[i64]` without
-/// the element's value-witness, which codegen generates per program.
-///
-/// It really is a list, not a lazy sequence -- there is no laziness in the language to be
-/// had -- so a counted loop allocates one `i64` per iteration up front. That is fine at the
-/// sizes loops are usually written for and wrong for a range in the millions, where a
-/// `while` costs nothing.
+/// The half-open range [a, b) as a list, empty when `to <= from`. `a..b` is sugar for
+/// this everywhere except as a `for`'s iterable, where lowering counts instead of
+/// building the list -- so `for i in 0..n` costs nothing at any size, and only holding
+/// a range as a VALUE pays for its elements. Written in Neon rather than as a native: a
+/// C function cannot build a `List[i64]` without the element's value-witness, which
+/// codegen generates per program.
 fn range(from: i64, to: i64) -> List[i64] {
     let out: List[i64] = [];
     let i = from;

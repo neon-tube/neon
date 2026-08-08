@@ -1107,11 +1107,17 @@ impl<'a> Fmt<'a> {
             }
             ExprKind::Binary { op, lhs, rhs } => {
                 // Left-associative, every one of them: the left operand may be
-                // the same level, the right may not.
+                // the same level, the right may not. `..` prints tight — `5..10` is one
+                // thing, a range, not an operation on two things; the parens logic above
+                // still comes from the shared ladder.
                 self.expr(lhs, op.prec());
-                self.push(" ");
+                if !matches!(op, BinOp::Range) {
+                    self.push(" ");
+                }
                 self.push(op.text());
-                self.push(" ");
+                if !matches!(op, BinOp::Range) {
+                    self.push(" ");
+                }
                 self.expr(rhs, op.prec() + 1);
             }
             ExprKind::Call {

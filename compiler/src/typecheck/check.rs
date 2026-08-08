@@ -2856,6 +2856,17 @@ impl Checker<'_> {
                 let non_null = self.env.solver.t.diff(l, null);
                 self.env.solver.t.union(non_null, r)
             }
+            // `a..b` is the half-open integer range as `List[i64]` — the same nominal a
+            // list literal builds. Both ends are `i64`; there are no float or char
+            // ranges, and `a..b..c` lands here with a `List[i64]` left end and is
+            // rejected by the operand check like any other type error.
+            BinOp::Range => {
+                let i = self.env.solver.t.i64();
+                self.expr(module, lhs, Some(i));
+                self.expr(module, rhs, Some(i));
+                let name = self.env.solver.t.name(super::env::Env::LIST);
+                self.env.solver.t.nominal(name, vec![i], vec![])
+            }
             BinOp::Pipe => {
                 // `a |> f(b)` is `f(a, b)`: the receiver becomes the first argument.
                 if let ExprKind::Call {

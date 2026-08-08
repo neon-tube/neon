@@ -1,0 +1,12 @@
+//@ compile-fail
+//@ error-contains: expected `i64`, found `f64`
+//@ error-contains: expected `i64`, found `std::list::List[i64]`
+// Both ends of `a..b` are `i64`: there are no float ranges (what would the step be?),
+// and `1..5..9` parses as `(1..5)..9` — left-associative like every binary operator —
+// whose left end is a `List[i64]`, not an `i64`. The fix is parentheses nobody wanted:
+// a range of ranges means nothing.
+
+fn main() {
+    let a = 1.5..2.5;
+    let b = 1..5..9;
+}

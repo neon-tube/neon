@@ -1,0 +1,20 @@
+// Outside a `for`, `a..b` IS `range(a, b)`: the same `List[i64]`, the same prelude
+// function, so there is no second range semantics to learn. It binds looser than
+// arithmetic (`1 + 1..2 * 3` ranges over the sums) and tighter than `|>` (a range can
+// head a pipeline).
+
+use std::io;
+use std::list;
+
+fn main() {
+    let r = 0..3;
+    io::println("#{r}");
+    io::println("#{list::len(2..7)}");
+
+    // A range is a list, so list things just work: equality, spread, pipes.
+    io::println("#{(0..3) == [0, 1, 2]}");
+    io::println("#{[..0..2, ..4..6]}");
+    io::println("#{0..4 |> list::map((x: i64) => x * x) |> list::sum()}");
+
+    io::println("#{1 + 1..2 * 3}");
+}
