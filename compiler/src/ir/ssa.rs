@@ -335,10 +335,6 @@ impl Builder {
         self.current = block;
     }
 
-    pub fn current(&self) -> BlockId {
-        self.current
-    }
-
     /// Append an instruction that defines a value.
     pub fn emit(&mut self, op: Op, repr: Repr, ty: TyId) -> Value {
         let v = self.value(repr, ty);

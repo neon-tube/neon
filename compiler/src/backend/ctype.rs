@@ -71,7 +71,7 @@ pub struct TypeTable {
 ///
 /// Panicking is the point. The alternative is emitting C that compiles and is wrong,
 /// which is how the previous implementation died.
-fn ice(r: &Repr, what: &str) -> ! {
+pub(super) fn ice(r: &Repr, what: &str) -> ! {
     panic!("internal error: codegen reached {what}: {r:?}")
 }
 

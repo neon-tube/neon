@@ -22,7 +22,7 @@
 //!   runtime cannot know the layouts codegen invents. Natives that take an element
 //!   therefore take it by address rather than by value.
 
-use crate::backend::ctype::{field_name, fnv1a, TypeTable};
+use crate::backend::ctype::{field_name, fnv1a, ice, TypeTable};
 use crate::ir::repr::Repr;
 use crate::ir::ssa::{Block, Func, Op, PrimOp, Program, SwitchKey, Target, Term, Value};
 use std::fmt::Write;
@@ -326,7 +326,7 @@ fn emit_inst(out: &mut String, types: &TypeTable, f: &Func, inst: &crate::ir::ss
 fn list_elem(types: &TypeTable, f: &Func, v: Value) -> Repr {
     match list_variant(types, f.value_repr(v)) {
         Some(Repr::List(e)) => *e,
-        _ => ice_repr(f.value_repr(v), "a list builder whose result is not a list"),
+        _ => ice(f.value_repr(v), "a list builder whose result is not a list"),
     }
 }
 
@@ -353,11 +353,11 @@ fn emit_make_list(out: &mut String, types: &TypeTable, f: &Func, result: Option<
     // element at the wrong width and hands the runtime a witness that does not exist.
     let list = match list_variant(types, &target) {
         Some(l) => l,
-        None => ice_repr(&target, "a list literal whose repr contains no list"),
+        None => ice(&target, "a list literal whose repr contains no list"),
     };
     let elem = match &list {
         Repr::List(e) => (**e).clone(),
-        other => ice_repr(other, "a list variant that is not a list"),
+        other => ice(other, "a list variant that is not a list"),
     };
     let ety = types.c_type(&elem);
     let n = elems.len();
@@ -537,7 +537,7 @@ fn map_conv_name(types: &TypeTable, src: &Repr, tgt: &Repr) -> String {
             types.key_witness_ref(k).trim_start_matches('&'),
             types.witness_ref(v).trim_start_matches('&')
         ),
-        other => ice_repr(other, "a map conversion whose side is not a map"),
+        other => ice(other, "a map conversion whose side is not a map"),
     };
     format!("nmconv_{}__{}", part(src), part(tgt))
 }
@@ -550,11 +550,11 @@ fn map_conv_name(types: &TypeTable, src: &Repr, tgt: &Repr) -> String {
 fn emit_map_conv(bodies: &mut String, types: &TypeTable, name: &str, src: &Repr, tgt: &Repr) {
     let (sk, sv) = match src {
         Repr::Map(k, v) => ((**k).clone(), (**v).clone()),
-        other => ice_repr(other, "a map conversion whose source is not a map"),
+        other => ice(other, "a map conversion whose source is not a map"),
     };
     let (tk, tv) = match tgt {
         Repr::Map(k, v) => ((**k).clone(), (**v).clone()),
-        other => ice_repr(other, "a map conversion whose target is not a map"),
+        other => ice(other, "a map conversion whose target is not a map"),
     };
     let (skc, svc) = (types.c_type(&sk), types.c_type(&sv));
     let (tkc, tvc) = (types.c_type(&tk), types.c_type(&tv));
@@ -603,7 +603,7 @@ fn map_updater_name(types: &TypeTable, v: &Repr) -> String {
 fn map_kv(f: &Func, v: Value) -> (Repr, Repr) {
     match f.value_repr(v) {
         Repr::Map(k, val) => ((**k).clone(), (**val).clone()),
-        other => ice_repr(other, "a map native whose result is not a map"),
+        other => ice(other, "a map native whose result is not a map"),
     }
 }
 
@@ -1154,14 +1154,8 @@ fn hash_expr(types: &TypeTable, r: &Repr, e: &str) -> String {
         }
         // Uninhabited: emitted as the dead arm of a union's tag chain, never evaluated.
         Repr::Never => "0ULL".to_string(),
-        other => ice_repr(other, "hashing a map key"),
+        other => ice(other, "hashing a map key"),
     }
-}
-
-/// A repr the backend cannot lower. The counterpart of `ctype::ice`, for the emitters that
-/// live here; see that function's doc comment for why this panics rather than guessing.
-fn ice_repr(r: &Repr, what: &str) -> ! {
-    panic!("internal error: codegen reached {what}: {r:?}")
 }
 
 /// Whether `cmp_expr` can order this repr — the backend's half of the checker's
@@ -1300,7 +1294,7 @@ fn eq_expr(types: &TypeTable, r: &Repr, a: &str, b: &str) -> String {
         // the two walked different tables.
         boxed @ Repr::BoxedRec(_) => match types.boxed_shape(boxed) {
             Some((name, _)) => format!("{name}_eq({a}, {b})"),
-            None => ice_repr(boxed, "comparing a boxed record with no registered wrapper"),
+            None => ice(boxed, "comparing a boxed record with no registered wrapper"),
         },
         // One inhabitant: two of them are equal without reading anything. Reading would in
         // fact be wrong -- a `neon_unit` in a union payload is never written, so `memcmp`
@@ -1344,7 +1338,7 @@ fn eq_expr(types: &TypeTable, r: &Repr, a: &str, b: &str) -> String {
         // A back-edge is resolved at the top of this match; reaching here means it names a
         // type the table does not hold, and comparing it would compare a pointer to a
         // structure this function is meant to walk.
-        other => ice_repr(other, "structural equality"),
+        other => ice(other, "structural equality"),
     }
 }
 
@@ -2434,7 +2428,7 @@ fn rc_parts_rec(
         | Repr::Never
         | Repr::BoxedRec(_)
         | Repr::Recursive(_) => {}
-        Repr::Var(_) => ice_repr(repr, "refcounting a type variable"),
+        Repr::Var(_) => ice(repr, "refcounting a type variable"),
     }
 }
 
