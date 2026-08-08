@@ -3903,6 +3903,13 @@ fn stale_write_lint(
 ) {
     use crate::ast::visit::{self, Visitor};
 
+    // `@allow(stale_write)` opts the whole function out. The name was validated by
+    // `expand` (a misspelling is a compile error there); the match here is on the
+    // typed lint, not its spelling.
+    if crate::lint::allows(&f.annotations, crate::lint::Lint::StaleWrite) {
+        return;
+    }
+
     /// Every `list::set(x, ..)` in one statement where `x` is a bare local: the name
     /// and the call's span.
     struct SetFinder<'e> {
@@ -4006,6 +4013,7 @@ fn stale_write_lint(
                         }
                         if let Some(span) = read.found {
                             self.warnings.push(super::result::Warning {
+                                lint: crate::lint::Lint::StaleWrite,
                                 module: self.module.to_vec(),
                                 span,
                                 message: format!(

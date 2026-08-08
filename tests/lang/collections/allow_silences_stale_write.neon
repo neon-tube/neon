@@ -1,0 +1,25 @@
+// `@allow(stale_write)` opts a function out of the stale-write warning. The loop below
+// is the warning's own example — the old list read after the write that consumed it —
+// and here the old values are the POINT: the sum collects what each slot held before
+// its overwrite. The clone-per-iteration cost is accepted, said so, and the compiler
+// says nothing. (This file's `check` observable pins the silence: a regression that
+// warns anyway shows up as a diff here.)
+
+use std::io;
+use std::collections::list;
+
+@allow(stale_write)
+fn sum_of_old(n: i64) -> i64 {
+    let acc = list::repeat(7, n);
+    let sum = 0;
+    for i in range(0, n) {
+        let acc2 = try! list::set(acc, i, i);
+        sum = sum + acc[i];
+        acc = acc2;
+    }
+    sum
+}
+
+fn main() {
+    io::println("#{sum_of_old(4)}");
+}

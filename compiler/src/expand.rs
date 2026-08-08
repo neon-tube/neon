@@ -152,6 +152,7 @@ fn lookup(name: &str) -> Option<&'static dyn Processor> {
     static PURE: Pure = Pure;
     static INLINE: Inline = Inline;
     static DERIVE: Derive = Derive;
+    static ALLOW: Allow = Allow;
     match name {
         "native" => Some(&NATIVE),
         "cfg" => Some(&CFG),
@@ -160,6 +161,7 @@ fn lookup(name: &str) -> Option<&'static dyn Processor> {
         "runtime" => Some(&RUNTIME),
         "pure" => Some(&PURE),
         "inline" => Some(&INLINE),
+        "allow" => Some(&ALLOW),
         _ => None,
     }
 }
@@ -396,6 +398,61 @@ impl Processor for Runtime {
                     "`@runtime` is only for a `record`, not a `{}`",
                     other.what()
                 ),
+            ),
+        }
+        Decision::Keep
+    }
+}
+
+/// `@allow(stale_write)` — suppress a named warning inside this function.
+///
+/// The lint machinery is only worth having if intended code can opt out: the stale-write
+/// warning's own semantic-twin corpus file reads a list after writing it BECAUSE the old
+/// value is the point, and a warning nobody can silence trains people to ignore
+/// warnings. The name must be one the compiler actually emits — a misspelling that
+/// silently suppressed nothing would look exactly like a suppression that worked.
+///
+/// Validated here, consulted by the checker: the annotation stays on the AST (like
+/// `@pure` and `@runtime`), and `check.rs`'s lint skips a function that names its
+/// warning.
+struct Allow;
+impl Processor for Allow {
+    fn run(&self, ann: &Annotation, target: &Target, cx: &mut Context) -> Decision {
+        match target {
+            Target::Fn(_) => {
+                if ann.args.is_empty() {
+                    cx.error(
+                        ann.span.clone(),
+                        "`@allow` names the warning it suppresses: `@allow(stale_write)`",
+                    );
+                }
+                for arg in &ann.args {
+                    let named = match arg {
+                        AnnArg::Item { path, args, .. } if args.is_empty() => {
+                            (path.len() == 1).then(|| path[0].as_str())
+                        }
+                        _ => None,
+                    };
+                    match named.and_then(crate::lint::Lint::from_name) {
+                        Some(_) => {}
+                        None => cx.error(
+                            ann.span.clone(),
+                            format!(
+                                "`@allow` does not recognise this warning; the warnings \
+                                 are: {}",
+                                crate::lint::ALL
+                                    .iter()
+                                    .map(|l| l.name())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            ),
+                        ),
+                    }
+                }
+            }
+            other => cx.error(
+                ann.span.clone(),
+                format!("`@allow` is only for a `fn`, not a `{}`", other.what()),
             ),
         }
         Decision::Keep

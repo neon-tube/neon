@@ -21,6 +21,7 @@ pub mod expand;
 pub mod format;
 pub mod ir;
 pub mod lexer;
+pub mod lint;
 pub mod ops;
 pub mod parser;
 pub mod stdlib;

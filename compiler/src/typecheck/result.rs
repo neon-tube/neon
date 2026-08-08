@@ -120,10 +120,13 @@ pub struct TypecheckResult {
     pub warnings: Vec<Warning>,
 }
 
-/// One warning: where, and what to say. `module` names the declaring module so a
-/// frontend can render against the right source file, exactly as `TypeError` does.
+/// One warning: which lint, where, and what to say. `module` names the declaring module
+/// so a frontend can render against the right source file, exactly as `TypeError` does;
+/// `lint` is the typed identity an editor keys quick-fixes and codes off, and the name
+/// `@allow` suppresses it under.
 #[derive(Debug, Clone)]
 pub struct Warning {
+    pub lint: crate::lint::Lint,
     pub module: Vec<String>,
     pub span: Span,
     pub message: String,

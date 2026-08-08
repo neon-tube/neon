@@ -1,0 +1,9 @@
+//@ compile-fail
+//@ error-contains: `@allow` does not recognise this warning; the warnings are: stale_write
+//
+// A misspelled `@allow` that silently suppressed nothing would look exactly like a
+// suppression that worked, so the name must be one the compiler actually emits — and
+// the error lists the choices, which today is a list of one.
+
+@allow(stale_wrote)
+fn main() {}
