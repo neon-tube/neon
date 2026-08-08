@@ -10,9 +10,13 @@
 //! drained to a fixpoint in `lower_module` — an instance can discover further lambdas and
 //! instances, so the loop keeps running until neither has anything left.
 //!
-//! A form that has no lowering yet does not abort the pass: `unhandled_note` emits a
-//! `<todo: ...>` string constant of the expected repr so the enclosing function still
-//! lowers and `compiler/tests/ir_lower.rs` can report what remains.
+//! Every form the checker accepts has a lowering. That is enforced, not hoped: a form
+//! without one used to fall to an `unhandled_note` helper that emitted a `<todo: ...>`
+//! string constant at whatever repr the context expected, and five well-typed constructs
+//! (rune literals, both spreads, bare-callee pipe, `assert_throws`) shipped through it as
+//! silent miscompiles while the suite stayed green. The reachable ones are now lowered or
+//! rejected by the checker, and what remains of the fallback paths is a hard
+//! `internal error` panic — a crash names the gap; a placeholder value hides it.
 
 use super::repr::{normalize_union, repr_of, Repr};
 use super::ssa::{Builder, BlockId, Func, Op, PrimOp, Program, Target, Term, Value};
@@ -1458,7 +1462,11 @@ impl Lower<'_> {
                 self.b.emit(Op::ConstUnit, repr, ty)
             }
             ExprKind::Assert { kind, args } => self.lower_assert(*kind, args, ty),
-            _ => self.unhandled(e, repr, ty),
+            // Error nodes exist only in a parse that reported diagnostics, and every
+            // front end exits before lowering on any diagnostic. The match is otherwise
+            // exhaustive on purpose: a NEW expression form fails to compile here rather
+            // than acquiring a silent placeholder lowering.
+            ExprKind::Error => panic!("internal error: an Error expression reached lowering"),
         }
     }
 
@@ -1732,7 +1740,10 @@ impl Lower<'_> {
             let func = mangle(&sig.module, &sig.name);
             return self.b.emit(Op::MakeClosure { func, captures: vec![] }, repr, ty);
         }
-        self.unhandled_note("path-as-value", repr, ty)
+        // The checker's `path` resolves a value path to a local, a const or a function,
+        // or reports `UnknownName` — so a fourth kind arriving here is a checker/lowering
+        // disagreement, not a program the user can write.
+        panic!("internal error: path `{}` lowered as a value resolves to nothing", p.join("::"))
     }
 
     /// `(x) => e` — capture the free variables, queue the body to be lowered as its own
@@ -1789,7 +1800,8 @@ impl Lower<'_> {
             BinOp::And | BinOp::Or => self.lower_and_or(op, lhs, rhs, ty),
             BinOp::Orelse => self.lower_orelse(lhs, rhs, repr, ty),
             BinOp::Pipe => self.lower_pipe(lhs, rhs, repr, ty),
-            _ => self.unhandled_note("binary op", repr, ty),
+            // `bin_prim` answered for every other operator above.
+            _ => unreachable!("bin_prim covers every operator but the four special forms"),
         }
     }
 
@@ -2048,8 +2060,8 @@ impl Lower<'_> {
     /// per call site if the *method* is generic independently of the impl. A `Bound` is a
     /// `where` clause discharged here rather than at the check: inside a monomorphic
     /// instance the receiver is concrete, so its head names the impl the bound stood for.
-    /// `Switch` — a union receiver needing a runtime discriminant test — has no lowering
-    /// yet and is marked.
+    /// `Switch` — a union receiver needing a runtime discriminant test — lowers through
+    /// `lower_dispatch_switch`.
     fn lower_dispatch(
         &mut self,
         res: &crate::typecheck::dispatch::Resolution,
@@ -2065,7 +2077,9 @@ impl Lower<'_> {
                 let impl_def = &self.env.impls()[impl_id.0];
                 let m = impl_def.methods.iter().find(|m| m.name == method);
                 let Some(m) = m else {
-                    return self.unhandled_note("dispatch: no method", repr, ty);
+                    // The checker resolved this call to this impl; an impl without the
+                    // method is a resolution the checker never produces.
+                    panic!("internal error: dispatch resolved to an impl without `{method}`");
                 };
                 let throws = m.throws;
                 // The impl's own generics monomorphise here too, on the same terms as
@@ -2168,7 +2182,14 @@ impl Lower<'_> {
                                 let direct = Resolution::Direct(id);
                                 self.lower_dispatch(&direct, &method, args, repr, ty)
                             }
-                            None => self.unhandled_note("bound: no impl", repr, ty),
+                            // The checker discharged `where T: P` for the concrete type
+                            // this instance was built with, so an impl for its head
+                            // exists; failing to find one again is a naming disagreement
+                            // between check and lowering, not a reachable program.
+                            None => panic!(
+                                "internal error: bound dispatch found no impl of \
+                                 protocol {protocol:?} for head `{h}`"
+                            ),
                         }
                     }
                     None => {
@@ -2199,7 +2220,14 @@ impl Lower<'_> {
                                 }
                             }
                         }
-                        self.unhandled_note("bound: abstract receiver", repr, ty)
+                        // A headless subject that is not a coverable union: the checker
+                        // either rejected it (`NoSubjectToSwitch` for return position)
+                        // or discharged the bound against a concrete type, so a
+                        // monomorphic instance cannot present one.
+                        panic!(
+                            "internal error: bound dispatch on `{method}` has no \
+                             concrete subject to pick an impl by"
+                        )
                     }
                 }
             }
@@ -2222,11 +2250,14 @@ impl Lower<'_> {
         repr: Repr,
         ty: TyId,
     ) -> Value {
+        // Both callers guarantee the shape: a `Resolution::Switch` is computed from a
+        // dispatched call's receiver (argument 0), and the `Bound` union path builds a
+        // non-empty arm list before coming here.
         let Some(&recv) = args.first() else {
-            return self.unhandled_note("dispatch switch: no receiver", repr, ty);
+            panic!("internal error: dispatch switch on `{method}` with no receiver argument");
         };
         if arms.is_empty() {
-            return self.unhandled_note("dispatch switch: no arms", repr, ty);
+            panic!("internal error: dispatch switch on `{method}` with no arms");
         }
         let join = self.b.new_block();
         let join_param = self.b.block_param(join, repr.clone(), ty);
@@ -3186,45 +3217,6 @@ impl Lower<'_> {
         self.b.emit(Op::ConstUnit, Repr::Unit, ty)
     }
 
-    /// A not-yet-lowered expression, named by its `ExprKind`.
-    fn unhandled(&mut self, e: &Expr, repr: Repr, ty: TyId) -> Value {
-        self.unhandled_note(kind_name(&e.kind), repr, ty)
-    }
-
-    /// The placeholder for a form with no lowering: a string constant carrying the note,
-    /// emitted at the repr the expression was *supposed* to have so the rest of the
-    /// function still lowers and the IR stays well-formed. `compiler/tests/ir_lower.rs`
-    /// scans dumps for these markers and reports what remains; it does not fail on them,
-    /// so a marker is a visible gap rather than a build break. The value itself is a lie
-    /// about its repr — a program that reaches one at runtime is undefined.
-    fn unhandled_note(&mut self, what: &str, repr: Repr, ty: TyId) -> Value {
-        self.b.emit(Op::ConstStr(format!("<todo: {what}>")), repr, ty)
-    }
-}
-
-/// A short name for an expression form, used only in `<todo: ...>` markers.
-fn kind_name(k: &ExprKind) -> &'static str {
-    match k {
-        ExprKind::Match { .. } => "match",
-        ExprKind::List(_) => "list literal",
-        ExprKind::RecordLit { .. } => "record literal",
-        ExprKind::Tuple(_) => "tuple",
-        ExprKind::Lambda { .. } => "lambda",
-        ExprKind::Loop { .. } => "loop",
-        ExprKind::While { .. } => "while",
-        ExprKind::For { .. } => "for",
-        ExprKind::Break(_) => "break",
-        ExprKind::Continue => "continue",
-        ExprKind::Throw(_) => "throw",
-        ExprKind::Try { .. } => "try",
-        ExprKind::Is { .. } => "is",
-        ExprKind::As { .. } => "as",
-        ExprKind::Index { .. } => "index",
-        ExprKind::Field { .. } => "field",
-        ExprKind::Assert { .. } => "assert",
-        ExprKind::Todo(_) => "todo",
-        _ => "expr",
-    }
 }
 
 /// Record a function's declared error type on its builder, so its result becomes a tagged
