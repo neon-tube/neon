@@ -1326,6 +1326,11 @@ impl Lower<'_> {
             }
             ExprKind::Bool(b) => self.b.emit(Op::ConstBool(*b), repr, ty),
             ExprKind::Null => self.b.emit(Op::ConstNull, repr, ty),
+            // A rune is its Unicode scalar value; the checker types it `i64`. This arm
+            // was missing, so `'a'` fell to the `<todo: expr>` catch-all and lowered as
+            // a *string constant* at an i64 repr — a well-typed four-line program
+            // reached `prim.add` on a pointer.
+            ExprKind::Rune(c) => self.b.emit(Op::ConstI64(*c as i64), repr, ty),
             ExprKind::Atom(a) => self.b.emit(Op::ConstAtom(a.clone()), repr, ty),
             ExprKind::Str(parts) => self.lower_str(parts, repr, ty),
             ExprKind::Path(p) => self.lower_path(p, repr, ty),

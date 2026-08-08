@@ -1,0 +1,28 @@
+// A rune literal is its Unicode scalar value, and its type is `i64` — there is
+// no separate character type. `'a'` is 97 the same way `0x61` is, so runes mix
+// freely with integer arithmetic and comparison.
+//
+// This file exists because the lowering arm for runes was once missing: the
+// checker accepted `'a'` and the compiler emitted a placeholder string constant
+// where the 97 should have been. The suite was green the whole time.
+
+use std::io;
+
+fn main() {
+    let a = 'a';
+    io::println("#{a}");
+
+    // Arithmetic: a rune is an ordinary i64.
+    let shifted = 'a' + 1;
+    io::println("#{shifted}");
+
+    // Escapes reach the same scalar as the character they name.
+    io::println("#{'\n'}");
+    io::println("#{'\\'}");
+
+    // Beyond ASCII: the scalar value, not the UTF-8 bytes.
+    io::println("#{'é'}");
+
+    // Comparison is integer comparison.
+    io::println(if 'a' < 'b' { "lt" } else { "ge" });
+}

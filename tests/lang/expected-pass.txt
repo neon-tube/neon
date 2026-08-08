@@ -43,6 +43,7 @@ basics/null_literal.neon
 basics/rebind_writes_through_scope.neon
 basics/rebind_wrong_type.neon
 basics/rebinding.neon
+basics/rune_literals.neon
 basics/shadowing.neon
 basics/shadowing_changes_type.neon
 basics/str_literals.neon
