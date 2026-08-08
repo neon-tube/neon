@@ -1,0 +1,57 @@
+// `std::fs`'s directory and metadata surface: `mkdir`, `rename`, `is_dir`, `size`,
+// `read_dir`, `copy`.
+//
+// One body each, no `@cfg`. The platform difference is real -- `mkdir` against
+// `CreateDirectoryW`, `readdir` against `FindFirstFileW` -- and it lives in the runtime's
+// `platform.h`, which is where a difference between two syscalls belongs. What Neon sees is
+// one operation with one meaning.
+//
+// These were `TODO(..)` on the Windows side until the toolchain could run a Windows binary:
+// `neon compile --cfg windows --cc x86_64-w64-mingw32-gcc --runtime <mingw archive>` builds
+// a PE and Wine runs it, so the Win32 half was written against something that executes
+// rather than something that only type-checks. This file produces byte-identical output on
+// Linux and under Wine, which is the actual claim.
+//
+// `read_dir` returns NAMES, not paths, and in no particular order -- the filesystem decides,
+// and it differs between platforms. Sorting is the caller's job and this file does it.
+
+use std::io;
+use std::fs;
+use std::path;
+use std::collections::list;
+
+fn main() {
+    let d = path::of("/tmp/neon-fs-corpus");
+    // A previous run may have left it behind; `remove` on a missing path would throw.
+    if fs::is_dir(d) {
+        for name in try! fs::read_dir(d) {
+            try! fs::remove(path::join(d, path::of(name)));
+        };
+    } else {
+        try! fs::mkdir(d);
+    };
+
+    io::println(to_string(fs::is_dir(d)));
+
+    let a = path::join(d, path::of("a.txt"));
+    try! fs::write(a, "hello");
+    io::println(to_string(fs::is_dir(a)));
+    io::println(to_string(try! fs::size(a)));
+
+    // `copy` is `read` plus `write`, so it needs no syscall of its own.
+    let b = path::join(d, path::of("b.txt"));
+    try! fs::copy(a, b);
+    io::println(try! fs::read(b));
+
+    // `rename` replaces an existing destination on both platforms.
+    let c = path::join(d, path::of("c.txt"));
+    try! fs::rename(b, c);
+    io::println(to_string(list::sort(try! fs::read_dir(d))));
+
+    // A missing path is an error with a message, not a trap.
+    let gone = try? fs::size(path::join(d, path::of("nope.txt")));
+    io::println(if gone is null { "size of a missing file threw" } else { "no throw" });
+
+    // `is_dir` is a question about a kind: false for a file and false for nothing at all.
+    io::println(to_string(fs::is_dir(path::join(d, path::of("nope.txt")))));
+}

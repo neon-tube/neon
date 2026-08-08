@@ -163,21 +163,15 @@ int64_t neon_io_remove(neon_str path) {
 
 // ---- directories and metadata ----
 //
-// POSIX bodies, with Windows stubs that return `-ENOSYS`. The stubs exist so the runtime
-// still COMPILES and LINKS on Windows -- the `runtime-windows` CI job builds this file --
-// while the Neon side refuses to call them at all: `std::fs`'s Windows branch is a
-// `TODO(..)`, which is a compile error naming what is missing. So a Windows program cannot
-// reach these, and if the Neon guard were ever removed the failure would still be an errno
-// rather than undefined behaviour.
+// One body each, through `platform.h`'s seam, for the reason the rest of this file has one:
+// the difference between `mkdir` and `CreateDirectoryW` is a fact about the platform, not
+// about the operation. Only the directory WALK keeps an `#ifdef`, because `readdir` and
+// `FindFirstFileW` do not have the same shape -- one hands back entries, the other a handle
+// plus a wildcard -- and pretending otherwise would put a fake iterator in the seam.
 
 int64_t neon_io_mkdir(neon_str path) {
     char* p = neon_cstr(path);
-#ifdef _WIN32
-    (void)p;
-    int64_t r = -(int64_t)ENOSYS;
-#else
-    int64_t r = mkdir(p, 0777) == 0 ? 0 : -(int64_t)errno;
-#endif
+    int64_t r = neon_plat_mkdir(p) == 0 ? 0 : -(int64_t)errno;
     free(p);
     neon_str_release(path);
     return r;
@@ -186,13 +180,7 @@ int64_t neon_io_mkdir(neon_str path) {
 int64_t neon_io_rename(neon_str from, neon_str to) {
     char* a = neon_cstr(from);
     char* b = neon_cstr(to);
-#ifdef _WIN32
-    (void)a;
-    (void)b;
-    int64_t r = -(int64_t)ENOSYS;
-#else
-    int64_t r = rename(a, b) == 0 ? 0 : -(int64_t)errno;
-#endif
+    int64_t r = neon_plat_rename(a, b) == 0 ? 0 : -(int64_t)errno;
     free(a);
     free(b);
     neon_str_release(from);
@@ -200,64 +188,89 @@ int64_t neon_io_rename(neon_str from, neon_str to) {
     return r;
 }
 
-// Kind, as its own call: 1 directory, 0 not, negative -errno. Split from `size` rather than
-// returned together through out-parameters because two plain `int64_t` natives need no
-// witness and no tuple, and the pair is never read atomically anyway -- anything that cared
-// would have to hold the file open.
+// 1 directory, 0 not, or -errno.
 int64_t neon_io_is_dir(neon_str path) {
     char* p = neon_cstr(path);
-#ifdef _WIN32
-    (void)p;
-    int64_t r = -(int64_t)ENOSYS;
-#else
-    struct stat st;
-    int64_t r = stat(p, &st) != 0 ? -(int64_t)errno : (S_ISDIR(st.st_mode) ? 1 : 0);
-#endif
+    int r = neon_plat_is_dir(p);
+    int64_t out = r < 0 ? -(int64_t)errno : (int64_t)r;
     free(p);
     neon_str_release(path);
-    return r;
+    return out;
 }
 
-// The size in bytes, or negative -errno.
+// The size in bytes, or -errno.
 int64_t neon_io_size(neon_str path) {
     char* p = neon_cstr(path);
-#ifdef _WIN32
-    (void)p;
-    int64_t r = -(int64_t)ENOSYS;
-#else
-    struct stat st;
-    int64_t r = stat(p, &st) != 0 ? -(int64_t)errno : (int64_t)st.st_size;
-#endif
+    int64_t n = 0;
+    int64_t out = neon_plat_size(p, &n) == 0 ? n : -(int64_t)errno;
     free(p);
     neon_str_release(path);
-    return r;
+    return out;
+}
+
+// Grow `*buf` and append `name` plus its NUL. Shared by both walks below.
+static void neon_dir_push(char** buf, size_t* len, size_t* cap, const char* name) {
+    size_t n = strlen(name);
+    if (*len + n + 1 > *cap) {
+        *cap = (*len + n + 1) * 2;
+        *buf = (char*)realloc(*buf, *cap);
+        if (*buf == NULL) neon_trap("out of memory");
+    }
+    memcpy(*buf + *len, name, n);
+    *len += n;
+    (*buf)[(*len)++] = 0;
 }
 
 // The entries of a directory, NUL-separated, excluding `.` and `..`.
 //
 // A single string rather than a list because a runtime function cannot build one: a
-// `List[str]` needs the element's value-witness, which codegen generates per type and only
-// hands to the natives it special-cases. NUL is the one byte a POSIX filename cannot
-// contain, so splitting on it in Neon is lossless -- and `std::string` is byte-oriented, so
-// a NUL inside a `str` is ordinary data.
+// `List[str]` needs the element's value-witness, which codegen generates per type and hands
+// only to the natives it special-cases. NUL is the one byte a filename cannot contain on
+// either platform, so splitting on it in Neon is lossless -- and `std::string` is
+// byte-oriented, so a NUL inside a `str` is ordinary data.
 //
 // Names, not paths: joining them onto the directory is `std::path`'s job, and doing it here
 // would bake a separator into the runtime.
 neon_str neon_io_read_dir(neon_str path, int64_t* err) {
     char* p = neon_cstr(path);
     *err = 0;
-#ifdef _WIN32
-    (void)p;
-    *err = -(int64_t)ENOSYS;
-    free(p);
-    neon_str_release(path);
-    return neon_str_new("", 0);
-#else
-    // The buffer lives inside this branch, not above the `#ifdef`: on Windows it would be
-    // unused, and the runtime builds with `-Werror`.
     char* buf = NULL;
     size_t len = 0;
     size_t cap = 0;
+#ifdef _WIN32
+    // `FindFirstFileW` wants a pattern, not a directory, so the wildcard is appended here.
+    size_t plen = strlen(p);
+    char* pat = (char*)malloc(plen + 3);
+    if (pat == NULL) neon_trap("out of memory");
+    memcpy(pat, p, plen);
+    // Both separators are legal, and a trailing one must not be doubled.
+    size_t at = plen;
+    if (at > 0 && p[at - 1] != '\\' && p[at - 1] != '/') pat[at++] = '\\';
+    pat[at++] = '*';
+    pat[at] = 0;
+    wchar_t* w = neon_plat_widen(pat);
+    free(pat);
+    if (w == NULL) {
+        *err = -(int64_t)errno;
+    } else {
+        WIN32_FIND_DATAW fd;
+        HANDLE h = FindFirstFileW(w, &fd);
+        free(w);
+        if (h == INVALID_HANDLE_VALUE) {
+            *err = -(int64_t)neon_plat_errno_from_win32(GetLastError());
+        } else {
+            do {
+                char* name = neon_plat_narrow(fd.cFileName);
+                if (name == NULL) continue;
+                if (strcmp(name, ".") != 0 && strcmp(name, "..") != 0) {
+                    neon_dir_push(&buf, &len, &cap, name);
+                }
+                free(name);
+            } while (FindNextFileW(h, &fd));
+            FindClose(h);
+        }
+    }
+#else
     DIR* d = opendir(p);
     if (d == NULL) {
         *err = -(int64_t)errno;
@@ -265,25 +278,17 @@ neon_str neon_io_read_dir(neon_str path, int64_t* err) {
         struct dirent* e;
         while ((e = readdir(d)) != NULL) {
             if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
-            size_t n = strlen(e->d_name);
-            if (len + n + 1 > cap) {
-                cap = (len + n + 1) * 2;
-                buf = (char*)realloc(buf, cap);
-                if (buf == NULL) neon_trap("out of memory");
-            }
-            memcpy(buf + len, e->d_name, n);
-            len += n;
-            buf[len++] = 0;
+            neon_dir_push(&buf, &len, &cap, e->d_name);
         }
         closedir(d);
     }
+#endif
     free(p);
     neon_str_release(path);
     // Drop the trailing NUL so the split does not produce an empty last entry.
     neon_str out = neon_str_new(buf == NULL ? "" : buf, len == 0 ? 0 : len - 1);
     free(buf);
     return out;
-#endif
 }
 
 bool neon_io_exists(neon_str path) {

@@ -73,7 +73,16 @@ fn link(c_source: &str, out: &Path, cfg: &BuildConfig) -> Result<()> {
     // fallback prints its warning below, same policy as sanitizer widening: allowed,
     // never silent.
     let flavor = cfg.cc_flavor()?;
-    let archive = sysroot.runtime_lib(variant, flavor)?;
+    // An explicit `--runtime` wins over the sysroot's choice. The sysroot picks by `cc`
+    // FLAVOUR for the host, which is right for a host build and has no answer at all for a
+    // cross one: an archive built by `x86_64-w64-mingw32-gcc` is neither the gcc nor the
+    // clang the sysroot knows about. Overriding is what lets a Windows binary be produced
+    // (and run under Wine) from here, so a `@cfg(windows)` branch can be executed rather
+    // than only type-checked.
+    let archive = match &cfg.runtime {
+        Some(path) => crate::sysroot::ResolvedRuntime { path: path.clone(), note: None },
+        None => sysroot.runtime_lib(variant, flavor)?,
+    };
     // Asking for a strict subset of the sanitized archive's sanitizers links the full set
     // instead — safe, but not something to do behind the user's back.
     if let Some(note) = cfg.sanitizer_widening_note(variant) {

@@ -23,8 +23,9 @@ pub fn run(path: Option<OsString>, args: Vec<OsString>, flags: BuildFlags) -> Re
 
 /// Compile a lone file into a temporary executable and return its path.
 fn build_file(path: &Path, flags: BuildFlags) -> Result<PathBuf> {
-    let checked = frontend::check(path, false)?;
+    // The build config first: it carries the `@cfg` keys the front end must expand under.
     let cfg = BuildConfig::resolve(path, flags)?;
+    let checked = frontend::check(path, false, &cfg.cfg)?;
     let dir = std::env::temp_dir().join("neon-run");
     std::fs::create_dir_all(&dir)?;
     let stem = path.file_stem().unwrap_or_else(|| "program".as_ref());

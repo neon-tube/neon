@@ -145,6 +145,11 @@ pub struct BuildFlags {
     pub stacktrace: Option<bool>,
     /// Arbitrary flags passed straight through to the C compiler (`-C`).
     pub cflags: Vec<String>,
+    /// Extra `@cfg` keys on top of the host's. Not a target: see `Config::for_host`.
+    pub cfg: Vec<String>,
+    /// A runtime archive to link instead of the sysroot's. The sysroot picks by `cc`
+    /// flavour for the HOST, which has no answer for a cross build.
+    pub runtime: Option<std::path::PathBuf>,
 }
 
 /// The `[build]` table in `neon.toml`.
@@ -182,6 +187,11 @@ pub struct BuildConfig {
     /// `opt-release`'s `-fomit-frame-pointer`: this wins where they meet.
     pub stacktrace: bool,
     pub cflags: Vec<String>,
+    /// Extra `@cfg` keys on top of the host's. Carried here rather than passed separately
+    /// so the front end expands under the same keys the archive is chosen for.
+    pub cfg: Vec<String>,
+    /// A runtime archive to link instead of the sysroot's, for cross builds.
+    pub runtime: Option<std::path::PathBuf>,
 }
 
 impl BuildConfig {
@@ -196,6 +206,8 @@ impl BuildConfig {
             allocator: Allocator::System,
             stacktrace: false,
             cflags: vec![],
+            cfg: vec![],
+            runtime: None,
         };
 
         if let Some(toml) = find_manifest(near)? {
@@ -243,6 +255,10 @@ impl BuildConfig {
             cfg.allocator = a;
         }
         cfg.cflags.extend(flags.cflags);
+        cfg.cfg.extend(flags.cfg);
+        if flags.runtime.is_some() {
+            cfg.runtime = flags.runtime;
+        }
         Ok(cfg)
     }
 

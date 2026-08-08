@@ -56,3 +56,28 @@ cmake --build "$out/tests" >/dev/null
 
 echo "== runtime tests, under wine =="
 WINEDEBUG=${WINEDEBUG:--all} wine "$out/tests/neon_rt_tests.exe"
+
+# The other half of the loop: a Neon program built FOR Windows and run. This is what makes
+# a `@cfg(windows)` branch testable rather than only type-checkable -- the Win32 half of
+# `std::fs` was written against this.
+#
+# `--cfg windows` selects the branch, `--cc` cross-compiles, and `--runtime` names an archive
+# the sysroot has no way to pick: it chooses by `cc` flavour for the HOST, and a mingw
+# archive is neither the gcc nor the clang it knows about.
+prog=${1:-$root/tests/lang/collections/fs_directories_and_metadata.neon}
+golden=${prog%.neon}.stdout
+echo "== $(basename "$prog"), built for windows, under wine =="
+"$root/target/debug/neon" compile \
+    --cfg windows --mode debug \
+    --cc x86_64-w64-mingw32-gcc \
+    --runtime "$out/strict/libneon_rt_debug.a" \
+    -o "$out/prog.exe" "$prog" 2>&1 | grep -v "^warning" || true
+
+WINEDEBUG=${WINEDEBUG:--all} wine "$out/prog.exe" > "$out/prog.out" 2>&1 || true
+if [ -f "$golden" ] && diff -q "$golden" "$out/prog.out" >/dev/null; then
+    echo "output matches the linux golden"
+else
+    echo "output DIFFERS from the linux golden:"
+    diff "$golden" "$out/prog.out" || true
+    exit 1
+fi

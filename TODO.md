@@ -311,19 +311,18 @@ adds to that. Neither describes a machine to build *for*. Harmless while nothing
 cross-compiles, and not harmless the moment something does: a program built on Linux for
 Windows would take every `@cfg(linux)` branch.
 
-The sharp edge today is that `--cfg` ADDS. With `--cfg windows` on Linux both keys are live,
-so `@cfg(windows)`/`@cfg(not(windows))` pairs select correctly while a
-`@cfg(linux)`/`@cfg(windows)` pair keeps both. That is why `std::path`'s rule sets are
-selected by `not(windows)` rather than by naming each platform.
+The sharp edge is that `--cfg` ADDS. With `--cfg windows` on Linux both keys are live, so
+`@cfg(windows)`/`@cfg(not(windows))` pairs select correctly while a
+`@cfg(linux)`/`@cfg(windows)` pair keeps both.
 
-Whoever adds `--target` owns this line, and should make it the only way to set the keys.
+Whoever adds `--target` owns this line, and should make it the only way to set the keys —
+subsuming `--cfg`, `--cc` and `--runtime`, which together are a target spelled out by hand.
 
-**The related gap, and the one blocking real Windows work:** `neon compile` and `neon run`
-have no `--cfg` at all, and pick their runtime archive by host flavour. So a `@cfg(windows)`
-branch can be type-checked (`neon check --cfg windows`) and never *run* — even though
-`verify/windows.sh` proves the toolchain is there: mingw-w64 cross-compiles a Neon program to
-a PE32+ executable and Wine runs it. Closing this is what turns `std::fs`'s five Windows
-`TODO`s from unverifiable into implementable.
+**The cross-build path itself is done** (2026-08-08). `--cfg`, `--cc` and `--runtime` on
+`compile`/`run` produce a Windows PE from Linux, and `verify/windows.sh` builds the runtime
+with mingw-w64, runs the 90 tinyunit tests under Wine, and builds a Neon program for Windows
+and diffs its output against the Linux golden. That is what made `std::fs`'s Win32 half
+writable against something that executes rather than only type-checks.
 
 ### 19. Derives should eventually live in the stdlib
 

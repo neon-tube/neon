@@ -237,16 +237,16 @@ fn remove(p: path::Path) throws IoError -> null {
 
 // ---- directories and metadata ----
 //
-// POSIX only, and the Windows halves are `TODO(..)` rather than silence. A `TODO` is a
-// COMPILE error naming what is missing, so a Windows build of a program that calls these
-// stops with "TODO: fs::mkdir on Windows" pointing at the hole -- instead of linking against
-// a runtime stub that returns `ENOSYS` at run time, or worse, doing something almost right.
+// No `@cfg` here at all. The platform difference is real -- `mkdir` against
+// `CreateDirectoryW`, `readdir` against `FindFirstFileW` -- and it lives in the runtime's
+// `platform.h`, which is where a difference between two syscalls belongs. What Neon sees is
+// one operation with one meaning, so there is one body.
 //
-// The C side still compiles and links on Windows (the `runtime-windows` job builds it) and
-// returns `-ENOSYS` there. That is belt and braces: the Neon guard is what a user meets, and
-// the errno is what would happen if the guard were ever removed.
+// These were `TODO(..)` on the Windows side until the loop closed: `neon compile --cfg
+// windows --cc x86_64-w64-mingw32-gcc --runtime <mingw archive>` produces a PE that Wine
+// runs, so the Windows half could be written against something that executes rather than
+// something that only type-checks. `verify/windows.sh` is that path.
 
-@cfg(not(windows))
 fn mkdir(p: path::Path) throws IoError -> null {
     let code = raw::mkdir(path::to_str(p));
     if code < 0 {
@@ -255,12 +255,10 @@ fn mkdir(p: path::Path) throws IoError -> null {
     null
 }
 
-@cfg(windows)
-fn mkdir(p: path::Path) throws IoError -> null {
-    TODO("fs::mkdir on Windows: CreateDirectoryW, and the errno mapping that goes with it")
-}
-
-@cfg(not(windows))
+// Replaces an existing destination, which is POSIX `rename`'s behaviour and what Windows is
+// asked for explicitly (`MOVEFILE_REPLACE_EXISTING`) so the two agree. A cross-volume move
+// is permitted on Windows and is NOT atomic there; POSIX refuses it outright. Do not rely on
+// atomicity across volumes on either.
 fn rename(from: path::Path, to: path::Path) throws IoError -> null {
     let code = raw::rename(path::to_str(from), path::to_str(to));
     if code < 0 {
@@ -269,26 +267,14 @@ fn rename(from: path::Path, to: path::Path) throws IoError -> null {
     null
 }
 
-@cfg(windows)
-fn rename(from: path::Path, to: path::Path) throws IoError -> null {
-    TODO("fs::rename on Windows: MoveFileExW, which unlike POSIX rename will not replace an existing file without MOVEFILE_REPLACE_EXISTING")
-}
-
 // Whether the path names a directory. `false` for a file AND for something that is not
-// there: this answers a question about a kind, and "no such path" is not a failure to
-// report differently from "not a directory".
-@cfg(not(windows))
+// there: this answers a question about a kind, and "no such path" is not a failure to report
+// differently from "not a directory".
 fn is_dir(p: path::Path) -> bool {
     raw::is_dir(path::to_str(p)) == 1
 }
 
-@cfg(windows)
-fn is_dir(p: path::Path) -> bool {
-    TODO("fs::is_dir on Windows: GetFileAttributesW and FILE_ATTRIBUTE_DIRECTORY")
-}
-
 // The size in bytes.
-@cfg(not(windows))
 fn size(p: path::Path) throws IoError -> i64 {
     let n = raw::size(path::to_str(p));
     if n < 0 {
@@ -297,17 +283,11 @@ fn size(p: path::Path) throws IoError -> i64 {
     n
 }
 
-@cfg(windows)
-fn size(p: path::Path) throws IoError -> i64 {
-    TODO("fs::size on Windows: GetFileAttributesExW")
-}
-
-// The entries of a directory, as NAMES rather than paths. Joining them onto the directory
-// is the caller's choice and `std::path::join`'s job.
+// The entries of a directory, as NAMES rather than paths. Joining them onto the directory is
+// the caller's choice and `std::path::join`'s job.
 //
 // Order is whatever the filesystem gives back, which is not sorted and not stable across
-// runs. Sort if you need determinism.
-@cfg(not(windows))
+// runs or platforms. Sort if you need determinism.
 fn read_dir(p: path::Path) throws IoError -> List[str] {
     let (names, code) = raw::read_dir(path::to_str(p));
     if code < 0 {
@@ -316,14 +296,9 @@ fn read_dir(p: path::Path) throws IoError -> List[str] {
     if string::is_empty(names) { [] } else { string::split(names, "\0") }
 }
 
-@cfg(windows)
-fn read_dir(p: path::Path) throws IoError -> List[str] {
-    TODO("fs::read_dir on Windows: FindFirstFileW/FindNextFileW, and the wildcard the path needs appending")
-}
-
 // Copy by reading and writing, so it needs no syscall of its own and works wherever `read`
-// and `write` do. It is NOT atomic and does not preserve permissions or timestamps -- a
-// copy that did would be a different function with a different name.
+// and `write` do. It is NOT atomic and does not preserve permissions or timestamps -- a copy
+// that did would be a different function with a different name.
 fn copy(from: path::Path, to: path::Path) throws IoError -> null {
     let data = try read_bytes(from);
     try write(to, data as str);

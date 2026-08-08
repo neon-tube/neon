@@ -54,7 +54,10 @@ pub fn eprint_type_error(
 }
 
 /// Type-check a source file, exiting with rendered diagnostics on any error.
-pub fn check(path: &Path, lib: bool) -> Result<Checked> {
+/// `cfg` adds `@cfg` keys on top of the host's. A `@cfg`-guarded branch is dropped before
+/// the checker, so without this the branch for another platform can be neither checked nor
+/// built here — see `Config::for_host`.
+pub fn check(path: &Path, lib: bool, cfg: &[String]) -> Result<Checked> {
     let src = source::read(path)?;
     let mut r = Renderer::for_stderr(path, &src);
 
@@ -76,7 +79,7 @@ pub fn check(path: &Path, lib: bool) -> Result<Checked> {
     }
     let module = module.expect("no errors means a module");
 
-    let config = neon_compiler::expand::Config::for_host([]);
+    let config = neon_compiler::expand::Config::for_host(cfg.iter().cloned());
     let (module, _meta, expand_errors) = neon_compiler::expand::expand(module, &config);
     if !expand_errors.is_empty() {
         for e in &expand_errors {

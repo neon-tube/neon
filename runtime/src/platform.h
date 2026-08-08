@@ -160,6 +160,109 @@ static inline void neon_plat_stdio_binary(void) {
     _setmode(_fileno(stderr), _O_BINARY);
 }
 
+// A Win32 error as the closest `errno`. The rest of the runtime reports `-errno` and
+// `neon_io_strerror` runs `strerror`, so a raw `GetLastError()` here would surface as a
+// number from the wrong namespace with a message about the wrong failure.
+static inline int neon_plat_errno_from_win32(DWORD e) {
+    switch (e) {
+        case ERROR_FILE_NOT_FOUND:
+        case ERROR_PATH_NOT_FOUND:
+        case ERROR_INVALID_NAME:
+            return ENOENT;
+        case ERROR_ALREADY_EXISTS:
+        case ERROR_FILE_EXISTS:
+            return EEXIST;
+        case ERROR_ACCESS_DENIED:
+        case ERROR_SHARING_VIOLATION:
+            return EACCES;
+        case ERROR_DIR_NOT_EMPTY:
+            return ENOTEMPTY;
+        case ERROR_DISK_FULL:
+            return ENOSPC;
+        case ERROR_NOT_ENOUGH_MEMORY:
+        case ERROR_OUTOFMEMORY:
+            return ENOMEM;
+        default:
+            return EIO;
+    }
+}
+
+// UTF-16 back to UTF-8, the inverse of `neon_plat_widen`. Needed because the directory
+// walk hands back wide names and a Neon `str` is UTF-8. Caller frees; NULL sets `errno`.
+static inline char* neon_plat_narrow(const wchar_t* w) {
+    int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, NULL, 0, NULL, NULL);
+    if (n <= 0) {
+        errno = EILSEQ;
+        return NULL;
+    }
+    char* s = (char*)malloc((size_t)n);
+    if (s == NULL) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    if (WideCharToMultiByte(CP_UTF8, 0, w, -1, s, n, NULL, NULL) <= 0) {
+        free(s);
+        errno = EILSEQ;
+        return NULL;
+    }
+    return s;
+}
+
+static inline int neon_plat_mkdir(const char* path) {
+    wchar_t* w = neon_plat_widen(path);
+    if (w == NULL) return -1;
+    int r = CreateDirectoryW(w, NULL) ? 0 : -1;
+    if (r != 0) errno = neon_plat_errno_from_win32(GetLastError());
+    free(w);
+    return r;
+}
+
+// `MOVEFILE_REPLACE_EXISTING` because POSIX `rename` replaces, and a seam whose two sides
+// disagree about that would make every caller platform-aware. `MOVEFILE_COPY_ALLOWED` so a
+// move across volumes works, which POSIX `rename` does not do -- the seam's contract is the
+// weaker of the two, so a caller must not rely on cross-volume moves being atomic.
+static inline int neon_plat_rename(const char* from, const char* to) {
+    wchar_t* a = neon_plat_widen(from);
+    if (a == NULL) return -1;
+    wchar_t* b = neon_plat_widen(to);
+    if (b == NULL) {
+        free(a);
+        return -1;
+    }
+    int r = MoveFileExW(a, b, MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED) ? 0 : -1;
+    if (r != 0) errno = neon_plat_errno_from_win32(GetLastError());
+    free(a);
+    free(b);
+    return r;
+}
+
+// 1 directory, 0 not, -1 with `errno`.
+static inline int neon_plat_is_dir(const char* path) {
+    wchar_t* w = neon_plat_widen(path);
+    if (w == NULL) return -1;
+    DWORD a = GetFileAttributesW(w);
+    free(w);
+    if (a == INVALID_FILE_ATTRIBUTES) {
+        errno = neon_plat_errno_from_win32(GetLastError());
+        return -1;
+    }
+    return (a & FILE_ATTRIBUTE_DIRECTORY) ? 1 : 0;
+}
+
+static inline int neon_plat_size(const char* path, int64_t* out) {
+    wchar_t* w = neon_plat_widen(path);
+    if (w == NULL) return -1;
+    WIN32_FILE_ATTRIBUTE_DATA d;
+    int ok = GetFileAttributesExW(w, GetFileExInfoStandard, &d) ? 0 : -1;
+    free(w);
+    if (ok != 0) {
+        errno = neon_plat_errno_from_win32(GetLastError());
+        return -1;
+    }
+    *out = ((int64_t)d.nFileSizeHigh << 32) | (int64_t)d.nFileSizeLow;
+    return 0;
+}
+
 NEON_NORETURN static inline void neon_plat_exit_now(int code) {
     _exit(code);
 }
@@ -170,7 +273,9 @@ NEON_NORETURN static inline void neon_plat_exit_now(int code) {
 #include <unistd.h>
 
 #include <fcntl.h>
-#include <stdio.h> // remove
+#include <stdio.h> // remove, rename
+#include <sys/stat.h>
+#include <sys/types.h>
 
 typedef struct iovec neon_iovec;
 
@@ -200,6 +305,28 @@ static inline int neon_plat_exists(const char* path) {
 
 static inline int neon_plat_remove(const char* path) {
     return remove(path);
+}
+
+static inline int neon_plat_mkdir(const char* path) {
+    return mkdir(path, 0777);
+}
+
+static inline int neon_plat_rename(const char* from, const char* to) {
+    return rename(from, to);
+}
+
+// 1 directory, 0 not, -1 with `errno`.
+static inline int neon_plat_is_dir(const char* path) {
+    struct stat st;
+    if (stat(path, &st) != 0) return -1;
+    return S_ISDIR(st.st_mode) ? 1 : 0;
+}
+
+static inline int neon_plat_size(const char* path, int64_t* out) {
+    struct stat st;
+    if (stat(path, &st) != 0) return -1;
+    *out = (int64_t)st.st_size;
+    return 0;
 }
 
 // Nothing to do: a POSIX stream never translates.

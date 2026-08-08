@@ -11,6 +11,7 @@ use buildcfg::{Allocator, BuildFlags, Mode};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use color_eyre::eyre::Result;
 use std::ffi::OsString;
+use std::path::PathBuf;
 
 /// Flags shared by every verb that drives the C compiler. Layered over `neon.toml`'s
 /// `[build]` table, which is layered over built-in defaults.
@@ -44,6 +45,21 @@ struct BuildOpts {
     /// always begin with `-`, so hyphen-led values are taken literally.
     #[arg(short = 'C', long = "cflag", allow_hyphen_values = true)]
     cflag: Vec<String>,
+    /// An extra `@cfg` key, on top of the host's OS and arch (repeatable).
+    ///
+    /// A `@cfg`-guarded branch is dropped before the checker runs, so without this the
+    /// branch for another platform can be neither checked nor built here. Pair it with
+    /// `--cc` and `--runtime` to actually produce a binary for that platform:
+    /// `--cfg windows --cc x86_64-w64-mingw32-gcc --runtime <mingw archive>`.
+    #[arg(long = "cfg", value_name = "KEY")]
+    cfg: Vec<String>,
+    /// The runtime archive to link, instead of the one the sysroot picks for this host.
+    ///
+    /// The sysroot chooses by `cc` FLAVOUR (gcc or clang) for the host, which is the right
+    /// answer for a host build and has no answer at all for a cross build. Cross-compiling
+    /// needs an archive built by the cross toolchain, and this is how it is named.
+    #[arg(long, value_name = "ARCHIVE")]
+    runtime: Option<PathBuf>,
 }
 
 impl From<BuildOpts> for BuildFlags {
@@ -58,6 +74,8 @@ impl From<BuildOpts> for BuildFlags {
             allocator: o.allocator,
             // Absence leaves the layer below alone, like `-g`.
             stacktrace: o.stacktrace.then_some(true),
+            cfg: o.cfg,
+            runtime: o.runtime,
             cflags: o.cflag,
         }
     }

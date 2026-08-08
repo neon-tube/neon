@@ -17,7 +17,7 @@ pub fn build(project: &Project, flags: BuildFlags) -> Result<PathBuf> {
     if !entry.is_file() {
         return Err(eyre!("missing entry point {}", entry.display()));
     }
-    let checked = frontend::check(&entry, false)?;
+    let checked = frontend::check(&entry, false, &[])?;
     let cfg = BuildConfig::resolve(&project.root, flags)?;
     std::fs::create_dir_all(project.target_dir())?;
     let out = project.executable();

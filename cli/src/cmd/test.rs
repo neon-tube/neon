@@ -32,7 +32,7 @@ const PANIC_PREFIX: &str = "neon: uncaught error: ";
 
 pub fn run(file: &OsString, filter: Option<String>, flags: BuildFlags) -> Result<()> {
     let path = PathBuf::from(file);
-    let checked = frontend::check(&path, false)?;
+    let checked = frontend::check(&path, false, &[])?;
     let all = test_entries(&checked.module);
 
     // Filtering selects which tests to *run*, never which to compile: the indices the

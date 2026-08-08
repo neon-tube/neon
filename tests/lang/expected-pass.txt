@@ -67,6 +67,7 @@ collections/a_read_after_a_loop_write_sees_the_old_list.neon
 collections/covariant_list_converts_its_elements.neon
 collections/discarded_index_still_traps.neon
 collections/empty_list_copies_and_concats.neon
+collections/fs_directories_and_metadata.neon
 collections/inplace_write_is_invisible_to_a_callers_alias.neon
 collections/iolist_and_files.neon
 collections/iterating_a_non_collection.neon
