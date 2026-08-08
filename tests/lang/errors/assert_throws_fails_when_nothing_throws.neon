@@ -1,0 +1,24 @@
+//@ exit: 101
+
+// The failing half: the argument CAN throw — the checker demands that much — but on
+// this run it does not, so falling off the end of the argument is the failure and the
+// panic names the expression that stayed quiet.
+
+use std::io;
+
+type Boom = { message: str }
+impl Error for Boom {
+    fn message(b: Boom) -> str { b.message }
+}
+
+fn fails(n: i64) throws Boom -> i64 {
+    if n > 0 { throw Boom { message: "boom" } }
+    n
+}
+
+fn main() {
+    assert_throws(fails(1));
+    io::println("the throwing case passes");
+    assert_throws(fails(0));
+    io::println("never printed");
+}

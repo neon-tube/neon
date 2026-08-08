@@ -775,11 +775,14 @@ The selector is an environment variable rather than `argv` because every Neon pr
 entry point is `int main(void)`; `getenv` reaches the same information without giving test
 binaries a different entry signature from real ones.
 
-*Not working:* `assert_throws`. Its argument would have to be a throwing call, which the
-checker rejects outside a `try` — but a *non*-throwing argument checked fine, and its
-lowering marker made the whole assertion a silent no-op: `assert_throws(42)` compiled and
-passed. The checker now rejects every `assert_throws` as not implemented. Making it work
-needs the checker to treat `assert_throws` as a throw sink.
+`assert_throws` works the way the earlier note here said it would have to: the checker
+treats it as a throw sink. Its argument is checked with the assertion as its handler — a
+bare throwing call is legal there, exactly as inside a `try` — and lowering runs the
+argument with a handler block that discards the error and counts the assertion passed;
+falling off the end of the argument means nothing threw, which panics with the
+argument's source text. An argument that *cannot* throw is a compile error: that
+assertion could never pass, and a test that fails on every run is a mistake worth
+catching before the first run.
 `bench` blocks are parsed and stripped, and nothing runs them.
 
 ---

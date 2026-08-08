@@ -1797,22 +1797,48 @@ impl Checker<'_> {
             }
 
             ExprKind::Assert { kind, args } => {
-                // `assert_throws` has no implementation anywhere below the parser. Its
-                // argument would have to be a throwing call, which this checker rejects
-                // outside a `try` — but a NON-throwing argument checked fine, and
-                // lowering turned the whole assertion into a no-op: `assert_throws(42)`
-                // compiled and silently passed. Rejected until the checker can treat
-                // the argument as a throw sink (decisions.md, "One process per test").
-                if matches!(kind, ast::AssertKind::Throws) {
+                // The parser accepts any number of arguments; the counts are enforced
+                // HERE because they used to be enforced nowhere — `assert()` compiled
+                // to a no-op, and an assertion that silently does nothing is worse than
+                // a missing one.
+                let (name, expected) = match kind {
+                    ast::AssertKind::Assert => ("assert", 1),
+                    ast::AssertKind::Eq => ("assert_eq", 2),
+                    ast::AssertKind::Ne => ("assert_ne", 2),
+                    ast::AssertKind::Throws => ("assert_throws", 1),
+                };
+                if args.len() != expected {
                     self.error(
                         e.span.clone(),
-                        TypeErrorKind::NotImplemented {
-                            what: "`assert_throws`".into(),
-                            hint: "the checker cannot yet treat its argument as a throw \
-                                   sink"
-                                .into(),
+                        TypeErrorKind::AssertArity {
+                            name: name.into(),
+                            expected,
+                            found: args.len(),
                         },
                     );
+                }
+                // `assert_throws(e)` passes exactly when evaluating `e` throws, so its
+                // argument is checked with its own throw sink — the assertion IS the
+                // handler, the same relationship a `try` body has to its `catch`. This
+                // is the "treat `assert_throws` as a throw sink" the decisions doc
+                // called for. An argument that CANNOT throw means the assertion could
+                // never pass; that is a mistake worth a compile error, not a test that
+                // fails on every run.
+                if matches!(kind, ast::AssertKind::Throws) {
+                    self.throw_sinks.push(vec![]);
+                    for a in args {
+                        self.expr(module, a, None);
+                    }
+                    let thrown = self.throw_sinks.pop().unwrap_or_default();
+                    if thrown.is_empty() {
+                        self.error(e.span.clone(), TypeErrorKind::AssertNeverThrows);
+                    } else {
+                        // The exact error union, for lowering's handler parameter —
+                        // same channel a `try` uses.
+                        let caught = self.env.solver.t.union_all(&thrown);
+                        self.result.set_caught(e.id, caught);
+                    }
+                    return self.env.solver.t.tuple(vec![]);
                 }
                 for a in args {
                     self.expr(module, a, None);

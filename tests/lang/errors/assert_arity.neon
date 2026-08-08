@@ -1,0 +1,17 @@
+//@ compile-fail
+//@ error-contains: `assert` takes 1 argument, but 0 were given
+//@ error-contains: `assert_eq` takes 2 arguments, but 3 were given
+//@ error-contains: `assert_throws` takes 1 argument, but 2 were given
+//
+// The parser accepts any number of arguments to the assert intrinsics; the counts are
+// enforced by the checker because they used to be enforced nowhere. `assert()` compiled
+// to a silent no-op — an assertion that cannot fire, sitting in a test, looking like
+// coverage.
+
+fn f() throws str -> i64 { throw "x" }
+
+fn main() {
+    assert();
+    assert_eq(1, 1, 1);
+    assert_throws(f(), f());
+}

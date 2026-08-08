@@ -1,0 +1,25 @@
+// `assert_throws(e)` passes exactly when evaluating `e` throws. The argument runs with
+// the assertion as its handler — a bare throwing call is legal there, the same way it
+// is inside a `try` — and the thrown error is caught, discarded, and counted as the
+// assertion succeeding. Both a user error type and the stdlib's IndexError are driven,
+// because the handler's parameter takes the checker's exact error union, not `any`.
+
+use std::io;
+use std::collections::list;
+
+type Boom = { message: str }
+impl Error for Boom {
+    fn message(b: Boom) -> str { b.message }
+}
+
+fn fails() throws Boom -> i64 {
+    throw Boom { message: "boom" }
+}
+
+fn main() {
+    assert_throws(fails());
+    io::println("a user error throws");
+    assert_throws(list::set([1, 2], 9, 0));
+    io::println("an IndexError throws");
+    io::println("done");
+}

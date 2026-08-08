@@ -1674,7 +1674,7 @@ impl Lower<'_> {
                 self.terminated = false;
                 self.b.emit(Op::ConstUnit, repr, ty)
             }
-            ExprKind::Assert { kind, args } => self.lower_assert(*kind, args, ty),
+            ExprKind::Assert { kind, args } => self.lower_assert(e.id, *kind, args, ty),
             // Error nodes exist only in a parse that reported diagnostics, and every
             // front end exits before lowering on any diagnostic. The match is otherwise
             // exhaustive on purpose: a NEW expression form fails to compile here rather
@@ -1694,13 +1694,15 @@ impl Lower<'_> {
     /// `assert(a == b)` is therefore not lowered as one opaque condition. When the argument
     /// is a comparison, its two sides are lowered separately, compared here, and both
     /// values are reported — so `assert(1 + 1 == 3)` reads the same as `assert_eq(1 + 1, 3)`.
-    fn lower_assert(&mut self, kind: ast::AssertKind, args: &[Expr], ty: TyId) -> Value {
+    fn lower_assert(
+        &mut self,
+        id: crate::ast::ExprId,
+        kind: ast::AssertKind,
+        args: &[Expr],
+        ty: TyId,
+    ) -> Value {
         if matches!(kind, ast::AssertKind::Throws) {
-            // The checker rejects every `assert_throws` (`NotImplemented`) — the old
-            // reasoning here, "its argument must throw and throwing calls are rejected
-            // outside `try`", missed that a NON-throwing argument checked fine and the
-            // marker below lowered the assertion to a no-op that silently passed.
-            panic!("internal error: assert_throws reached lowering");
+            return self.lower_assert_throws(id, args, ty);
         }
         let Some(Assertion {
             cond,
@@ -1749,6 +1751,58 @@ impl Lower<'_> {
 
     /// Everything an assertion's failure path needs. `None` when the intrinsic was written
     /// with too few arguments — a shape the parser accepts and there is nothing to check.
+    /// `assert_throws(e)` — the assertion is its own handler, `lower_try` inverted:
+    /// the argument runs with a handler on the stack, a throw lands there and the
+    /// assertion PASSES (the error value is discarded — its handler parameter has no
+    /// uses, so the refcount pass releases it at the top of the block), and falling
+    /// off the end of the argument means nothing threw, which is the FAILURE — a
+    /// panic carrying the argument's source text.
+    fn lower_assert_throws(&mut self, id: crate::ast::ExprId, args: &[Expr], ty: TyId) -> Value {
+        let Some(arg) = args.first() else {
+            // Arity was reported by the checker; there is nothing to lower.
+            return self.unit(ty);
+        };
+        let text = describe(arg);
+
+        let join = self.b.new_block();
+        let handler = self.b.new_block();
+        // The exact error union the checker computed for the argument, exactly as a
+        // `try`'s handler parameter gets it — defaulting to `any` would erase a type
+        // that is known (see `lower_try`).
+        let err_ty = self.result.caught(id).unwrap_or(ty);
+        let err_repr = self.repr_of_ty(err_ty);
+        let _err = self.b.block_param(handler, err_repr, err_ty);
+
+        self.handlers.push(handler);
+        let _ = self.lower_expr(arg);
+        self.handlers.pop();
+
+        // Still running after the argument: nothing threw, and that is the failure.
+        if !self.terminated {
+            let msg = self.b.emit(
+                Op::ConstStr(format!("assertion failed: expected `{text}` to throw")),
+                Repr::Str,
+                ty,
+            );
+            self.b.emit_void(Op::Native {
+                symbol: "neon_panic".into(),
+                args: vec![msg],
+            });
+            self.b.terminate(Term::Unreachable);
+        }
+
+        self.b.switch_to(handler);
+        self.terminated = false;
+        self.b.terminate(Term::Jump(Target {
+            to: join,
+            args: vec![],
+        }));
+
+        self.b.switch_to(join);
+        self.terminated = false;
+        self.unit(ty)
+    }
+
     fn assert_condition(
         &mut self,
         kind: ast::AssertKind,

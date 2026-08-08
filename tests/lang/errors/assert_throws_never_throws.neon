@@ -1,0 +1,12 @@
+//@ compile-fail
+//@ error-contains: the argument of `assert_throws` can never throw, so this assertion could never pass
+//
+// `assert_throws(42)` used to be worse than rejected: the checker ignored the assert
+// KIND entirely, and lowering turned the assertion into a no-op that silently passed.
+// Now the argument is checked with the assertion as its throw sink, and an argument
+// that cannot throw is a test that fails on every run — a mistake caught at compile
+// time, not on the first execution.
+
+fn main() {
+    assert_throws(42);
+}

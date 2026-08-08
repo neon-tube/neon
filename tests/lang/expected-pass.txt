@@ -125,8 +125,11 @@ control/while_is_guard_on_nullable.neon
 control/while_is_guard_on_record_chain.neon
 control/while_is_guard_still_discriminates.neon
 control/while_loop.neon
+errors/assert_arity.neon
 errors/assert_reports_its_operands.neon
-errors/assert_throws_not_implemented.neon
+errors/assert_throws_fails_when_nothing_throws.neon
+errors/assert_throws_never_throws.neon
+errors/assert_throws_passes.neon
 errors/bare_throwing_call_fails.neon
 errors/catch_internal_match.neon
 errors/main_implicitly_throws_error.neon

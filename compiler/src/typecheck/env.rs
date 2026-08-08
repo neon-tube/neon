@@ -321,6 +321,18 @@ pub enum TypeErrorKind {
         what: String,
         hint: String,
     },
+    /// An assert intrinsic called with the wrong number of arguments. The parser
+    /// accepts any count, and nothing else checks it — `assert()` used to compile to a
+    /// silent no-op.
+    AssertArity {
+        name: String,
+        expected: usize,
+        found: usize,
+    },
+    /// `assert_throws(e)` where `e` cannot throw: the assertion could never pass, so
+    /// every run would fail. A test that cannot succeed is a mistake worth catching at
+    /// compile time.
+    AssertNeverThrows,
     /// Arithmetic or a bitwise op on a type outside the operator's domain. The old
     /// fallthrough accepted any mutually-assignable pair and yielded the left type, so
     /// `"a" - "b"` and `[1] * [2]` reached the C COMPILER as `neon_i64_sub` on structs,
@@ -607,6 +619,21 @@ impl fmt::Display for TypeError {
             TypeErrorKind::NotImplemented { what, hint } => {
                 write!(f, "{what} is not implemented; {hint}")
             }
+            TypeErrorKind::AssertArity {
+                name,
+                expected,
+                found,
+            } => write!(
+                f,
+                "`{name}` takes {expected} argument{}, but {found} {} given",
+                if *expected == 1 { "" } else { "s" },
+                if *found == 1 { "was" } else { "were" }
+            ),
+            TypeErrorKind::AssertNeverThrows => write!(
+                f,
+                "the argument of `assert_throws` can never throw, so this assertion \
+                 could never pass"
+            ),
             TypeErrorKind::NoArithmetic { op, ty, domain } => {
                 write!(f, "`{ty}` has no `{op}`; it is defined only on {domain}")
             }
