@@ -164,6 +164,49 @@ matches — but the per-write `rc` test it would remove is noise on this profile
 
 ---
 
+## Perf — what the brainfuck profile says to build
+
+Profiled 2026-08-08. Neon 0.302s, C 0.234s, **1.30×**. The gap is one thing: **bounds
+checks**. Measured by hand-editing the generated C and rebuilding with the real release
+flags (`-std=c11 -O3 -flto`), against a C reference rewritten into Neon's exact flat
+bracket-jump shape so the algorithms match:
+
+| variant                           | instructions | time   | vs C  |
+|-----------------------------------|--------------|--------|-------|
+| as generated                      | 11.93G       | 0.302s | 1.29× |
+| `kinds[i]` check removed          | 10.81G       | 0.278s | 1.19× |
+| `kinds[i]` + `args[i]` removed    | 8.63G        | 0.257s | 1.10× |
+| all checks removed                | 7.36G        | 0.248s | 1.06× |
+| C, same algorithm                 | 6.36G        | 0.234s | 1.00× |
+
+`ir::unique`'s header already called this — "three bounds checks that cannot be hoisted,
+~11%". It is right, and the number is 15%.
+
+**Build: bounds-check hoisting.** Two rules cover the table's second and third rows:
+an index that is a loop induction variable bounded by the guard (`while i < n`, `n =
+list::len(xs)`) needs no check at all; a check on a loop-invariant list whose index is
+in range needs one test *before* the loop, not per iteration. The second rule is what
+gets `args[i]`, where `len(args) >= len(kinds)` is not provable in the body but is
+testable once on entry. Worth ~15% here and it applies to any indexing loop, so
+word-frequency and binary-trees should be re-measured after.
+
+The last 3% (`cells[ptr]`, a data-dependent index) is not recoverable and not worth
+chasing.
+
+Two hypotheses were measured and **rejected** — do not re-propose them from this profile:
+
+- *Interning atoms / dense tags.* `neon_atom` is already the identity function and the
+  tags are compile-time constants; gcc hoists all four into registers before the loop,
+  so each test is a single register compare. Dense tags would buy only a jump table, and
+  at 1.1M branch misses per 600M dispatches the `if`-chain is already predicted.
+- *Hoisting `l->data`/`l->len` out of the loop.* The reloads are real and visible in the
+  disassembly, but removing them by hand is worth **nothing** under LTO (11.99G vs
+  11.93G, marginally slower). They are L1 hits on a loop running at IPC 7.46, which is
+  not memory-stalled. An earlier −27% measurement of this was an artifact of building
+  without `-flto`, where the accessors were out-of-line calls.
+
+---
+
 ## Perf — what the binary-trees profile says to build
 
 From `bench/binary-trees/` (67M short-lived recursive nodes, built, walked, dropped),
