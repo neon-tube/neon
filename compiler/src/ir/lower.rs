@@ -41,6 +41,23 @@ struct LambdaJob {
     subst: std::collections::HashMap<String, Repr>,
 }
 
+/// One enclosing `try`'s handler: the block a throw lands in, and which reassigned
+/// locals ride every edge into it — the error first, then the current value of each
+/// `mutated` name in order, mirrored by the block's parameters.
+///
+/// The list is what makes an assignment's value AT THE THROW the one the handler and
+/// everything after it sees. Without it, two silent wrongs: a name assigned in a catch
+/// arm reverted at the join (the rebind lived in the arm's popped scope frame), and a
+/// name assigned AFTER a throwing call read as the body's final binding on the throw
+/// path — an SSA value from a block that does not dominate the join, which C reads as
+/// uninitialised memory. `let b = "none"; try { f()?; b = "late" } catch {}` printed an
+/// EMPTY string, not "none".
+#[derive(Clone)]
+struct Handler {
+    block: BlockId,
+    mutated: Vec<String>,
+}
+
 /// A concrete instance of a generic function, discovered at a call site. Monomorphisation
 /// specialises the generic body under `subst`, mapping each generic parameter name to the
 /// concrete `Repr` it was called with.
@@ -1261,10 +1278,11 @@ struct Lower<'a> {
     terminated: bool,
     /// The enclosing loops, innermost last, for `break` and `continue`.
     loops: Vec<LoopCtx>,
-    /// The enclosing `try` handlers, innermost last: the block a throwing call or a
-    /// `throw` jumps to on error, passing the error value. Empty means an error
-    /// propagates straight out of the function.
-    handlers: Vec<BlockId>,
+    /// The enclosing `try` handlers, innermost last. Empty means an error propagates
+    /// straight out of the function. Every edge into a handler passes the error value
+    /// first and then the CURRENT value of each name in its `mutated` list — see
+    /// `Handler`.
+    handlers: Vec<Handler>,
     /// Lambdas discovered while lowering this function, to be lowered as their own.
     pending: Vec<LambdaJob>,
     /// This instance's type-variable bindings (empty for a non-generic function).
@@ -1638,11 +1656,11 @@ impl Lower<'_> {
             ExprKind::Lambda { .. } => self.lower_lambda(e, repr, ty),
             ExprKind::Throw(e) => {
                 let ev = self.lower_expr(e);
-                match self.handlers.last().copied() {
-                    Some(h) => self.b.terminate(Term::Jump(Target {
-                        to: h,
-                        args: vec![ev],
-                    })),
+                match self.handlers.last().cloned() {
+                    Some(h) => {
+                        let args = self.handler_args(ev, &h);
+                        self.b.terminate(Term::Jump(Target { to: h.block, args }));
+                    }
                     None => self.throw_or_escape(ev, ty),
                 }
                 self.terminated = true;
@@ -1764,6 +1782,11 @@ impl Lower<'_> {
         };
         let text = describe(arg);
 
+        // Assigns inside the argument obey the same at-throw rule a `try` body's do.
+        let mut names = Vec::new();
+        collect_assigns_expr(arg, &mut names);
+        let mutated = self.carried(names);
+
         let join = self.b.new_block();
         let handler = self.b.new_block();
         // The exact error union the checker computed for the argument, exactly as a
@@ -1772,8 +1795,17 @@ impl Lower<'_> {
         let err_ty = self.result.caught(id).unwrap_or(ty);
         let err_repr = self.repr_of_ty(err_ty);
         let _err = self.b.block_param(handler, err_repr, err_ty);
+        let mut handler_muts = Vec::new();
+        for n in &mutated {
+            let v = self.lookup(n).unwrap();
+            let (r, vty) = (self.b.value_repr(v).clone(), self.b.value_ty(v));
+            handler_muts.push(self.b.block_param(handler, r, vty));
+        }
 
-        self.handlers.push(handler);
+        self.handlers.push(Handler {
+            block: handler,
+            mutated: mutated.clone(),
+        });
         let _ = self.lower_expr(arg);
         self.handlers.pop();
 
@@ -1793,6 +1825,10 @@ impl Lower<'_> {
 
         self.b.switch_to(handler);
         self.terminated = false;
+        // The at-throw values; the join has one predecessor, so binding here is enough.
+        for (n, &p) in mutated.iter().zip(&handler_muts) {
+            self.bind(n, p);
+        }
         self.b.terminate(Term::Jump(Target {
             to: join,
             args: vec![],
@@ -2864,8 +2900,23 @@ impl Lower<'_> {
         repr: Repr,
         ty: TyId,
     ) -> Value {
+        // Locals the body or the catch arm reassign must ride the CFG, twice over. The
+        // join merges them exactly as an `if`'s does — a catch arm's rebind lived in its
+        // own scope frame and silently vanished at the pop. And the HANDLER takes them
+        // as parameters, because a throw can happen part-way through the body: an
+        // assignment after the throwing call must not be visible on the throw path, and
+        // reading the body's last binding there was reading an SSA value from a block
+        // that does not dominate the handler — uninitialised memory once C got it.
+        let mut names = Vec::new();
+        collect_assigns_expr(body, &mut names);
+        if let Some(c) = catch {
+            collect_assigns_block(&c.body, &mut names);
+        }
+        let mutated = self.carried(names);
+
         let join = self.b.new_block();
         let join_p = self.b.block_param(join, repr.clone(), ty);
+        let mut join_muts = Vec::new();
         let handler = self.b.new_block();
         // The handler's error parameter takes the exact type the checker computed for what
         // this `try` can catch. Defaulting it to `any` would erase a type that is known.
@@ -2876,28 +2927,40 @@ impl Lower<'_> {
         // off the wrong layout.
         let err_repr = self.repr_of_ty(err_ty);
         let err_param = self.b.block_param(handler, err_repr, err_ty);
+        let mut handler_muts = Vec::new();
+        for n in &mutated {
+            let v = self.lookup(n).unwrap();
+            let (r, vty) = (self.b.value_repr(v).clone(), self.b.value_ty(v));
+            join_muts.push(self.b.block_param(join, r.clone(), vty));
+            handler_muts.push(self.b.block_param(handler, r, vty));
+        }
 
-        self.handlers.push(handler);
+        self.handlers.push(Handler {
+            block: handler,
+            mutated: mutated.clone(),
+        });
         let body_v = self.lower_expr(body);
         if !self.terminated {
-            self.b.terminate(Term::Jump(Target {
-                to: join,
-                args: vec![body_v],
-            }));
+            let mut args = vec![body_v];
+            args.extend(mutated.iter().map(|n| self.lookup(n).unwrap()));
+            self.b.terminate(Term::Jump(Target { to: join, args }));
         }
         self.handlers.pop();
 
         self.b.switch_to(handler);
         self.terminated = false;
+        // The at-throw values, rebound before anything in the handler reads them.
+        for (n, &p) in mutated.iter().zip(&handler_muts) {
+            self.bind(n, p);
+        }
         if let Some(c) = catch {
             self.scope.push(vec![]);
             self.bind(&c.binding, err_param);
             let cv = self.lower_block(&c.body).unwrap_or_else(|| self.unit(ty));
             if !self.terminated {
-                self.b.terminate(Term::Jump(Target {
-                    to: join,
-                    args: vec![cv],
-                }));
+                let mut args = vec![cv];
+                args.extend(mutated.iter().map(|n| self.lookup(n).unwrap()));
+                self.b.terminate(Term::Jump(Target { to: join, args }));
             }
             self.scope.pop();
         } else {
@@ -2915,19 +2978,21 @@ impl Lower<'_> {
                 // `catch`. The two disagreed, and `try { let v = try go(); v } catch (e)`
                 // in a non-throwing `main` aborted the process instead of running its
                 // catch. `ExprKind::Throw` four hundred lines up already does it this way.
-                ast::TryForm::Propagate => match self.handlers.last().copied() {
-                    Some(h) => self.b.terminate(Term::Jump(Target {
-                        to: h,
-                        args: vec![err_param],
-                    })),
+                ast::TryForm::Propagate => match self.handlers.last().cloned() {
+                    Some(h) => {
+                        // This handler's own mutated names were just rebound to its
+                        // parameters, so the outer handler receives the at-throw
+                        // values, not the inner body's last bindings.
+                        let args = self.handler_args(err_param, &h);
+                        self.b.terminate(Term::Jump(Target { to: h.block, args }));
+                    }
                     None => self.throw_or_escape(err_param, ty),
                 },
                 ast::TryForm::Soften => {
                     let n = self.b.emit(Op::ConstNull, Repr::Null, ty);
-                    self.b.terminate(Term::Jump(Target {
-                        to: join,
-                        args: vec![n],
-                    }));
+                    let mut args = vec![n];
+                    args.extend(mutated.iter().map(|n| self.lookup(n).unwrap()));
+                    self.b.terminate(Term::Jump(Target { to: join, args }));
                 }
                 ast::TryForm::Assert => {
                     let msg = self.error_message(err_param, ty);
@@ -2942,7 +3007,20 @@ impl Lower<'_> {
 
         self.b.switch_to(join);
         self.terminated = false;
+        // Reads after the `try` see the merged values, whichever path ran.
+        for (n, &p) in mutated.iter().zip(&join_muts) {
+            self.bind(n, p);
+        }
         join_p
+    }
+
+    /// The arguments every edge into a handler carries: the error, then the current
+    /// value of each of its mutated names. The lookups cannot fail — `carried` kept
+    /// only names bound in the enclosing scope.
+    fn handler_args(&mut self, err: Value, h: &Handler) -> Vec<Value> {
+        let mut args = vec![err];
+        args.extend(h.mutated.iter().map(|n| self.lookup(n).unwrap()));
+        args
     }
 
     /// Wrap a call whose target may throw: check the tagged result and, on error, jump
@@ -2976,18 +3054,18 @@ impl Lower<'_> {
         let iserr = self.b.emit(Op::IsErr(result), Repr::Bool, ty);
         let err = self.b.emit(Op::UnwrapErr(result), err_repr, throws_ty);
         let ok_b = self.b.new_block();
-        match self.handlers.last().copied() {
-            Some(h) => self.b.terminate(Term::Branch {
-                cond: iserr,
-                then: Target {
-                    to: h,
-                    args: vec![err],
-                },
-                els: Target {
-                    to: ok_b,
-                    args: vec![],
-                },
-            }),
+        match self.handlers.last().cloned() {
+            Some(h) => {
+                let args = self.handler_args(err, &h);
+                self.b.terminate(Term::Branch {
+                    cond: iserr,
+                    then: Target { to: h.block, args },
+                    els: Target {
+                        to: ok_b,
+                        args: vec![],
+                    },
+                })
+            }
             // The checker forbids a bare throwing call, so a handler is always present;
             // defensively, propagate straight out.
             None => self.b.terminate(Term::Branch {
@@ -3021,6 +3099,26 @@ impl Lower<'_> {
         let produces = !matches!(repr, Repr::Unit);
         let join = self.b.new_block();
         let join_param = produces.then(|| self.b.block_param(join, repr.clone(), ty));
+        // Locals an arm reassigns merge at the join, exactly as an `if`'s do — an arm's
+        // rebind lives in its own scope frame and silently vanished at the pop. (A
+        // guard's assigns count toward the set, but a FAILING guard's assignment still
+        // dissolves with the arm's frame — a guard that assigns is code nobody should
+        // write, and threading it through every not-matched edge would burden the
+        // common case for it.)
+        let mut names = Vec::new();
+        for arm in arms {
+            if let Some(g) = &arm.guard {
+                collect_assigns_expr(g, &mut names);
+            }
+            collect_assigns_expr(&arm.body, &mut names);
+        }
+        let mutated = self.carried(names);
+        let mut mut_params = Vec::new();
+        for n in &mutated {
+            let v = self.lookup(n).unwrap();
+            let (r, vty) = (self.b.value_repr(v).clone(), self.b.value_ty(v));
+            mut_params.push(self.b.block_param(join, r, vty));
+        }
 
         for arm in arms {
             let matched = self.b.new_block();
@@ -3069,7 +3167,8 @@ impl Lower<'_> {
             }
             let bv = self.lower_expr(&arm.body);
             if !self.terminated {
-                let args = join_param.map(|_| vec![bv]).unwrap_or_default();
+                let mut args = join_param.map(|_| vec![bv]).unwrap_or_default();
+                args.extend(mutated.iter().map(|n| self.lookup(n).unwrap()));
                 self.b.terminate(Term::Jump(Target { to: join, args }));
             }
             self.scope.pop();
@@ -3082,6 +3181,10 @@ impl Lower<'_> {
         self.b.terminate(Term::Unreachable);
         self.b.switch_to(join);
         self.terminated = false;
+        // Reads after the `match` see the merged values.
+        for (n, &p) in mutated.iter().zip(&mut_params) {
+            self.bind(n, p);
+        }
         join_param.unwrap_or_else(|| self.unit(ty))
     }
 

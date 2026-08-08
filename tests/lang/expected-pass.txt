@@ -132,6 +132,7 @@ errors/assert_throws_never_throws.neon
 errors/assert_throws_passes.neon
 errors/bare_throwing_call_fails.neon
 errors/catch_internal_match.neon
+errors/catch_rebinds_an_outer_local.neon
 errors/main_implicitly_throws_error.neon
 errors/main_throws_clause_is_fixed.neon
 errors/main_throws_error_restated_fails.neon
@@ -178,6 +179,7 @@ integers/wrapping_add_sub.neon
 integers/wrapping_mul.neon
 integers/wrapping_neg.neon
 match/arm_below_a_binder_is_diagnosed.neon
+match/arm_rebinds_an_outer_local.neon
 match/atom_patterns.neon
 match/guards.neon
 match/impossible_arm_on_a_type_parameter.neon

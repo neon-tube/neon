@@ -1,0 +1,27 @@
+// Reassigning an enclosing local from a match arm is ordinary rebinding: the arm that
+// ran decides the value reads see after the match. The rebind used to live in the
+// arm's own scope frame and vanish at the pop — both prints below said "none" — while
+// an `if` arm's assignment merged correctly; the match join now threads reassigned
+// locals exactly as the `if` join does.
+
+use std::io;
+
+fn describe(x: i64 | str) -> str {
+    let seen = "none";
+    let kind = match x {
+        is i64 => {
+            seen = "was-int";
+            1
+        },
+        is str => {
+            seen = "was-str";
+            2
+        },
+    };
+    "#{kind} #{seen}"
+}
+
+fn main() {
+    io::println(describe(7));
+    io::println(describe("s"));
+}

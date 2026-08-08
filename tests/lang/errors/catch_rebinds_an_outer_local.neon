@@ -1,0 +1,71 @@
+// Reassigning an enclosing local from inside a `try` is ordinary rebinding, and every
+// path agrees about WHEN: an assignment is visible after the `try` exactly when it
+// executed before the throw (or no throw came). Three silent wrongs used to live here:
+//
+//   - a catch arm's assignment vanished at the join (its rebind lived in the arm's own
+//     scope frame and popped with it) — `caught` below printed "none";
+//   - an assignment placed AFTER the throwing call leaked into the throw path as an SSA
+//     value from a block that does not dominate the handler, which C read as
+//     uninitialised memory — `late` below printed an EMPTY string, not "none";
+//   - both flowed through `try?`'s null edge and a propagating inner `try` the same way.
+//
+// The fix threads reassigned locals through every handler edge (the values as they
+// stood AT the throw) and through the join, exactly as an `if` merges its branches.
+
+use std::io;
+
+type Boom = { message: str }
+impl Error for Boom {
+    fn message(b: Boom) -> str { b.message }
+}
+
+fn f() throws Boom -> i64 {
+    throw Boom { message: "boom" }
+}
+
+fn main() {
+    // The catch arm's assignment survives the join.
+    let caught = "none";
+    let r1 = try f() catch (e) {
+        caught = e.message;
+        0
+    };
+    io::println("caught: " + caught);
+
+    // An assignment AFTER the throwing call never ran, and must not be seen.
+    let late = "none";
+    let r2 = try {
+        let x = f();
+        late = "after-the-throw";
+        x
+    } catch (e) { 0 };
+    io::println("late: " + late);
+
+    // One BEFORE the throwing call did run, and must be seen — including through a
+    // propagating inner `try` on its way to the outer catch.
+    let inner = "none";
+    let r3 = try {
+        let x = try f();
+        inner = "unreached";
+        x
+    } catch (e) {
+        0
+    };
+    io::println("inner: " + inner);
+
+    let early = "none";
+    let r4 = try {
+        early = "before-the-throw";
+        f()
+    } catch (e) { 0 };
+    io::println("early: " + early);
+
+    // `try?`'s null edge carries the same at-throw values.
+    let soft = "none";
+    let r5 = try? {
+        soft = "softened";
+        f()
+    };
+    io::println("soft: " + soft);
+    io::println(if r5 == null { "null" } else { "value" });
+}
