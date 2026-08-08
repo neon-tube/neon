@@ -118,7 +118,15 @@ pub fn apply(program: &mut Program) {
         for s in sites {
             by_block.entry(s.block).or_default().push(s);
         }
-        for (block, mut sites) in by_block {
+        // By block id, not the map's iteration order: `rewrite` allocates fresh SSA values,
+        // so whichever block goes first claims the lower numbers. Left to the hash order
+        // that made the emitted IR differ between runs of the same compiler on the same
+        // input -- harmless in itself, both orders being the same program, and a false
+        // positive for anything diffing generated code to prove a change is inert.
+        let mut blocks: Vec<BlockId> = by_block.keys().copied().collect();
+        blocks.sort_by_key(|b| b.0);
+        for block in blocks {
+            let mut sites = by_block.remove(&block).expect("key came from the map");
             sites.sort_by_key(|s| std::cmp::Reverse(s.at));
             for s in sites {
                 rewrite(f, block, &s);
