@@ -26,8 +26,8 @@ pub mod parser;
 pub mod stdlib;
 pub mod typecheck;
 
-/// The crate version, baked in at compile time. Nothing in the workspace calls
-/// this yet; it exists so the CLI has a version to print once it wants one.
+/// The crate version, baked in at compile time. The CLI's internal-compiler-error
+/// hook prints it, so a bug report says which compiler panicked.
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }

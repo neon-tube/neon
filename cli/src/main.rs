@@ -207,8 +207,40 @@ enum Command {
     Doctor,
 }
 
+/// Present an internal panic as what it is: a compiler bug, not a problem with the
+/// user's program. The compiler's own invariant violations deliberately panic with
+/// `internal error: ...` messages rather than mis-compiling (see `ir/lower.rs`); this
+/// hook is the user-facing half — without it they surface as a raw Rust backtrace that
+/// reads like the user did something wrong. The process still exits non-zero through
+/// the normal unwind.
+fn install_ice_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let msg = info
+            .payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .map(str::to_string)
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "<no message>".to_string());
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "<unknown>".to_string());
+        eprintln!("internal compiler error: this is a bug in neon, not in your program.");
+        eprintln!("  {msg}");
+        eprintln!("  at {location}, neon {}", neon_compiler::version());
+        eprintln!("  please report it with the source file that triggered it.");
+        if std::env::var_os("RUST_BACKTRACE").is_some() {
+            eprintln!("{}", std::backtrace::Backtrace::force_capture());
+        } else {
+            eprintln!("  (set RUST_BACKTRACE=1 for a backtrace)");
+        }
+    }));
+}
+
 fn main() -> Result<()> {
     color_eyre::install()?;
+    install_ice_hook();
     match Cli::parse().command {
         Command::Lex { file, spans } => cmd::lex::run(&file, spans),
         Command::Parse { file } => cmd::parse::run(&file),
