@@ -1475,10 +1475,11 @@ impl Lower<'_> {
     /// values are reported — so `assert(1 + 1 == 3)` reads the same as `assert_eq(1 + 1, 3)`.
     fn lower_assert(&mut self, kind: ast::AssertKind, args: &[Expr], ty: TyId) -> Value {
         if matches!(kind, ast::AssertKind::Throws) {
-            // `assert_throws` needs the argument to be a *throwing* expression, which the
-            // checker rejects outside a `try`; there is no well-typed program that reaches
-            // here. Marked rather than mis-lowered.
-            return self.unhandled_note("assert_throws", Repr::Unit, ty);
+            // The checker rejects every `assert_throws` (`NotImplemented`) — the old
+            // reasoning here, "its argument must throw and throwing calls are rejected
+            // outside `try`", missed that a NON-throwing argument checked fine and the
+            // marker below lowered the assertion to a no-op that silently passed.
+            panic!("internal error: assert_throws reached lowering");
         }
         let Some(Assertion { cond, operands, text }) = self.assert_condition(kind, args, ty) else {
             return self.unit(ty);

@@ -1669,7 +1669,24 @@ impl Checker<'_> {
                 self.env.solver.t.tuple(vec![])
             }
 
-            ExprKind::Assert { args, .. } => {
+            ExprKind::Assert { kind, args } => {
+                // `assert_throws` has no implementation anywhere below the parser. Its
+                // argument would have to be a throwing call, which this checker rejects
+                // outside a `try` — but a NON-throwing argument checked fine, and
+                // lowering turned the whole assertion into a no-op: `assert_throws(42)`
+                // compiled and silently passed. Rejected until the checker can treat
+                // the argument as a throw sink (decisions.md, "One process per test").
+                if matches!(kind, ast::AssertKind::Throws) {
+                    self.error(
+                        e.span.clone(),
+                        TypeErrorKind::NotImplemented {
+                            what: "`assert_throws`".into(),
+                            hint: "the checker cannot yet treat its argument as a throw \
+                                   sink"
+                                .into(),
+                        },
+                    );
+                }
                 for a in args {
                     self.expr(module, a, None);
                 }
