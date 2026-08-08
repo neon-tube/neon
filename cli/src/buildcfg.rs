@@ -450,6 +450,10 @@ impl BuildConfig {
         }
         if self.stacktrace {
             args.push("-fno-omit-frame-pointer".into());
+            // The other half of a readable trace: `dladdr` resolves names through the
+            // DYNAMIC symbol table, which a plain executable does not carry for its own
+            // functions. Without this the walk still works and prints raw addresses.
+            args.push("-rdynamic".into());
         }
 
         // From the archive, not from `self.sanitize`: a subset does not link (see

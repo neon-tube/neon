@@ -1739,6 +1739,14 @@ impl Lower<'_> {
             ExprKind::Lambda { .. } => self.lower_lambda(e, repr, ty),
             ExprKind::Throw(e) => {
                 let ev = self.lower_expr(e);
+                // Where the error STARTED, captured for the trace an uncaught panic
+                // prints. Here and not at propagation sites: a rethrow or a `try`'s
+                // pass-through is plumbing, and overwriting the origin with it would
+                // trace the pipe instead of the source.
+                self.b.emit_void(Op::Native {
+                    symbol: "neon_trace_mark".into(),
+                    args: vec![],
+                });
                 match self.handlers.last().cloned() {
                     Some(h) => {
                         let args = self.handler_args(ev, &h);
