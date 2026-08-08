@@ -1,0 +1,16 @@
+//@ compile-fail
+//@ error-contains: list spread (`..`) is not implemented
+//
+// `[0, ..xs]` parses and used to type-check, but no lowering for it exists:
+// the compiler emitted a `<todo: list spread>` string constant at the list's
+// repr, and the program compiled, ran, and indexed a pointer. Until a lowering
+// is written the honest answer is this error, not a placeholder value.
+
+use std::io;
+use std::collections::list;
+
+fn main() {
+    let xs = [1, 2];
+    let ys = [0, ..xs];
+    io::println("#{ys[2]}");
+}

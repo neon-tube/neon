@@ -1413,7 +1413,18 @@ impl Checker<'_> {
                     match el {
                         ast::Elem::Value(x) => elem_tys.push(self.expr(module, x, want_elem)),
                         ast::Elem::Spread(x) => {
+                            // Parsed, but nothing below the checker implements it:
+                            // lowering emitted a `<todo: list spread>` string constant at
+                            // the list's repr, so `[0, ..xs]` compiled and indexed a
+                            // pointer. Rejected until a lowering exists.
                             self.expr(module, x, None);
+                            self.error(
+                                x.span.clone(),
+                                TypeErrorKind::NotImplemented {
+                                    what: "list spread (`..`)".into(),
+                                    hint: "build the list with `list::concat` instead".into(),
+                                },
+                            );
                         }
                     }
                 }
@@ -1860,6 +1871,20 @@ impl Checker<'_> {
         spread: &Option<Box<Expr>>,
         expected: Option<TyId>,
     ) -> TyId {
+        // The checking below understands a spread as an update, but nothing under the
+        // checker does: lowering emitted a `<todo: record spread>` string constant at
+        // the record's repr, so `Point { x: 9, ..p }` compiled and projected fields off
+        // a pointer. Rejected until a lowering exists; the field checks still run, so a
+        // literal with a spread reports its other mistakes too.
+        if let Some(s) = spread {
+            self.error(
+                s.span.clone(),
+                TypeErrorKind::NotImplemented {
+                    what: "record spread (`..`)".into(),
+                    hint: "write every field out explicitly".into(),
+                },
+            );
+        }
         // A named literal builds a nominal record. Resolve the type, then check its
         // fields exactly as an anonymous literal is checked against a target: every
         // field declared, right types, no extras. Generic records need their

@@ -1576,15 +1576,12 @@ impl Lower<'_> {
 
     /// `[a, b, c]` — one `MakeList` with the elements already lowered, left to right.
     fn lower_list(&mut self, elems: &[ast::Elem], repr: Repr, ty: TyId) -> Value {
-        // A spread (`..rest`) is a concatenation; not lowered yet, so mark it.
-        if elems.iter().any(|e| matches!(e, ast::Elem::Spread(_))) {
-            return self.unhandled_note("list spread", repr, ty);
-        }
         let vs = elems
             .iter()
             .map(|e| match e {
                 ast::Elem::Value(x) => self.lower_expr(x),
-                ast::Elem::Spread(_) => unreachable!("guarded above"),
+                // The checker rejects a spread (`NotImplemented`), so none reaches here.
+                ast::Elem::Spread(_) => panic!("internal error: list spread reached lowering"),
             })
             .collect::<Vec<_>>();
         // The checker adopts an expected type wholesale for a list literal, so
@@ -1616,8 +1613,9 @@ impl Lower<'_> {
         repr: Repr,
         ty: TyId,
     ) -> Value {
+        // The checker rejects a spread (`NotImplemented`), so none reaches here.
         if spread.is_some() {
-            return self.unhandled_note("record spread", repr, ty);
+            panic!("internal error: record spread reached lowering");
         }
         // Emit fields in the repr's canonical order, so every value of a type is built
         // the same way. A field the literal omits is a nullable optional -> null.

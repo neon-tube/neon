@@ -208,6 +208,13 @@ pub enum TypeErrorKind {
     /// the message can print the whole loop -- a cycle reported at one arbitrary member
     /// of it is much harder to act on.
     ConstCycle(Vec<String>),
+    /// A form the parser and checker accept but nothing below them implements: list
+    /// spread, record spread, `assert_throws`. Rejected here because the alternative was
+    /// measured, not imagined: lowering emitted a placeholder string constant at whatever
+    /// repr the context expected, so `[0, ..xs]` compiled, ran, and indexed a pointer.
+    /// An error at the use site is honest until a lowering exists; `hint` says what to
+    /// write today.
+    NotImplemented { what: String, hint: String },
 }
 
 impl fmt::Display for TypeError {
@@ -459,6 +466,9 @@ impl fmt::Display for TypeError {
                 chain.first().map(String::as_str).unwrap_or(""),
                 chain.join(" -> ")
             ),
+            TypeErrorKind::NotImplemented { what, hint } => {
+                write!(f, "{what} is not implemented; {hint}")
+            }
             TypeErrorKind::NoField { field, on } => {
                 write!(f, "`{on}` has no field `{field}`")
             }

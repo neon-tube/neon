@@ -86,6 +86,7 @@ collections/list_repeat.neon
 collections/list_set_does_not_mutate_base.neon
 collections/list_set_releases_a_replaced_element.neon
 collections/list_sort.neon
+collections/list_spread_not_implemented.neon
 collections/map_equality.neon
 collections/map_get_missing_throws.neon
 collections/map_index_missing_key_traps.neon
@@ -276,6 +277,7 @@ records/opaque_no_structural_views.neon
 records/opaque_no_union_field_read.neon
 records/opaque_nominal_flows_stay_legal.neon
 records/opaque_values_still_travel.neon
+records/record_spread_not_implemented.neon
 records/recursion_through_a_container.neon
 records/recursive_equality.neon
 records/recursive_mutual.neon
