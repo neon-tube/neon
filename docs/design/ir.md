@@ -328,7 +328,7 @@ method lookup — the checker settled all of it, which is the point of `dispatch
 
 ### An invariant that is undefined, not merely unchecked
 
-`Builder::block_param` records it and `TODO.md` item 11 tracks it: predecessors pass
+`Builder::block_param` records it, and it is still undefined: predecessors pass
 arguments in parameter order, but nothing states what relation the argument **reprs** must
 satisfy. It is not equality — lowering routinely passes a `str` and a `Null` into a `str?`
 join and a bare `i64` into an `i64 | null` one, leaving the widen to the emitter, and a
@@ -401,8 +401,11 @@ The class is not closed. `repr_from_typespec` still collapses — a turbofish `B
 `Box[str]` produce the same repr, so `ident[Box[i64]]` and `ident[Box[str]]` are one
 instance, currently caught only by gcc's nominal struct typing, which is the same "correct by
 coincidence" footing the union collision had. That reproducer and the remaining known
-instances are in `TODO.md` item 12; the fix there is not a cleverer projection but to stop
-deriving a third spelling of a type from syntax at all.
+instances belong to the wider class of lossy projections used as identities; the fix is not
+a cleverer projection but to stop deriving a third spelling of a type from syntax at all.
+Three of that class have since been found and fixed — an interpolation hole's resolution
+overwriting the hole expression's own, `derive`'s generated impls sharing the record's span,
+and `collect_impl_bodies` keying bodies by `protocol$head$method`.
 
 ## Refcount insertion
 

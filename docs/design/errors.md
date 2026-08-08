@@ -133,9 +133,10 @@ the same walk) into the checker's own list, sorts them by span, and deduplicates
 while solving the callee's type parameters, then again under the solution — so anything
 wrong inside an argument was reported twice.
 
-*Known-broken:* the sort is by **raw span offset across every module**, and one `Renderer`
-holds one file, so a stdlib diagnostic renders against the *user's* file at a fabricated
-location. `TypeError` needs a file id. `TODO.md` item 13.
+*Was known-broken:* the sort was by **raw span offset across every module**, and one
+`Renderer` holds one file, so a stdlib diagnostic rendered against the *user's* file at a
+fabricated location. **Fixed** — `TypeError` carries `module`, whose doc records exactly this
+failure, and a stdlib mistake renders against the stdlib source.
 
 ## Not yet
 

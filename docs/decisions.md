@@ -142,8 +142,10 @@ diagnostic when it appears as a declaration, because people will type it.
 *Accepted costs:*
 - **Variant namespacing.** Two sum types cannot each own a `Red`; record names are global,
   so a sum type puts N names at the top level. This is worse than it reads: a record's
-  nominal identity is currently its **bare name**, with the declaring module dropped, so
-  the collision is not merely stylistic — see `any` below and `TODO.md` item 1.
+  nominal identity used to be its **bare name** with the declaring module dropped, which
+  made the collision more than stylistic. Identity is qualified now (`identity.md`): two
+  modules' `Circle`s are different types, and the cost here is back to being the stylistic
+  one this bullet is about.
 - **Binding patterns.** `Shape::Circle(r) => ...` has no equivalent; you re-destructure
   (`is Circle => { let c = s as Circle; ... }`). This is the real day-to-day cost —
   destructuring and record patterns are the compensating work, not optional extras.
@@ -395,8 +397,9 @@ probably unintended, and the escape hatch is one turbofish away.
 
 *Where it still bites:* inference is first-wins and returns what it managed, without
 checking that every variable was pinned. A call that leaves one unsolved reaches codegen as
-an internal error rather than a diagnostic (`TODO.md` item 5). The decision is right; the
-failure mode is not yet a message.
+an internal error rather than a diagnostic. **Fixed:** it is a message now — "cannot infer
+the type parameter `T` of `new`: no argument or expected type pins it", with the two ways
+out. The decision was right and the failure mode has caught up.
 
 ### Comparison is structural, and ordering is total within a type
 
@@ -449,9 +452,12 @@ arms, `null` has nothing to compare, and `Map`, a **closure** and a **self-refer
 record** are opaque pointers with nothing to walk. `List[T]` is ordered exactly when `T`
 is, and a record when every field is. Equality is wider but not total either: a **closure**
 is refused permanently, and so is a **union of two different records**, because the
-field-reading path handles a single record atom and `A | B` normalises to two BDD paths of
-which the second carries a negative. Relaxing that to walk every path was tried on
-2026-07-19 and is not sufficient; it is tracked as lead L8 in `TODO.md`. Note that
+field-reading path handled a single record atom, and `A | B` normalises to two BDD paths of
+which the second carries a negative. **Fixed 2026-08-04.** Walking every path IS sufficient,
+and the negative needs no discharging: a negative only removes inhabitants, so every value on
+a path inhabits that path's positive atoms, and judging the positives is sound. The 2026-07-19
+attempt was right about the shape and wrong about the consequence
+(`operators/union_of_records_compares_by_tag.neon`). Note that
 `P | null`, `str | null`, `i64 | :none` and a union against a bare variant all compare
 fine — they carry a tag and at most one record atom.
 
@@ -540,10 +546,10 @@ so buffered writes are lost on the way out.
 
 **The guard rests on `opaque`, which does not yet hold.** `opaque record File` is what stops
 a caller reaching `f.r` and releasing the descriptor behind the module's back. Field access
-*is* checked — but a record's nominal identity is its bare name with the declaring module
-dropped, so a second module declaring `record File` declares the *same type* and can forge
-one. That is `TODO.md` item 1, and until it is fixed the encapsulation this design assumes
-is a convention rather than a guarantee.
+*is* checked. A record's nominal identity used to be its bare name with the declaring module
+dropped, so a second module declaring `record File` declared the *same type* and could forge
+one — the encapsulation this design assumes was a convention rather than a guarantee. Identity
+is qualified now (`identity.md`), and the guarantee is real.
 
 ### The compiler learns a type's representation from an annotation, not a name
 
@@ -556,7 +562,7 @@ so a new runtime-backed type is a stdlib declaration rather than a compiler edit
 *Not finished.* The special-case count went from three to **two**, not to zero. `List` and
 `Map` are still matched by literal name in `record_repr`, because their element types drive
 witness emission and the codegen-assisted natives, so they move separately; they are also
-matched by name in `typecheck/ordered.rs`. Moving them out is `TODO.md` item 17, and the
+matched by name in `typecheck/ordered.rs`. Moving them out is still unbuilt, and the
 bare-name matching is leads L1/L2 there.
 
 Stdlib-only, like markers. It names a C type the backend must already know, and pointing it
@@ -593,8 +599,10 @@ marker, and a marker has no methods to leave unimplemented, so `impl Ord for X {
 accepted silently and has no effect — satisfaction short-circuits to the compiler rule
 regardless. Only the bound-failure message claims otherwise ("cannot be made to"). The
 decision stands and the impl is inert, but "unwritable" describes the intent, not the
-compiler. Relatedly, the marker rule is keyed on the bare name `"Ord"`, so a user
-`marker Ord` in another module may inherit the built-in rule — lead L1 in `TODO.md`.
+compiler. The marker rule used to be keyed on the bare name `"Ord"`, so a user `marker Ord`
+in another module inherited the built-in rule; it tests identity against the prelude's
+reserved module path now
+(`protocols/a_user_marker_named_ord_is_not_the_marker.neon`).
 
 **Order is infectious, and the bound threads through the recursion.** A record is ordered
 when every field is, `List[T]` when `T` is. That means a *bound* variable must count as
@@ -639,7 +647,7 @@ What is actually there, and the reason each one clears the bar:
 - **`Ord`** — the marker the `where T: Ord` bound names.
 - **`List`, `Map`** — declared here because `record_repr` matches these two names literally
   and they must be unambiguous. This one is *not* "syntax needs it", and it is the reason
-  the root has to be excluded from opacity nesting; moving them out is `TODO.md` item 17.
+  the root has to be excluded from opacity nesting; moving them out is still unbuilt.
 - **`range`** — `for i in range(a, b)` is the counted-loop idiom, and an import in front of
   every loop is worse than a prelude name.
 - **`IndexError`, `Ordering`** — each is shared by two stdlib modules with no single owner
@@ -667,9 +675,10 @@ special, and `\#{` escapes it.
 appears in leading position, and `#{m[:key]}` puts one mid-expression. Reserving `:` would
 mean deciding where the expression ends before the lexer knows.
 
-*Broken today:* interpolating a call that resolves through a protocol miscompiles — the
-hole's `to_string` resolution is written to the hole expression's own id and overwrites the
-call's. `TODO.md` item 2 has the repro.
+*Was broken:* interpolating a call that resolved through a protocol miscompiled — the
+hole's `to_string` resolution was written to the hole expression's own id and overwrote the
+call's. The hole's resolution lives in its own table (`interp_call`) now, so the two cannot
+collide; `"#{area(q)}"` on a `Sq { side: 3 }` prints `9`.
 
 ### An annotation argument is a name, or a string when it is not a name
 
@@ -930,7 +939,7 @@ overflows before the parser can fold the sign. The token carries a `u64` magnitu
 Speed is irrelevant — lexing is never a compiler's bottleneck.
 
 *(Whether block comments should exist at all is still open — they nest, which is correct,
-and nesting is the only reason the tree-sitter external scanner exists. `TODO.md` item 16.)*
+and nesting is the only reason the tree-sitter external scanner exists. `TODO.md` §16.)*
 
 ### The compiler library never touches the filesystem
 
@@ -958,7 +967,9 @@ prefix `std::io`, and declares each file's decls under it before the user's modu
 
 *One thing this does not yet buy:* a diagnostic in a stdlib file renders against the
 *user's* file at a fabricated location, because errors from every module are sorted into
-one renderer holding one file. `TypeError` needs a file id. `TODO.md` item 13.
+one renderer holding one file, and `TypeError` needed a file id. **Fixed:** it carries
+`module`, so a stdlib mistake is rendered against the stdlib source rather than underlining
+an arbitrary token of the user's program.
 
 ### `Error` owns `message`; `Display` is a separate concern
 
@@ -981,7 +992,9 @@ cannot supply them: a default can compute from fields the type already has, but 
 create storage.
 
 *(Default method bodies are, separately, never typechecked at all — the protocol's subject
-is unbound when they are checked. `TODO.md` item 6.)*
+is unbound when they are checked. Still broken, and worse than it reads: a program with a
+default body compiles clean and prints `<todo: dispatch: no method>` as its output. See
+`TODO.md` §21.)*
 
 ### `throws` is unconstrained; `Error` is required only at the top
 
@@ -1035,5 +1048,8 @@ an `is` on an erased value with no resolved tag — ICE rather than invent. But
 covering every tuple and arrow typespec, and a closure parameter with no repr falls back the
 same way. That function feeds monomorphisation *identity*, so the fallback collapses
 distinct instances into one symbol; it is documented in place as a known defect and tracked
-as `TODO.md` item 12, alongside the wider class of lossy projections used as identities.
+as the wider class of lossy projections used as identities. The instance that was live in
+the checker — an interpolation hole's resolution overwriting the hole expression's own — is
+fixed; the class is worth keeping in mind, and `derive`'s span collision and
+`collect_impl_bodies`' `protocol$head$method` key were two more of it.
 Until those arms are gone, this section states the rule, not the state.

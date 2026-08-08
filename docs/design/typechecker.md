@@ -11,7 +11,9 @@ Two rules for reading it:
 - Anything marked **Does not hold** is a property this document once asserted and the
   code does not have. It is left in, marked, because the failure mode this project spent
   a day chasing was exactly the other choice: prose asserting a property that had stopped
-  being true, and readers trusting it. Open items have a number into `TODO.md`.
+  being true, and readers trusting it. Open items point at `TODO.md`, by section name
+  rather than by number — numbers were cited here for items that were later removed, which
+  left readers chasing sections that no longer existed.
 
 ## The bet
 
@@ -133,10 +135,10 @@ was going to be written anyway.
 
 **Does not hold — nominal identity is a bare name.** `env.rs::record_body` interns
 `t.name(&r.name)`, the bare identifier, so two modules each declaring `record Secret`
-declare the **same type**. Every claim about nominal distinctness is scoped to *one*
-name, not to a declaration. `TODO.md` §1 has the repro and the reason it is not a local
-fix (`dispatch::nominal_head` reads the name back bare, `ordered.rs` matches literal
-`"List"`/`"Map"`). Pinned, deliberately unlisted, as
+declared the **same type**, and every claim about nominal distinctness was scoped to a name
+rather than a declaration. **Fixed** — identity is qualified (`identity.md`), the `#nominal`
+tag IS the declaration key, and an impl for each module's `Secret` coexists and dispatches
+correctly. Pinned, deliberately unlisted, as
 `tests/lang/types/a_nominal_name_is_not_a_module_identity.neon`.
 
 **Emptiness is still not module-relative — opacity is enforced at the flows.** This
@@ -174,7 +176,8 @@ checker cannot determine a type it **emits a diagnostic**. There is nothing to f
 Erasure is a **lowering** concern. A value of ⊤ needs a uniform runtime representation;
 that is a consequence of ⊤, not its meaning, and it is decided in `ir/repr.rs`. Whether
 `any` should be allowed to *hold* a container at all is still open — `let a: any = [1,2,3]`
-works today, and the answer also decides `List[any]` and `Map[str, any]` (`TODO.md` §14).
+works today, and the answer also decides `List[any]` and `Map[str, any]`. Still open, and
+still a language decision rather than a defect.
 
 ### The poison is a rigid variable, not a variant
 
@@ -196,9 +199,10 @@ Poison never reaches lowering, because a failed check does not lower.
 **Weaker than documented.** This file used to claim a test asserts no poison survives a
 successful check and that the only route to ⊤ is a written `any`. The guards that exist
 are `compiler/tests/ir_lower.rs`'s `no_type_variable_survives_lowering` and
-`any_never_appears_unless_the_source_type_is_any`, and `TODO.md` §10 records that both are
-aimed at a program the pipeline never builds: they lower with `libs = &[]`, use a different
-entry point than `cli/src/frontend.rs`, and scan only `f.values()`. Rebuilt correctly the
+`any_never_appears_unless_the_source_type_is_any`, and both are aimed at a program the
+pipeline never builds: they lower with `libs = &[]`, use a different entry point than
+`cli/src/frontend.rs`, and scan only `f.values()`. Neither test exists under those names any
+more, so this needs re-deriving rather than re-citing. Rebuilt correctly the
 answer is still 0, so this is latent rather than live — but the assertion is not currently
 carrying the weight the paragraph above puts on it.
 
@@ -221,9 +225,9 @@ union/intersection/negation with a semantic notion of instantiation) are a non-g
 Generics here are parametric, checked with opaque variables, and monomorphised per call
 site.
 
-**Open:** the solver is first-wins and returns what it managed; `direct_call` substitutes
-without checking coverage, so an unsolved parameter reaches codegen as an ICE
-(`TODO.md` §5).
+**Was open, now fixed:** the solver is first-wins and returned what it managed, so an
+unsolved parameter reached codegen as an ICE. It is a diagnostic now — "cannot infer the type
+parameter `T` of `new`: no argument or expected type pins it" — naming both ways out.
 
 ## Arrows carry their error type
 
@@ -283,7 +287,9 @@ seen unguarded.
 
 ### Where this is actually implemented
 
-**Does not hold — `narrow.rs`'s refinement API has zero callers** (`TODO.md` §9).
+**Held, then did not, and holds again.** `narrow.rs`'s refinement API had zero callers when
+this was written; `check.rs` now goes through it in eleven places, including the field-path
+refinements added 2026-08-03.
 
 The module encoding the soundness argument below — `Refined` with no `then_ty` to read on
 the impossible case, `Projected` with no `never`, 52 unit tests, a long module doc — is
@@ -303,7 +309,8 @@ What runs instead:
   uncalled.
 
 A green suite over a disconnected module reads exactly like a green suite over a connected
-one. That is the point of the entry in `TODO.md`.
+one. That is the point, and it is why the reconnection above is worth checking rather than
+assuming.
 
 ### The trap: an empty branch is a diagnostic, never dead code
 
@@ -348,7 +355,7 @@ That is the only check. The assertion is **never discharged at runtime**. Verifi
 
 The checker is arguably right not to reject these — `as` exists to assert what the checker
 cannot prove — but it is a reinterpret cast wearing a checked cast's name. Making it trap
-is a language decision with a cost on every narrowing, and it is unmade: `TODO.md` §15.
+is a language decision with a cost on every narrowing, and it is unmade.
 
 ## Protocols are bounds, never types
 
@@ -365,7 +372,9 @@ was a last-write-wins `method_to_protocol` map.
 
 **Not checked:** a protocol method's *default body*. `check.rs`'s `decls` calls
 `fn_body(module, m, &[])` for it, so the protocol's subject is unbound and any mention of
-`T` in the body is `unknown type T`. Verified 2026-07-19; `TODO.md` §6. `dispatch.rs`'s
+`T` in the body is `unknown type T`. Verified 2026-07-19, and re-verified 2026-08-08 with a
+worse symptom than this describes: the program compiles CLEAN and prints
+`<todo: dispatch: no method>` as its output. See `TODO.md` §21. `dispatch.rs`'s
 `result_of` carries a fallback for an impl relying on a default, and its doc records that
 the path is currently unreachable for exactly this reason.
 
@@ -394,10 +403,12 @@ important line here.
 Keying is `ExprId`, assigned at parse time and unique across the whole compilation
 (`ast::number_exprs_from`), so one result covers every module including the stdlib. The old
 `span.start` key was fragile; a *collapsing* key is the same failure with a longer fuse, and
-`TODO.md` §12 tracks the class. One instance is live in the checker: `check.rs:619` writes
-an interpolation hole's `to_string` resolution to the **hole expression's own** `ExprId`,
-overwriting that expression's own call resolution, so `"#{area(q)}"` miscompiles
-(`TODO.md` §2).
+the class is worth watching. The instance that was live in the checker — an interpolation
+hole's `to_string` resolution written to the hole expression's own `ExprId`, overwriting that
+expression's own call resolution — is **fixed**: the hole's resolution lives in its own table
+(`interp_call`), and `"#{area(q)}"` on a `Sq { side: 3 }` prints `9`. Two more of the class
+turned up later and are also fixed: `derive`'s generated impls sharing the record's span, and
+`collect_impl_bodies` keying bodies by `protocol$head$method`.
 
 ## One error channel
 
@@ -415,8 +426,9 @@ Callers that gate on *declarations* — read `env.errors()` after `build_with`, 
 check bodies against signatures that did not resolve — are unaffected, because they read
 that list before this runs.
 
-**Still wrong:** a `TypeError` has no file id, so a stdlib diagnostic renders against the
-user's file at a fabricated location (`TODO.md` §13).
+**Was wrong, now fixed:** a `TypeError` had no file id, so a stdlib diagnostic rendered
+against the user's file at a fabricated location. It carries `module` now, and a stdlib
+mistake is rendered against the stdlib source.
 
 ## Module layout
 
@@ -447,7 +459,8 @@ of these were **accepted** by the previous implementation and are rejected now:
     !5                       // `not` on a non-bool
 
 None were solver bugs. They were the checker not checking, and that is still where to look
-first: the current list in `TODO.md` is dominated by the same layer.
+first — the six wrong-answer defects found on 2026-08-03/04 were all in that layer too, not
+in the solver.
 
 ## Non-goals
 

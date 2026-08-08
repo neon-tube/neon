@@ -63,8 +63,8 @@ string match on `"File"` in `ir/repr.rs::record_repr`, and the annotation is now
 produces `Repr::Runtime { nominal, c_type, args }`. One caveat against the original claim
 that "the special-case count goes from three to zero": `List` and `Map` are **still their
 own `Repr` variants**, because their element reprs feed witness emission and so move
-separately (`ir/repr.rs`, `Repr::Runtime` doc comment; `TODO.md` item 17 tracks the rest of
-the untangling, including getting them out of the prelude). `File` did stop being magic.
+separately (`ir/repr.rs`, `Repr::Runtime` doc comment). The rest of the untangling —
+including getting them out of the prelude — is still unbuilt. `File` did stop being magic.
 `@runtime` is stdlib-only, like markers; see `docs/design/annotations.md`.
 
 Two rejected shapes, for the record — with the first one revisited, because the shipped
@@ -85,11 +85,11 @@ design is closer to it than the original argument admitted:
 
   Opacity is now genuinely enforced (three routes closed: field read, literal, destructuring
   — `tests/lang/records/opaque_hides_its_contents.neon`) and module-path forgery is refused
-  (`tests/lang/types/a_module_path_may_not_be_forged.neon`). But **it does not hold in
-  general**: nominal identity is a bare name, so a second module declaring `record File`
-  declares the *same type* and can build one. See `TODO.md` item 1, which names
-  `std::fs`'s guard explicitly. The fence the shipped `File` leans on is the missing field,
-  which survives that bug; the `opaque` marking does not.
+  (`tests/lang/types/a_module_path_may_not_be_forged.neon`). It used **not to hold in
+  general**: nominal identity was a bare name, so a second module declaring `record File`
+  declared the *same type* and could build one. **Fixed** — identity is qualified
+  (`identity.md`), so the `opaque` marking holds on its own and no longer depends on the
+  missing field as a second fence.
 
 ## API
 
@@ -265,9 +265,10 @@ primitives, but nothing in `tests/lang/resources/` calls it, so it is unproven a
 - **Cycles.** A resource reachable only through a cycle closes when the collector runs.
   Every other path here is deterministic; this one is not, and it is the single guarantee
   this design cannot make.
-- **Opacity is not identity.** See `TODO.md` item 1. The shipped `File` does not depend on
-  it (there is no payload field to reach), but any *other* resource wrapper that keeps a
-  payload alongside its guard would.
+- ~~**Opacity is not identity.**~~ It was not, while a nominal identity was a bare name: a
+  second module's `File` was the same type. **Fixed** (`identity.md`). The shipped `File`
+  never depended on it — there is no payload field to reach — but any other resource wrapper
+  keeping a payload alongside its guard would have.
 
 Throwing closures — listed here for months as the unmet prerequisite — landed. A lambda can
 throw (`tests/lang/closures/throwing_lambda.neon`), a named throwing function is usable as a

@@ -74,9 +74,9 @@ is: **if you can write it without naming it, it is in the prelude.**
 `io::println` still takes `use std::io` — it is a function, not syntax.
 
 `List` and `Map` are in the prelude because the backend matches those names literally, not
-because syntax needs them. `@runtime` makes moving them out possible; `TODO.md` item 17
-tracks it, and notes that doing so also removes the prelude-vs-root collision forcing an
-exception in `check.rs::opacity_permits`.
+because syntax needs them. `@runtime` makes moving them out possible, and it is still
+unbuilt; doing so also removes the prelude-vs-root collision forcing an exception in
+`check.rs::opacity_permits`.
 
 ## Comparison is structural, not dispatched
 
@@ -230,8 +230,8 @@ the error and the union written in Neon above it — `list::get`, `string::slice
   `runtime/src/io.c`. The comment is stale; the code is fine.
 - **`fs::fail` and `fs::collect` are public** but read as helpers of `fs::open`/`fs::flatten`.
   Neither is in an `internal mod`. Probably an oversight.
-- **Stdlib diagnostics render against the user's file at a fabricated location** — an error
-  in `std/io.neon` prints with the *user's* path and underlines an unrelated line.
-  `TypeError` has no file id. `TODO.md` item 13; it has cost people time.
+- ~~**Stdlib diagnostics render against the user's file at a fabricated location.**~~
+  **Fixed** — `TypeError` carries `module`, so an error in `std/io.neon` renders against
+  `std/io.neon`.
 - `tests/lang/collections/stdlib_breadth.neon` is the closest thing to a surface test; there
   is no per-function coverage guarantee.
