@@ -626,7 +626,12 @@ fn lower_instance(
     }
     let mut params = Vec::new();
     for (i, p) in f.params.iter().enumerate() {
-        let ty = sig.params.get(i).map(|(_, t)| *t).unwrap_or(TyId(0));
+        // The sig is built from this same declaration, so the counts agree; a hole here
+        // used to become `TyId(0)` — whatever type was interned first — and the
+        // parameter lowered at a silently wrong layout.
+        let Some(&(_, ty)) = sig.params.get(i) else {
+            panic!("internal error: `{}` has more AST params than its signature", job.mangled);
+        };
         let r = lo.repr_of_ty(ty);
         let v = lo.b.block_param(BlockId(0), r, ty);
         lo.bind(&p.name, v);
@@ -914,7 +919,10 @@ fn lower_method(
     set_throws(&mut lo.b, env, sig.throws, &Default::default());
     let mut params = Vec::new();
     for (i, p) in f.params.iter().enumerate() {
-        let ty = sig.params.get(i).map(|(_, t)| *t).unwrap_or(TyId(0));
+        // Same invariant as `lower_instance`: the sig comes from this declaration.
+        let Some(&(_, ty)) = sig.params.get(i) else {
+            panic!("internal error: method `{}` has more AST params than its signature", f.name);
+        };
         let r = repr_of(&env.solver.t, ty);
         let v = lo.b.block_param(BlockId(0), r, ty);
         lo.bind(&p.name, v);
@@ -945,19 +953,24 @@ fn lower_fn(
     f: &ast::FnDecl,
 ) -> (Func, Vec<LambdaJob>, Vec<InstanceJob>) {
     let name = f.name.clone();
-    let sig = env.fn_named(module, std::slice::from_ref(&name));
-    let ret_ty = sig.map(|s| s.ret).unwrap_or(TyId(0));
-    let ret_repr = repr_of(&env.solver.t, ret_ty);
+    // Every bodied top-level function was registered when the Env was built; not finding
+    // its sig used to fall back to `TyId(0)` — whatever type was interned first — and the
+    // function lowered with a silently wrong return layout and untyped throws.
+    let Some(sig) = env.fn_named(module, std::slice::from_ref(&name)) else {
+        panic!("internal error: no signature for fn `{name}`");
+    };
+    let ret_repr = repr_of(&env.solver.t, sig.ret);
 
     let mut lo = Lower::new(env, result, module.to_vec(), mangle(module, &f.name), ret_repr.clone());
-    if let Some(s) = sig {
-        set_throws(&mut lo.b, env, s.throws, &Default::default());
-    }
+    set_throws(&mut lo.b, env, sig.throws, &Default::default());
 
     // Parameters are the entry block's parameters.
     let mut params = Vec::new();
     for (i, p) in f.params.iter().enumerate() {
-        let ty = sig.and_then(|s| s.params.get(i)).map(|(_, t)| *t).unwrap_or(TyId(0));
+        // Same invariant as `lower_instance`: the sig comes from this declaration.
+        let Some(&(_, ty)) = sig.params.get(i) else {
+            panic!("internal error: fn `{name}` has more AST params than its signature");
+        };
         let r = repr_of(&env.solver.t, ty);
         let v = lo.b.block_param(BlockId(0), r, ty);
         lo.bind(&p.name, v);
@@ -1027,11 +1040,17 @@ fn lower_lambda_job(env: &Env, result: &TypecheckResult, job: LambdaJob) -> (Fun
     let ExprKind::Lambda { params: lparams, body } = &job.lambda.kind else {
         unreachable!("a lambda job holds a lambda");
     };
-    // The lambda's inferred arrow gives its parameter, throws and return reprs.
+    // The lambda's inferred arrow gives its parameter, throws and return reprs. The
+    // checker types every lambda it visits, so anything else here is a checker/lowering
+    // disagreement — the old fallback lowered the body with no parameters and a Unit
+    // return, a silently wrong function.
     let (param_reprs, throws_repr, ret_repr) =
         match result.ty(job.lambda.id).map(|t| repr_of(&env.solver.t, t)) {
             Some(Repr::Closure { params, throws, ret }) => (params, *throws, *ret),
-            _ => (vec![], Repr::Never, Repr::Unit),
+            other => panic!(
+                "internal error: lambda `{}` has repr {other:?}, not a closure",
+                job.name
+            ),
         };
     // The inferred arrow is the *generic* one, so its variables are still open; the
     // enclosing instance's substitution closes them.
@@ -1064,7 +1083,12 @@ fn lower_lambda_job(env: &Env, result: &TypecheckResult, job: LambdaJob) -> (Fun
         }
     }
     for (i, p) in lparams.iter().enumerate() {
-        let r = param_reprs.get(i).cloned().unwrap_or(Repr::Any);
+        // The reprs were read off this lambda's own checked arrow type, so the counts
+        // agree; the old `Repr::Any` fallback was an invented erasure of the kind the
+        // `any_never_appears...` guard in `compiler/tests/ir_lower.rs` exists to catch.
+        let Some(r) = param_reprs.get(i).cloned() else {
+            panic!("internal error: lambda `{}` has more params than its arrow type", job.name);
+        };
         let v = lo.b.block_param(BlockId(0), r, TyId(0));
         lo.bind(&p.name, v);
         params.push(v);
@@ -1171,13 +1195,15 @@ impl Lower<'_> {
         self.scope.iter().rev().flat_map(|s| s.iter().rev()).find(|(n, _)| n == name).map(|(_, v)| *v)
     }
 
-    /// The repr of an expression, as the checker typed it. An expression with no recorded
-    /// type is one the checker never reached (a form under an error); `Unit` keeps
-    /// lowering going rather than aborting the whole program over one bad subtree.
+    /// The repr of an expression, as the checker typed it. The old `Unit` fallback for a
+    /// missing type dated from when lowering ran over half-checked programs; every front
+    /// end now exits before lowering on any diagnostic, so an untyped expression here is
+    /// a checker/lowering disagreement, and a value lowered at `Unit` when its consumers
+    /// expect something else is exactly the placeholder shape this file no longer allows.
     fn repr(&self, e: &Expr) -> Repr {
         match self.result.ty(e.id) {
             Some(ty) => self.repr_of_ty(ty),
-            None => Repr::Unit,
+            None => panic!("internal error: expression {:?} has no recorded type", e.id),
         }
     }
 
@@ -1211,7 +1237,11 @@ impl Lower<'_> {
     }
 
     fn ty(&self, e: &Expr) -> TyId {
-        self.result.ty(e.id).unwrap_or(TyId(0))
+        // Same invariant as `repr`: the checker typed everything lowering sees.
+        match self.result.ty(e.id) {
+            Some(ty) => ty,
+            None => panic!("internal error: expression {:?} has no recorded type", e.id),
+        }
     }
 
     // ---- blocks and statements ----
