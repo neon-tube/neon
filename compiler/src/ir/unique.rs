@@ -61,15 +61,15 @@
 //!
 //! # What the rewrite does
 //!
-//! Only writes in `try!` shape are rewritten — the tagged result opened by `is_err`, the
-//! error edge a panic — because the in-place primitive traps on a bad index rather than
-//! producing a catchable error. A program that *catches* `IndexError` from a write keeps
-//! the generic call. For a qualifying site: the call becomes the no-result native
-//! `neon_list_set_inplace`, the branch collapses to a jump onto the ok edge, the `try!`
-//! plumbing is deleted, and every use of the unwrapped result is substituted with the
-//! list argument itself — which is what makes the loop-carried value a single SSA name
-//! the C compiler can keep in registers. `neon_list_ensure_unique` goes on each entry
-//! edge (an edge block if the predecessor branches).
+//! For a `try!`-shaped site — the tagged result opened by `is_err`, the error edge a
+//! panic — the call becomes the no-result native `neon_list_set_inplace`, the branch
+//! collapses to a jump onto the ok edge, the `try!` plumbing is deleted, and every use
+//! of the unwrapped result is substituted with the list argument itself — which is what
+//! makes the loop-carried value a single SSA name the C compiler can keep in registers.
+//! (The in-place primitive traps on a bad index exactly where this shape panicked.)
+//! A CAUGHT write is rewritten differently — see "Caught writes" below; it used to keep
+//! the generic call outright. `neon_list_ensure_unique` goes on each entry edge (an
+//! edge block if the predecessor branches).
 //!
 //! The element repr must be uncounted: `neon_list_set_scalar_inplace` is a raw store, so
 //! a refcounted element's displaced value would leak. A sole-owned chain over counted
@@ -80,16 +80,59 @@
 //! one owner stays on the chain — and codegen derives its element repr from the list
 //! argument, since there is no result to ask (`backend/c.rs::emit_list_builder`).
 //!
+//! # Nested writes: the path rewrite
+//!
+//! `m[i][j] = v`, spelled as its lowering — `set(m, i, set(m[i], j, v))` — used to be
+//! structurally hopeless for this pass: `m[i]` hands back a retained element, so the
+//! inner list's `rc` is 2 the moment it has a name, the runtime's own `rc == 1` fast
+//! path is unreachable, and every cell write cloned the whole row. Measured on an
+//! n x n grid fill, that is O(n³) for O(n²) work — 22x at n = 3200 and growing with n —
+//! and a cube is O(n⁴).
+//!
+//! The rewrite recognises the whole GROUP by its dataflow: an outer write whose element
+//! is the unwrapped result of an inner write on an `Index` read of the same list at the
+//! same index value, to any depth. Each level's read becomes
+//! `neon_list_ensure_unique_at(parent, i)` — the slot's element made sole-owned in
+//! place, handed back borrowed — and each level's write BACK is deleted: the pointer it
+//! would store is already in the slot, and its error edge is unreachable because the
+//! read it replaced trapped on the same index. Only the leaf write survives, as the
+//! same `set_scalar_inplace` a flat chain gets. Group-internal values are validated to
+//! have no other uses, and every level obeys the order rule against the LEAF — a read
+//! of any enclosing list after the innermost store would see the mutation.
+//!
+//! Cost per cell write after the rewrite: one pointer-compare per level plus the raw
+//! store. The first touch of a shared row still clones it — `repeat` stores one row
+//! pointer n times, and copy-on-write semantics REQUIRE that clone — but it amortises
+//! to one clone per distinct row, O(1) per write, which is optimal under value
+//! semantics.
+//!
+//! # Caught writes
+//!
+//! A write whose `IndexError` is caught (`try ... catch`) used to keep the generic call
+//! outright, because the in-place primitive traps where the handler expects a value.
+//! It is now rewritten by splitting on an explicit bounds check: in bounds, the
+//! in-place store and a jump to the ok edge; out of bounds, the ORIGINAL `set` call in
+//! a slow block, which throws the stdlib's own `IndexError` to the original handler —
+//! same error value, same text, built by the same code. The slow path is only
+//! reachable when the call must throw, so the in-place discipline is undisturbed. A
+//! handler that uses the OLD list declines the chain through the ordinary use rules —
+//! that use is a live second name for the buffer. Caught writes are rewritten flat
+//! only; a nested group's deleted upper levels are justified by trap equivalence,
+//! which a live handler does not provide.
+//!
 //! # Why this runs between the optimiser and refcounting
 //!
 //! Before refcounting, because that pass retains the very value the chain carries —
 //! bookkeeping balanced by a matching release, indistinguishable in the IR from a real
 //! second reference. After the optimiser, so the shapes matched here are the shapes
 //! codegen will see. `Stage::Optimised` output is printed *before* this rewrite; the
-//! rewritten IR is visible at `Stage::Final`.
+//! rewritten IR is visible at `Stage::Final`. The refcount pass treats
+//! `neon_list_ensure_unique_at`'s result as a VIEW of its list operand (`base_of`), so
+//! the borrowed row is never separately released, and a consuming use of it — the
+//! caught slow path's call — gets the retain the view discipline already provides.
 
 use super::repr::Repr;
-use super::ssa::{Block, BlockId, Func, Inst, Op, Program, Target, Term, Value};
+use super::ssa::{Block, BlockId, Func, Inst, Op, PrimOp, Program, Target, Term, Value};
 use std::collections::{HashMap, HashSet};
 
 /// The lowered name of the stdlib write, before the monomorphised suffix.
@@ -105,9 +148,13 @@ pub struct Candidate {
     pub param: Value,
     /// How many `list::set` writes are on this value's chain inside the loop.
     pub writes: usize,
-    /// Whether the element repr is uncounted — the precondition of the scalar in-place
-    /// write. A sole-owned chain over counted elements is true but not (yet) actionable.
+    /// Whether every write's LEAF element repr is uncounted — the precondition of the
+    /// scalar in-place store. For a nested (path) write the leaf is the innermost list;
+    /// a sole-owned chain whose leaf elements are counted is true but not actionable.
     pub scalar: bool,
+    /// The deepest write's nesting: 1 for a flat `set`, 2 for `m[i][j]`-shaped, and so
+    /// on. Depth above 1 means the path rewrite fires (`ensure_unique_at` per level).
+    pub depth: usize,
 }
 
 /// Every sole-ownership candidate in the program. The query behind `apply`, exposed so
@@ -122,6 +169,7 @@ pub fn candidates(program: &Program) -> Vec<Candidate> {
                 param: p.param,
                 writes: p.sites.len(),
                 scalar: p.scalar,
+                depth: p.sites.iter().map(|s| s.path.len() + 1).max().unwrap_or(1),
             });
         }
     }
@@ -153,9 +201,11 @@ struct Plan {
     sites: Vec<Site>,
 }
 
-/// One `try!`-shaped write on a chain, with everything the rewrite touches.
-struct Site {
-    /// Block holding the `set` call, whose terminator is the `try!` branch.
+/// The `try` plumbing round one write. `err: None` is the `try!` shape — the error edge
+/// panics — and the rewrite may delete the branch outright. `err: Some` is a CAUGHT
+/// write: the error edge is a live handler, so the rewrite must keep a path to it.
+struct Shape {
+    /// Block holding the `set` call, whose terminator is the branch on `is_err`.
     block: BlockId,
     /// The call's tagged result, by which the call instruction is found again.
     tagged: Value,
@@ -163,8 +213,38 @@ struct Site {
     unwrap_err: Option<Value>,
     /// The ok-side opening of the tagged result; absent when the result is discarded.
     unwrap_ok: Option<Value>,
-    /// The non-error edge, which the rewrite jumps to unconditionally.
+    /// The non-error edge, which the in-place write jumps to.
     ok: Target,
+    /// For a caught write, the error edge (the handler). `None` when it panics.
+    err: Option<Target>,
+}
+
+/// One rewriteable write on a chain. A flat `set` is a `leaf` with an empty `path`; a
+/// nested `m[i][j] = v`-shaped group carries one `PathLevel` per enclosing list,
+/// outermost first.
+struct Site {
+    /// The write whose element actually lands: the innermost `set`.
+    leaf: Shape,
+    /// The levels above the leaf, outermost first. Each one's `write` is deleted — it
+    /// can no longer fire once the leaf mutates in place — and each one's `read`
+    /// becomes `neon_list_ensure_unique_at`.
+    path: Vec<PathLevel>,
+}
+
+/// One enclosing level of a nested write: the element read that walks down, and the
+/// store back up that the rewrite deletes.
+struct PathLevel {
+    /// The `Op::Index` result — the inner list this level reads out. The rewrite turns
+    /// the read into `ensure_unique_at(parent, index)`, keeping the same result value.
+    read: Value,
+    /// The list the read indexes into: the chain value at level 0, the level above's
+    /// `read` otherwise.
+    parent: Value,
+    /// The index, one SSA value used by both the read and the write back.
+    index: Value,
+    /// This level's own `try!`-shaped `set(parent, index, ..)`, deleted by the rewrite:
+    /// the preceding read proved the index in bounds, so it can never throw.
+    write: Shape,
 }
 
 /// A located `list::set` call.
@@ -353,12 +433,15 @@ fn plans(f: &Func) -> Vec<Plan> {
     let mut out = Vec::new();
     for header in headers {
         for &param in &f.blocks[header.0 as usize].params {
-            let Repr::List(elem) = f.value_repr(param) else {
+            let Repr::List(_) = f.value_repr(param) else {
                 continue;
             };
-            let scalar = !elem.is_counted();
             if let Some(sites) = chain(f, &sets, &all_uses, param) {
                 if !sites.is_empty() {
+                    // Actionable when every site's LEAF list has uncounted elements —
+                    // for a flat site that is the chain's own element repr, for a
+                    // nested one the innermost list's.
+                    let scalar = sites.iter().all(|s| leaf_scalar(f, s));
                     out.push(Plan {
                         header,
                         param,
@@ -370,6 +453,19 @@ fn plans(f: &Func) -> Vec<Plan> {
         }
     }
     out
+}
+
+/// Whether a site's innermost write stores an uncounted element — the precondition of
+/// `neon_list_set_scalar_inplace`'s raw store.
+fn leaf_scalar(f: &Func, site: &Site) -> bool {
+    let b = &f.blocks[site.leaf.block.0 as usize];
+    let Some(inst) = b.insts.iter().find(|i| i.result == Some(site.leaf.tagged)) else {
+        return false;
+    };
+    let Op::Call { args, .. } = &inst.op else {
+        return false;
+    };
+    matches!(f.value_repr(args[0]), Repr::List(e) if !e.is_counted())
 }
 
 /// The `list::set` calls in a function. Matched by the name lowering gives the stdlib
@@ -456,19 +552,221 @@ fn chain(
             }
         }
         if let Some(s) = consumed_by {
-            if !write_is_last(f, all_uses, defining_block(f, v), v, s) {
+            if !write_is_last(f, all_uses, defining_block(f, v), v, s, &[]) {
                 return None;
             }
-            let site = try_shape(f, all_uses, s)?;
-            if let Some(ok) = site.unwrap_ok {
+            let outer = write_shape(f, all_uses, s)?;
+            let site = deepen(f, sets, all_uses, v, s, outer)?;
+            // The chain continues past the OUTER write's unwrapped result — for a
+            // nested site that is the top of the path, not the leaf.
+            let outer_shape = site.path.first().map(|l| &l.write).unwrap_or(&site.leaf);
+            if let Some(ok) = outer_shape.unwrap_ok {
                 if members.insert(ok) {
                     queue.push(ok);
+                }
+            }
+            // For a nested site the leaf mutation lands while the chain value is still
+            // live (its own write is above), so the order rule must ALSO hold against
+            // the leaf: no read of `v` may execute after the leaf write — its slot may
+            // have been swapped by `ensure_unique_at` and its contents mutated. The
+            // site's own upper writes are after the leaf by construction and allowed.
+            if !site.path.is_empty() {
+                let leaf_set = SetCall {
+                    block: site.leaf.block,
+                    idx: instruction_index(f, site.leaf.block, site.leaf.tagged)?,
+                    tagged: site.leaf.tagged,
+                };
+                let allowed: Vec<(BlockId, usize)> = site
+                    .path
+                    .iter()
+                    .map(|l| {
+                        Some((
+                            l.write.block,
+                            instruction_index(f, l.write.block, l.write.tagged)?,
+                        ))
+                    })
+                    .collect::<Option<_>>()?;
+                if !write_is_last(f, all_uses, defining_block(f, v), v, &leaf_set, &allowed) {
+                    return None;
                 }
             }
             sites.push(site);
         }
     }
     Some(sites)
+}
+
+/// The position of the instruction producing `tagged` inside `block`.
+fn instruction_index(f: &Func, block: BlockId, tagged: Value) -> Option<usize> {
+    f.blocks[block.0 as usize]
+        .insts
+        .iter()
+        .position(|i| i.result == Some(tagged))
+}
+
+/// Descend from an outer write into a nested path group, or return the write as a flat
+/// leaf. The group's shape is the source pattern `set(c, i, set(c[i], j, ..))` after
+/// lowering: the outer write's ELEMENT is the unwrapped result of an inner write whose
+/// list is an `Index` read of the same list at the same index value.
+///
+/// Everything internal to the group is validated to be used by the group alone:
+///
+/// - the inner unwrapped result feeds exactly the enclosing write's element slot;
+/// - the `Index` read feeds exactly this level's write (as its list) and at most one
+///   further read down — no carries, no escapes, nothing else, so once the leaf
+///   mutates in place there is no name left through which the old contents could be
+///   observed (the levels have no other uses AT ALL, which subsumes the order rule);
+/// - every level above the leaf is `try!`-shaped. Its deletion is what the preceding
+///   read licenses: the read trapped on the same index the write stores back to, and
+///   no length changed in between, so the write's error edge is unreachable.
+fn deepen(
+    f: &Func,
+    sets: &[SetCall],
+    all_uses: &HashMap<Value, Vec<Use>>,
+    list: Value,
+    set: &SetCall,
+    shape: Shape,
+) -> Option<Site> {
+    let mut path: Vec<PathLevel> = Vec::new();
+    let mut cur_list = list;
+    let mut cur_set = set;
+    let mut cur_shape = shape;
+
+    loop {
+        let args = call_args(f, cur_set)?;
+        let (index, elem) = (args[1], args[2]);
+
+        // Is the element the unwrapped result of an inner set on a read of this list?
+        let Some((inner_set, inner_read)) = inner_write(f, sets, all_uses, cur_list, index, elem)
+        else {
+            // No: `cur` is the leaf. A caught leaf is only supported flat — the nested
+            // rewrite deletes the levels above, and their deletion is argued through
+            // `try!`'s trap equivalence, not through a handler.
+            if cur_shape.err.is_some() && !path.is_empty() {
+                return None;
+            }
+            // The order rule, aimed at the leaf, for every level's list: a read of the
+            // row or of any enclosing list positioned after the in-place write would
+            // observe the mutation where clone semantics showed the old element. Reads
+            // BEFORE the write stay legal — `set(row, k, row[k] + 1)` reads its own
+            // slot to compute the element — because `ensure_unique_at` preserves
+            // contents and nothing has mutated yet. Each level's own write-back is
+            // after the leaf by construction and is the one allowed exception.
+            // `path[k].read` is consumed by `path[k + 1].write` — or by the leaf for
+            // the innermost — so that write-back is each read's one allowed use after
+            // the leaf; the leaf call itself is excluded by `write_is_last` directly.
+            for (k, level) in path.iter().enumerate() {
+                let allowed: Vec<(BlockId, usize)> = match path.get(k + 1) {
+                    Some(next) => vec![(
+                        next.write.block,
+                        instruction_index(f, next.write.block, next.write.tagged)?,
+                    )],
+                    None => vec![],
+                };
+                if !write_is_last(
+                    f,
+                    all_uses,
+                    defining_block(f, level.read),
+                    level.read,
+                    cur_set,
+                    &allowed,
+                ) {
+                    return None;
+                }
+            }
+            return Some(Site {
+                leaf: cur_shape,
+                path,
+            });
+        };
+
+        // Levels above a leaf must be try!-shaped; their branches are deleted.
+        if cur_shape.err.is_some() {
+            return None;
+        }
+        let inner_shape = write_shape(f, all_uses, inner_set)?;
+        path.push(PathLevel {
+            read: inner_read,
+            parent: cur_list,
+            index,
+            write: cur_shape,
+        });
+        cur_list = inner_read;
+        cur_set = inner_set;
+        cur_shape = inner_shape;
+    }
+}
+
+/// Match `elem` as the unwrapped result of an inner `set` whose list argument is an
+/// `Index` read of `list` at exactly `index`, with every group-internal value used by
+/// the group alone. Returns the inner call and the read's result.
+fn inner_write<'a>(
+    f: &Func,
+    sets: &'a [SetCall],
+    all_uses: &HashMap<Value, Vec<Use>>,
+    list: Value,
+    index: Value,
+    elem: Value,
+) -> Option<(&'a SetCall, Value)> {
+    // `elem` is `unwrap_ok` of an inner tagged result, and feeds ONLY the outer call.
+    let (eb, ei) = find_def(f, elem)?;
+    let Op::UnwrapOk(inner_tagged) = f.blocks[eb.0 as usize].insts[ei].op else {
+        return None;
+    };
+    if all_uses.get(&elem).map(|u| u.len()) != Some(1) {
+        return None;
+    }
+
+    let inner = sets.iter().find(|s| s.tagged == inner_tagged)?;
+    let iargs = call_args(f, inner)?;
+    let inner_list = iargs[0];
+
+    // The inner list is an `Index` read of `list` at the same index VALUE the outer
+    // write stores back to — the same slot, definitionally, not coincidentally.
+    let (rb, ri) = find_def(f, inner_list)?;
+    let Op::Index { base, index: ridx } = f.blocks[rb.0 as usize].insts[ri].op else {
+        return None;
+    };
+    if base != list || ridx != index {
+        return None;
+    }
+
+    // The read's uses: this write (as its list), plus at most one deeper read — the
+    // next level's `Index`. Anything else is a second name for the buffer.
+    for u in all_uses.get(&inner_list).into_iter().flatten() {
+        match u {
+            Use::By {
+                at,
+                op: Op::Call { func, args },
+            } if func.starts_with(SET_PREFIX)
+                && args.first() == Some(&inner_list)
+                && *at == (inner.block, inner.idx) => {}
+            Use::By {
+                op: Op::Index { base, .. },
+                ..
+            } if *base == inner_list => {}
+            _ => return None,
+        }
+    }
+    Some((inner, inner_list))
+}
+
+/// The instruction position defining `v`, if `v` is an instruction result.
+fn find_def(f: &Func, v: Value) -> Option<(BlockId, usize)> {
+    for b in &f.blocks {
+        if let Some(i) = b.insts.iter().position(|i| i.result == Some(v)) {
+            return Some((b.id, i));
+        }
+    }
+    None
+}
+
+/// A located call's arguments.
+fn call_args<'a>(f: &'a Func, s: &SetCall) -> Option<&'a [Value]> {
+    match &f.blocks[s.block.0 as usize].insts.get(s.idx)?.op {
+        Op::Call { args, .. } => Some(args),
+        _ => None,
+    }
 }
 
 /// The order rule: no other use of `v` may execute after its consuming write. In place,
@@ -490,6 +788,7 @@ fn write_is_last(
     def_block: BlockId,
     v: Value,
     s: &SetCall,
+    allowed: &[(BlockId, usize)],
 ) -> bool {
     let mut reach = HashSet::new();
     let mut stack: Vec<BlockId> = successors(f, s.block)
@@ -504,6 +803,9 @@ fn write_is_last(
     for u in all_uses.get(&v).into_iter().flatten() {
         let after = match u {
             Use::By { at, .. } if *at == (s.block, s.idx) => false, // the write itself
+            // A nested group's own write-back one level up: after the leaf by
+            // construction, and exactly what the group is for.
+            Use::By { at, .. } if allowed.contains(at) => false,
             Use::By { at, .. } => reach.contains(&at.0) || (at.0 == s.block && at.1 > s.idx),
             Use::Carried { from, .. } | Use::Term { from, .. } => {
                 reach.contains(from) || *from == s.block
@@ -516,16 +818,22 @@ fn write_is_last(
     true
 }
 
-/// Match a write's surroundings against the `try!` shape, or decline the site.
+/// Match a write's surroundings against the `try!` or caught shape, or decline the site.
 ///
-/// The shape: the tagged result is read only by one `is_err`, at most one `unwrap_err`,
-/// and at most one `unwrap_ok`; the call's block ends in a branch on the `is_err`, whose
-/// true edge leads to a panic block (ends `unreachable`, contains `neon_panic`) and may
-/// carry the `unwrap_err` result there — and carries it nowhere else; the `unwrap_ok`
-/// sits in the ok-edge block. Anything else — a caught error, a stored tagged result —
-/// keeps the generic call, because the in-place primitive traps where this shape panics
-/// and a program observing the difference must not be rewritten.
-fn try_shape(f: &Func, all_uses: &HashMap<Value, Vec<Use>>, s: &SetCall) -> Option<Site> {
+/// Common to both: the tagged result is read only by one `is_err`, at most one
+/// `unwrap_err`, and at most one `unwrap_ok`; the call's block ends in a branch on the
+/// `is_err`; the `unwrap_err` may ride the error edge and go nowhere else; the
+/// `unwrap_ok` sits in the ok-edge block. A stored or multiply-read tagged result keeps
+/// the generic call.
+///
+/// The error edge decides the kind. A panic block (ends `unreachable`, contains
+/// `neon_panic`) is the `try!` shape (`err: None`): the in-place primitive traps where
+/// the shape panics, and the rewrite may delete the branch outright. Anything else is a
+/// CAUGHT write (`err: Some`), rewriteable only by keeping a slow path to the handler —
+/// and only when the instructions between the call and its branch are exactly the
+/// tagged-result plumbing, because the caught rewrite moves the call to a slow block
+/// and anything else moved with it would be skipped on the fast path.
+fn write_shape(f: &Func, all_uses: &HashMap<Value, Vec<Use>>, s: &SetCall) -> Option<Shape> {
     let mut is_err: Option<Value> = None;
     let mut unwrap_ok: Option<(BlockId, Value)> = None;
     let mut unwrap_err: Option<Value> = None;
@@ -566,8 +874,22 @@ fn try_shape(f: &Func, all_uses: &HashMap<Value, Vec<Use>>, s: &SetCall) -> Opti
     let Term::Branch { cond, then, els } = &f.blocks[s.block.0 as usize].term else {
         return None;
     };
-    if *cond != is_err || !is_panic_block(f, then.to) {
+    if *cond != is_err {
         return None;
+    }
+    let caught = !is_panic_block(f, then.to);
+    if caught {
+        // Everything between the call and the branch must be plumbing of this tagged
+        // result: the caught rewrite moves the call (and that plumbing) into the slow
+        // block, and an unrelated instruction moved there would not run on the fast
+        // path while its result might still be read past the join.
+        let b = &f.blocks[s.block.0 as usize];
+        for inst in &b.insts[s.idx + 1..] {
+            match &inst.op {
+                Op::IsErr(t) | Op::UnwrapErr(t) if *t == s.tagged => {}
+                _ => return None,
+            }
+        }
     }
     // The `is_err` must feed that branch and nothing else.
     for u in all_uses.get(&is_err).into_iter().flatten() {
@@ -595,13 +917,14 @@ fn try_shape(f: &Func, all_uses: &HashMap<Value, Vec<Use>>, s: &SetCall) -> Opti
             return None;
         }
     }
-    Some(Site {
+    Some(Shape {
         block: s.block,
         tagged: s.tagged,
         is_err,
         unwrap_err,
         unwrap_ok: unwrap_ok.map(|(_, r)| r),
         ok: els.clone(),
+        err: caught.then(|| then.clone()),
     })
 }
 
@@ -637,29 +960,136 @@ fn rewrite(f: &mut Func, plan: &Plan) {
     let mut subst: HashMap<Value, Value> = HashMap::new();
     let mut dead: HashSet<Value> = HashSet::new();
 
-    // The write itself: call → no-result native, branch → jump onto the ok edge. The
-    // call is found by its tagged result, not a stored index — earlier rewrites in this
-    // plan may have shifted instruction positions.
     for site in &plan.sites {
-        let b = &mut f.blocks[site.block.0 as usize];
-        let inst = b
+        // The levels above a leaf, first: each element read becomes the per-level
+        // uniqueness step — same result value, so downstream uses need no patching —
+        // and each write back is deleted outright, its block jumping straight onto the
+        // ok edge. The preceding read proved the index; the write cannot throw.
+        for level in &site.path {
+            let (rb, ri) =
+                find_def(f, level.read).expect("a validated level's read is an instruction");
+            let inst = &mut f.blocks[rb.0 as usize].insts[ri];
+            inst.op = Op::Native {
+                symbol: "neon_list_ensure_unique_at".into(),
+                args: vec![level.parent, level.index],
+            };
+            let wb = &mut f.blocks[level.write.block.0 as usize];
+            wb.term = Term::Jump(level.write.ok.clone());
+            dead.insert(level.write.tagged); // deletes the call instruction itself
+            dead.insert(level.write.is_err);
+            dead.extend(level.write.unwrap_err);
+            if let Some(ok) = level.write.unwrap_ok {
+                subst.insert(ok, level.parent);
+                dead.insert(ok);
+            }
+        }
+
+        // The leaf. Its list argument is read out of the (already rewritten) call
+        // before the op is replaced.
+        let b = &mut f.blocks[site.leaf.block.0 as usize];
+        let call_pos = b
             .insts
-            .iter_mut()
-            .find(|i| i.result == Some(site.tagged))
+            .iter()
+            .position(|i| i.result == Some(site.leaf.tagged))
             .expect("a validated site's call is present");
-        let Op::Call { args, .. } = &inst.op else {
+        let Op::Call { args, .. } = &b.insts[call_pos].op else {
             unreachable!("a validated site's tagged value is a call result")
         };
         let (list, index, elem) = (args[0], args[1], args[2]);
-        inst.result = None;
-        inst.op = Op::Native {
-            symbol: "neon_list_set_inplace".into(),
-            args: vec![list, index, elem],
-        };
-        b.term = Term::Jump(site.ok.clone());
-        dead.insert(site.is_err);
-        dead.extend(site.unwrap_err);
-        if let Some(ok) = site.unwrap_ok {
+
+        match &site.leaf.err {
+            // `try!`: the in-place store replaces the call and the branch collapses
+            // onto the ok edge — the store traps where the shape panicked.
+            None => {
+                let inst = &mut b.insts[call_pos];
+                inst.result = None;
+                inst.op = Op::Native {
+                    symbol: "neon_list_set_inplace".into(),
+                    args: vec![list, index, elem],
+                };
+                b.term = Term::Jump(site.leaf.ok.clone());
+                dead.insert(site.leaf.is_err);
+                dead.extend(site.leaf.unwrap_err);
+            }
+            // Caught: the handler must stay reachable, so the write splits on an
+            // explicit bounds check. In bounds — the only path that can occur more
+            // than once per loop — the store goes in place and jumps to the ok edge.
+            // Out of bounds, the ORIGINAL call runs in a slow block and throws the
+            // stdlib's own IndexError to the original branch, so the handler sees
+            // exactly the error text and value it always saw. The slow path's ok edge
+            // survives as dead-but-well-formed IR: the call only runs when it must
+            // throw.
+            Some(_) => {
+                let tail = b.insts.split_off(call_pos);
+                let i64_ty = f.value_ty(index);
+                let bool_ty = f.value_ty(site.leaf.is_err);
+                let len = f.new_value(Repr::I64, i64_ty);
+                let zero = f.new_value(Repr::I64, i64_ty);
+                let ge = f.new_value(Repr::Bool, bool_ty);
+                let lt = f.new_value(Repr::Bool, bool_ty);
+                let inb = f.new_value(Repr::Bool, bool_ty);
+                let fast = BlockId(f.blocks.len() as u32);
+                let slow = BlockId(f.blocks.len() as u32 + 1);
+
+                let b = &mut f.blocks[site.leaf.block.0 as usize];
+                let old_term = std::mem::replace(
+                    &mut b.term,
+                    Term::Branch {
+                        cond: inb,
+                        then: Target {
+                            to: fast,
+                            args: vec![],
+                        },
+                        els: Target {
+                            to: slow,
+                            args: vec![],
+                        },
+                    },
+                );
+                b.insts.push(Inst {
+                    result: Some(len),
+                    op: Op::Native {
+                        symbol: "neon_list_len".into(),
+                        args: vec![list],
+                    },
+                });
+                b.insts.push(Inst {
+                    result: Some(zero),
+                    op: Op::ConstI64(0),
+                });
+                b.insts.push(Inst {
+                    result: Some(ge),
+                    op: Op::Prim(PrimOp::Ge, vec![index, zero]),
+                });
+                b.insts.push(Inst {
+                    result: Some(lt),
+                    op: Op::Prim(PrimOp::Lt, vec![index, len]),
+                });
+                b.insts.push(Inst {
+                    result: Some(inb),
+                    op: Op::Prim(PrimOp::And, vec![ge, lt]),
+                });
+                f.blocks.push(Block {
+                    id: fast,
+                    params: vec![],
+                    insts: vec![Inst {
+                        result: None,
+                        op: Op::Native {
+                            symbol: "neon_list_set_inplace".into(),
+                            args: vec![list, index, elem],
+                        },
+                    }],
+                    term: Term::Jump(site.leaf.ok.clone()),
+                });
+                f.blocks.push(Block {
+                    id: slow,
+                    params: vec![],
+                    insts: tail,
+                    term: old_term,
+                });
+            }
+        }
+        if let Some(ok) = site.leaf.unwrap_ok {
             subst.insert(ok, list);
             dead.insert(ok);
         }

@@ -83,6 +83,7 @@ collections/list_index_out_of_bounds_traps.neon
 collections/list_iteration.neon
 collections/list_push_does_not_mutate_base.neon
 collections/list_repeat.neon
+collections/list_set_caught_in_loop.neon
 collections/list_set_does_not_mutate_base.neon
 collections/list_set_releases_a_replaced_element.neon
 collections/list_sort.neon
@@ -96,6 +97,8 @@ collections/map_set_does_not_mutate_base.neon
 collections/map_union_key.neon
 collections/map_update_probes_once.neon
 collections/nested_list_value_semantics.neon
+collections/nested_write_depth3.neon
+collections/nested_write_in_place.neon
 collections/partial_record_write_across_distinct_slots.neon
 collections/partial_record_write_keeps_stale_fields.neon
 collections/stdlib_breadth.neon

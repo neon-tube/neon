@@ -1,0 +1,51 @@
+// A loop-carried write whose `IndexError` is CAUGHT. The rewrite splits it on a bounds
+// check — in bounds the store goes in place, out of bounds the original `set` runs and
+// throws the stdlib's own error to the handler — so both halves are pinned here:
+//
+//   - `fill(5, 0)` never leaves bounds: every write takes the in-place path;
+//   - `fill(5, 1)`'s last iteration is out of bounds: the handler runs and replaces
+//     the list, so the -1s prove the error edge fired;
+//   - the handler observes the stdlib's own IndexError, message and all, because the
+//     out-of-bounds path calls the real `list::set`.
+//
+// `keeps_old` yields the OLD list from its handler. That is a live second name for the
+// buffer, so the rewrite (correctly) declines the whole chain — and the values must be
+// identical anyway: the rewrite is an optimisation, never a semantics.
+
+use std::io;
+use std::collections::list;
+
+fn fill(n: i64, extra: i64) -> str {
+    let acc = list::repeat(0, n);
+    for i in range(0, n + extra) {
+        let acc2 = try list::set(acc, i, i + 1) catch (e) {
+            list::repeat(0 - 1, n)
+        };
+        acc = acc2;
+    }
+    "#{acc[0]} #{acc[n - 1]}"
+}
+
+fn keeps_old(n: i64) -> str {
+    let acc = list::repeat(7, n);
+    for i in range(0, n + 1) {
+        let acc2 = try list::set(acc, i, i) catch (e) {
+            acc
+        };
+        acc = acc2;
+    }
+    "#{acc[0]} #{acc[n - 1]}"
+}
+
+fn main() {
+    io::println(fill(5, 0));
+    io::println(fill(5, 1));
+    io::println(keeps_old(3));
+
+    let xs = [1, 2];
+    let ys = try list::set(xs, 9, 0) catch (e) {
+        io::println(e.message);
+        [0]
+    };
+    io::println("#{ys[0]}");
+}

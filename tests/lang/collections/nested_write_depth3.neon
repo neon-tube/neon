@@ -1,0 +1,28 @@
+// The nested write at depth three: `m[i][j][k] = v` spelled as its lowering, three
+// reads down and three stores back. The path rewrite composes per level — each read
+// becomes a per-slot uniqueness step — so depth needs no special case, and these
+// values pin that a cube built from ONE shared plane pointer (via `repeat`) still
+// writes every cell independently.
+
+use std::io;
+use std::collections::list;
+
+fn main() {
+    let n = 3;
+    let m = list::repeat(list::repeat(list::repeat(0, n), n), n);
+    for i in range(0, n) {
+        for j in range(0, n) {
+            for k in range(0, n) {
+                let plane = m[i];
+                let row = plane[j];
+                let row2 = try! list::set(row, k, 100 * i + 10 * j + k);
+                let plane2 = try! list::set(plane, j, row2);
+                let m2 = try! list::set(m, i, plane2);
+                m = m2;
+            }
+        }
+    }
+    io::println("#{m[0][0][0]} #{m[2][2][2]}");
+    io::println("#{m[1][0][2]} #{m[0][2][1]}");
+    io::println("#{m[2][0][0]} #{m[0][0][2]}");
+}

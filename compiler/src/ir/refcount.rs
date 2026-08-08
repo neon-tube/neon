@@ -136,6 +136,15 @@ fn base_of(f: &Func, ptr: &HashSet<Value>, erasing: &HashSet<Value>) -> HashMap<
                 (Some(v), Op::Cast(base) | Op::UnwrapOk(base) | Op::UnwrapErr(base)) => {
                     Some((v, *base))
                 }
+                // `ir::unique`'s per-level uniqueness step hands back the list's slot
+                // element BORROWED — the slot keeps ownership — so the result is a view
+                // of the list it read from, exactly like `Elem`. Treating it as an
+                // owner would release a reference the slot still holds.
+                (Some(v), Op::Native { symbol, args })
+                    if symbol == "neon_list_ensure_unique_at" =>
+                {
+                    Some((v, args[0]))
+                }
                 _ => None,
             };
             if let Some((v, base)) = projected {
@@ -490,8 +499,13 @@ fn operand_uses(
         // and `neon_list_set_scalar_inplace` releases nothing. The chain's one owner
         // stays live across it — a retain-per-write here is exactly the traffic
         // `ir::unique` exists to remove, and would leak besides.
+        // `neon_list_ensure_unique_at` borrows for the same reason: it swaps a slot's
+        // OWN reference for a sole-owned one and hands the result back borrowed — see
+        // `base_of`, which records that result as a view of the list operand.
         Op::Native { symbol, args }
-            if symbol == "neon_list_set_inplace" || symbol == super::partial::SET_FIELD_INPLACE =>
+            if symbol == "neon_list_set_inplace"
+                || symbol == "neon_list_ensure_unique_at"
+                || symbol == super::partial::SET_FIELD_INPLACE =>
         {
             borrowing.extend(args.iter().copied())
         }

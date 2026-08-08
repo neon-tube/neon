@@ -284,3 +284,119 @@ fn main() {
     assert!(candidates_for(src, "main").is_empty());
     assert!(!final_has_native(src, "main", "neon_list_set_inplace"));
 }
+
+#[test]
+fn a_nested_write_qualifies_and_rewrites_per_level() {
+    // The path rewrite: read down, write back up, one `ensure_unique_at` per level and
+    // the leaf in place. Depth is reported so the report harness can say which chains
+    // went nested. Semantic twin: `tests/lang/collections/nested_write_in_place.neon`.
+    let src = r##"
+use std::io;
+use std::collections::list;
+
+fn fill(m: List[List[i64]], n: i64) -> List[List[i64]] {
+    let i = 0;
+    while i < n {
+        let row = m[i];
+        let row2 = try! list::set(row, i, i);
+        m = try! list::set(m, i, row2);
+        i = i + 1;
+    };
+    m
+}
+
+fn main() {
+    io::println("#{fill(list::repeat(list::repeat(0, 2), 2), 2)[1][1]}");
+}
+"##;
+    let found = candidates_for(src, "fill");
+    assert_eq!(found.len(), 1, "one chain: {found:?}");
+    assert!(found[0].scalar, "the LEAF elements are i64: actionable");
+    assert_eq!(found[0].depth, 2);
+    assert!(final_has_native(src, "fill", "neon_list_ensure_unique_at"));
+    assert!(final_has_native(src, "fill", "neon_list_set_inplace"));
+}
+
+#[test]
+fn a_row_read_after_the_leaf_write_disqualifies() {
+    // The order rule aimed at the leaf: the row is read after the innermost store, so
+    // in place it would show the new element where clone semantics show the old.
+    let src = r##"
+use std::io;
+use std::collections::list;
+
+fn fill(m: List[List[i64]], n: i64) -> List[List[i64]] {
+    let i = 0;
+    while i < n {
+        let row = m[i];
+        let row2 = try! list::set(row, 0, i);
+        io::println("#{row[0]}");
+        m = try! list::set(m, i, row2);
+        i = i + 1;
+    };
+    m
+}
+
+fn main() {
+    io::println("#{fill(list::repeat(list::repeat(0, 2), 2), 2)[1][0]}");
+}
+"##;
+    assert!(!final_has_native(src, "fill", "neon_list_ensure_unique_at"));
+    assert!(!final_has_native(src, "fill", "neon_list_set_inplace"));
+}
+
+#[test]
+fn a_caught_write_rewrites_behind_a_bounds_check() {
+    // The caught shape: in place when the index is in bounds, the original call — and
+    // its real IndexError — on the out-of-bounds path. Semantic twin:
+    // `tests/lang/collections/list_set_caught_in_loop.neon`.
+    let src = r##"
+use std::io;
+use std::collections::list;
+
+fn fill(n: i64) -> List[i64] {
+    let acc = list::repeat(0, n);
+    let i = 0;
+    while i < n {
+        acc = try list::set(acc, i, i) catch (e) { list::repeat(9, n) };
+        i = i + 1;
+    };
+    acc
+}
+
+fn main() {
+    io::println("#{fill(3)[2]}");
+}
+"##;
+    let found = candidates_for(src, "fill");
+    assert_eq!(found.len(), 1, "one chain: {found:?}");
+    assert!(found[0].scalar);
+    assert!(final_has_native(src, "fill", "neon_list_set_inplace"));
+    assert!(final_has_native(src, "fill", "neon_list_ensure_unique"));
+}
+
+#[test]
+fn a_handler_keeping_the_old_list_disqualifies() {
+    // The handler yields the list the write consumed: a live second name for the
+    // buffer on a path the bounds check cannot rule out. The ordinary use rules
+    // decline it — no special case needed.
+    let src = r##"
+use std::io;
+use std::collections::list;
+
+fn fill(n: i64) -> List[i64] {
+    let acc = list::repeat(0, n);
+    let i = 0;
+    while i < n + 1 {
+        acc = try list::set(acc, i, i) catch (e) { acc };
+        i = i + 1;
+    };
+    acc
+}
+
+fn main() {
+    io::println("#{fill(3)[0]}");
+}
+"##;
+    assert!(!final_has_native(src, "fill", "neon_list_set_inplace"));
+}

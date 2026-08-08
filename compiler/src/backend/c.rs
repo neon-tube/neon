@@ -472,9 +472,11 @@ fn is_list_builder(symbol: &str) -> bool {
             | "neon_list_push"
             | "neon_list_set"
             // Emitted by `ir::unique`'s transformation, never by lowering: a write to a
-            // list already established as sole-owned, and the establishing call itself.
+            // list already established as sole-owned, the establishing call itself, and
+            // the per-level step of the nested rewrite.
             | "neon_list_set_inplace"
             | "neon_list_ensure_unique"
+            | "neon_list_ensure_unique_at"
             | "neon_list_set_field_inplace"
             | "neon_map_new"
             | "neon_map_set"
@@ -922,6 +924,13 @@ fn emit_list_builder(
         // already has. `sizeof` rather than a size computed here, so the literal cannot
         // disagree with the layout the emitter actually gave the type.
         "neon_list_ensure_unique" => format!("neon_list_ensure_unique({})", var(args[0])),
+        // The per-level step of `ir::unique`'s nested rewrite: plain pointer arguments,
+        // no witness — the slots of a `List[List[..]]` are `neon_list*` by layout.
+        "neon_list_ensure_unique_at" => format!(
+            "neon_list_ensure_unique_at({}, {})",
+            var(args[0]),
+            var(args[1])
+        ),
         "neon_list_set" if !elem().is_counted() => format!(
             "neon_list_set_scalar({}, {}, {}, sizeof({}))",
             var(args[0]),

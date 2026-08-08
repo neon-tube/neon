@@ -1,0 +1,56 @@
+// The nested-write pattern — read a row out, write an element, store the row back —
+// with everything that must stay correct when `ir::unique`'s path rewrite turns it
+// into in-place stores:
+//
+//   - `repeat` builds the grid from ONE row pointer stored n times, so the first write
+//     to each row must clone it (copy-on-write), and rows must stay isolated;
+//   - a caller holding the grid across the writing function must see its own grid
+//     untouched (`ensure_unique` on the loop entry);
+//   - a read of the row's own slot BEFORE the write (`row[j] + ..`) sees the old
+//     element — the read-modify-write everyone writes.
+//
+// The values below fail loudly if rows alias (writes bleed across rows), if the
+// entry clone is missed (the caller's grid mutates), or if the write lands at the
+// wrong slot.
+
+use std::io;
+use std::collections::list;
+
+fn fill(m: List[List[i64]], n: i64) -> List[List[i64]] {
+    for i in range(0, n) {
+        for j in range(0, n) {
+            let row = m[i];
+            let row2 = try! list::set(row, j, 10 * i + j);
+            let m2 = try! list::set(m, i, row2);
+            m = m2;
+        }
+    }
+    m
+}
+
+fn bump_diagonal(m: List[List[i64]], n: i64) -> List[List[i64]] {
+    for i in range(0, n) {
+        let row = m[i];
+        // Read-modify-write: the read is before the write and sees the old element.
+        let row2 = try! list::set(row, i, row[i] + 100);
+        let m2 = try! list::set(m, i, row2);
+        m = m2;
+    }
+    m
+}
+
+fn main() {
+    let base = list::repeat(list::repeat(0, 4), 4);
+    let filled = fill(base, 4);
+
+    // Rows are isolated: each cell holds its own value, not a shared row's last write.
+    io::println("#{filled[0][0]} #{filled[0][3]} #{filled[1][0]} #{filled[3][3]}");
+
+    // The caller's grid is untouched: `base` still reads all zeros.
+    io::println("#{base[0][0]} #{base[3][3]}");
+
+    let bumped = bump_diagonal(filled, 4);
+    io::println("#{bumped[0][0]} #{bumped[2][2]} #{bumped[3][3]}");
+    // Off-diagonal cells kept their filled values.
+    io::println("#{bumped[3][0]} #{bumped[0][3]}");
+}
