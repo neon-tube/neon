@@ -1,25 +1,25 @@
+# The ratchet. See README.md.
 #
+# These corpus files must pass. Listed and failing is a regression and fails the
+# build; passing and unlisted also fails the build, with "add it to
+# expected-pass.txt". Absent and failing is fine — not built yet.
 #
+# WHAT "PASS" MEANS ON THIS LIST, TODAY: much less than the README's harness
+# describes. There is no backend — nothing is codegen'd, linked or run — so
+# `compiler/tests/corpus_check.rs` verifies only the front end:
 #
-#
-#                       no matter what the compiler said. Five files passed that
-#                       read and its `//@ exit:` is never verified.
-#                       rendered output: that carries the file path and echoes
-#                       satisfied by the filename main_throws_clause_is_fixed.neon
+#   compile-fail file : compilation fails, and every `//@ error-contains:`
 #                       substring appears in a diagnostic MESSAGE. Not in the
+#                       rendered output: that carries the file path and echoes
 #                       the offending source line, so `error-contains: main` was
+#                       satisfied by the filename main_throws_clause_is_fixed.neon
+#                       no matter what the compiler said. Five files passed that
 #                       way and are now off this list, honestly failing.
 #   any other file    : it checks clean. Nothing more. Its `.stdout` is never
-#   compile-fail file : compilation fails, and every `//@ error-contains:`
+#                       read and its `//@ exit:` is never verified.
+#
 # So a file listed here is NOT known to produce the right output. When the
-# The ratchet. See README.md.
-# These corpus files must pass. Listed and failing is a regression and fails the
-# WHAT "PASS" MEANS ON THIS LIST, TODAY: much less than the README's harness
-# `compiler/tests/corpus_check.rs` verifies only the front end:
 # backend lands, "pass" gains stdout and the exit code, and every file below
-# build; passing and unlisted also fails the build, with "add it to
-# describes. There is no backend — nothing is codegen'd, linked or run — so
-# expected-pass.txt". Absent and failing is fine — not built yet.
 # must be re-verified against that stronger meaning — expect some to come off
 # the list. Do not read this list as more than it is.
 basics/atom_equality.neon
