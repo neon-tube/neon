@@ -239,7 +239,14 @@ fn named(
     }
 
     let Some(key) = env.lookup(&scope.module, path) else {
-        env.error(spec.span.clone(), TypeErrorKind::Unknown(path.join("::")));
+        let suggestion = env.suggest_type(&scope.module, path);
+        env.error(
+            spec.span.clone(),
+            TypeErrorKind::Unknown {
+                name: path.join("::"),
+                suggestion,
+            },
+        );
         return env.error_ty();
     };
     or_poison(env, &ts, |e| e.instantiate(&key, ts.clone(), &spec.span))

@@ -67,8 +67,9 @@ fn an_unknown_type_in_a_body_is_in_the_returned_errors() {
 
     let (_r, errs) = check_module(&mut env, &m);
     assert!(
-        errs.iter()
-            .any(|e| e.kind == TypeErrorKind::Unknown("NoSuchType".into())),
+        errs.iter().any(
+            |e| matches!(&e.kind, TypeErrorKind::Unknown { name, .. } if name == "NoSuchType")
+        ),
         "the returned list must carry the resolution error: {errs:?}"
     );
 }
@@ -106,7 +107,7 @@ fn both_kinds_of_error_are_reported_once_each_in_span_order() {
     assert_eq!(
         kinds
             .iter()
-            .filter(|k| **k == TypeErrorKind::Unknown("NoSuchType".into()))
+            .filter(|k| matches!(k, TypeErrorKind::Unknown { name, .. } if name == "NoSuchType"))
             .count(),
         1,
         "reported exactly once: {kinds:?}"
@@ -114,7 +115,7 @@ fn both_kinds_of_error_are_reported_once_each_in_span_order() {
     assert_eq!(
         kinds
             .iter()
-            .filter(|k| **k == TypeErrorKind::Unknown("AlsoMissing".into()))
+            .filter(|k| matches!(k, TypeErrorKind::Unknown { name, .. } if name == "AlsoMissing"))
             .count(),
         1,
         "reported exactly once: {kinds:?}"
@@ -510,7 +511,8 @@ fn a_dispatched_call_has_the_impls_return_type() {
 fn an_unknown_name_is_a_diagnostic_not_a_guess() {
     let e = check("fn f() -> i64 { nope }");
     assert!(
-        e.iter().any(|k| matches!(k, TypeErrorKind::UnknownName(_))),
+        e.iter()
+            .any(|k| matches!(k, TypeErrorKind::UnknownName { .. })),
         "{e:?}"
     );
 }

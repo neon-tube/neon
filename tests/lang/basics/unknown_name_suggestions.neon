@@ -1,0 +1,28 @@
+//@ compile-fail
+//@ error-contains: nothing named `io::println` is in scope
+//@ error-contains: nothing named `cuont` is in scope
+//@ error-contains: nothing named `printline` is in scope
+//
+// Each of these errors carries a Help line the harness cannot assert on (it matches
+// MESSAGES, not help text) but the inert oracle pins:
+//
+//   io::println, no use   ->  `io::println` is in `std::io` — add `use std::io;`
+//   cuont                 ->  did you mean `count`?     (a local, adjacent swap)
+//   printline             ->  `io::println` is in `std::io` — add `use std::io;`
+//                             (a misspelling of an UNIMPORTED name still has an answer)
+//
+// The suggestion is computed at the error site — the one moment the scope is alive —
+// and carried typed on the error, so this render and an editor's quick-fix agree.
+
+fn no_import() {
+    io::println("hi")
+}
+
+fn misspelled_and_unimported() {
+    printline("hi")
+}
+
+fn main() {
+    let count = 1;
+    let x = cuont + 1;
+}

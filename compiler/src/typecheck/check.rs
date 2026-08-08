@@ -1205,7 +1205,18 @@ impl Checker<'_> {
                 // write also dissolves the refinement — after it, reads see the
                 // declared type again.
                 let Some(want) = self.lookup_declared(name) else {
-                    self.error(s.span.clone(), TypeErrorKind::UnknownName(name.clone()));
+                    let suggestion = self.env.suggest_value(
+                        module,
+                        std::slice::from_ref(name),
+                        &self.local_names(),
+                    );
+                    self.error(
+                        s.span.clone(),
+                        TypeErrorKind::UnknownName {
+                            name: name.clone(),
+                            suggestion,
+                        },
+                    );
                     self.expr(module, value, None);
                     return;
                 };
@@ -2728,8 +2739,25 @@ impl Checker<'_> {
             );
             return self.poison();
         }
-        self.error(e.span.clone(), TypeErrorKind::UnknownName(joined));
+        let suggestion = self.env.suggest_value(module, p, &self.local_names());
+        self.error(
+            e.span.clone(),
+            TypeErrorKind::UnknownName {
+                name: joined,
+                suggestion,
+            },
+        );
         self.poison()
+    }
+
+    /// Every local name in scope, innermost last — the did-you-mean candidates a
+    /// suggestion should weigh alongside the module's functions.
+    fn local_names(&self) -> Vec<String> {
+        self.locals
+            .iter()
+            .flat_map(|f| f.iter())
+            .map(|(n, ..)| n.clone())
+            .collect()
     }
 
     /// Binary operators. Most of them are not really "binary" at the type level: `|>`
@@ -3558,7 +3586,11 @@ impl Checker<'_> {
                 s.ret
             }
             Err(err) => {
-                self.dispatch_error(e.span.clone(), err);
+                let path = match &callee.kind {
+                    ExprKind::Path(p) => Some(p.as_slice()),
+                    _ => None,
+                };
+                self.dispatch_error_at(module, path, e.span.clone(), err);
                 self.poison()
             }
         }
@@ -3838,9 +3870,45 @@ impl Checker<'_> {
     /// so has to be printed here: it is the part of the receiver with no impl, which for
     /// a union is the variants that were missed rather than the whole union, leaving the
     /// reader nothing to work out.
+    /// `dispatch_error`, with the written callee path in hand. An unknown method that
+    /// was WRITTEN as a path gets the same suggestions a path gets — `io::println`
+    /// with no `use std::io` arrives here, not in `path()`, because a call resolves
+    /// through dispatch first.
+    fn dispatch_error_at(
+        &mut self,
+        module: &[String],
+        callee: Option<&[String]>,
+        span: Span,
+        err: DispatchError,
+    ) {
+        if let DispatchError::UnknownMethod(n) = &err {
+            if let Some(p) = callee {
+                let suggestion = self
+                    .env
+                    .suggest_value(module, p, &self.local_names())
+                    .or_else(|| self.env.suggest_method(n));
+                self.error(
+                    span,
+                    TypeErrorKind::UnknownName {
+                        name: p.join("::"),
+                        suggestion,
+                    },
+                );
+                return;
+            }
+        }
+        self.dispatch_error(span, err);
+    }
+
     fn dispatch_error(&mut self, span: Span, err: DispatchError) {
         let kind = match err {
-            DispatchError::UnknownMethod(n) => TypeErrorKind::UnknownName(n),
+            DispatchError::UnknownMethod(n) => {
+                let suggestion = self.env.suggest_method(&n);
+                TypeErrorKind::UnknownName {
+                    name: n,
+                    suggestion,
+                }
+            }
             DispatchError::Ambiguous { method, protocols } => {
                 TypeErrorKind::AmbiguousCall { method, protocols }
             }

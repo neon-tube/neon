@@ -58,7 +58,10 @@ pub struct TypeError {
 /// paths into one diagnostic.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeErrorKind {
-    Unknown(String),
+    Unknown {
+        name: String,
+        suggestion: Option<Suggestion>,
+    },
     UnknownProtocol(String),
     /// `impl Ord for X` — a marker is satisfied by a compiler rule, not by an impl.
     /// Accepted silently before this existed: a marker declares no methods, so there is
@@ -272,8 +275,14 @@ pub enum TypeErrorKind {
     /// the declaring one, so claiming a path is claiming the privileges that come with it.
     ModuleCollision(String),
     /// A value-position name nothing declares. Distinct from `Unknown`, which is a
-    /// TYPE nothing declares — `unknown type println` is not a sentence.
-    UnknownName(String),
+    /// TYPE nothing declares — `unknown type println` is not a sentence. The
+    /// suggestion, when there is one, is computed AT the error site — the only moment
+    /// the scope is alive — and carried typed so the renderer's help line and an
+    /// editor's quick-fix read the same answer.
+    UnknownName {
+        name: String,
+        suggestion: Option<Suggestion>,
+    },
     /// `TODO("why")` — an implementation that was never written.
     Todo(String),
 
@@ -345,10 +354,74 @@ pub enum TypeErrorKind {
     },
 }
 
+/// What the compiler would offer for a name it does not know.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Suggestion {
+    /// A near-miss of something reachable: `printlm` for `println`. The string is
+    /// spelled the way the user would write it (`io::println`, not a bare name that
+    /// would not resolve either).
+    DidYouMean(String),
+    /// The name exists, exactly, in a module no `use` brings in. `path` is the module
+    /// to import and `qualified` how to spell the call once it is.
+    AddUse { path: String, qualified: String },
+}
+
+/// The edit distance between two short identifiers — insert, delete, substitute, and
+/// SWAP of adjacent characters, all cost one. The swap matters more than it looks:
+/// `cuont` for `count` is the most common shape of typo there is, and plain
+/// Levenshtein prices it at two, past the one-edit budget short names get. Quadratic
+/// and allocation-light, which is the right shape for names: the haystack is a few
+/// hundred candidates of a dozen characters, consulted only on the error path.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    let mut prev2: Vec<usize> = vec![0; b.len() + 1];
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0; b.len() + 1];
+    for (i, &ca) in a.iter().enumerate() {
+        cur[0] = i + 1;
+        for (j, &cb) in b.iter().enumerate() {
+            let sub = prev[j] + usize::from(ca != cb);
+            let mut d = sub.min(prev[j + 1] + 1).min(cur[j] + 1);
+            if i > 0 && j > 0 && ca == b[j - 1] && a[i - 1] == cb {
+                d = d.min(prev2[j - 1] + 1);
+            }
+            cur[j + 1] = d;
+        }
+        std::mem::swap(&mut prev2, &mut prev);
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
+}
+
+/// The near-miss budget: short names may be one edit away, longer ones two. Below
+/// three characters nothing is suggested — at that length every name is near every
+/// other and a suggestion is noise.
+fn near(wanted: &str, candidate: &str) -> Option<usize> {
+    if wanted.len() < 3 {
+        return None;
+    }
+    let d = edit_distance(wanted, candidate);
+    let budget = if wanted.len() < 6 { 1 } else { 2 };
+    (d > 0 && d <= budget).then_some(d)
+}
+
+/// The best near-miss in `candidates`, ties going to the first seen.
+fn nearest<'a>(wanted: &str, candidates: impl Iterator<Item = &'a str>) -> Option<&'a str> {
+    let mut best: Option<(usize, &str)> = None;
+    for c in candidates {
+        if let Some(d) = near(wanted, c) {
+            if best.map(|(bd, _)| d < bd).unwrap_or(true) {
+                best = Some((d, c));
+            }
+        }
+    }
+    best.map(|(_, c)| c)
+}
+
 impl fmt::Display for TypeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
-            TypeErrorKind::Unknown(n) => write!(f, "unknown type `{n}`"),
+            TypeErrorKind::Unknown { name, .. } => write!(f, "unknown type `{name}`"),
             TypeErrorKind::UnknownProtocol(n) => write!(f, "unknown protocol `{n}`"),
             TypeErrorKind::ImplForMarker { marker } => write!(
                 f,
@@ -597,7 +670,9 @@ impl fmt::Display for TypeError {
                  give this code the right to read the insides of every opaque type \
                  declared there. Give the module a name of your own"
             ),
-            TypeErrorKind::UnknownName(n) => write!(f, "nothing named `{n}` is in scope"),
+            TypeErrorKind::UnknownName { name, .. } => {
+                write!(f, "nothing named `{name}` is in scope")
+            }
             TypeErrorKind::ConstNeedsType(n) => write!(
                 f,
                 "`const {n}` needs a type: write `const {n}: T = ...`. A top-level \
@@ -721,6 +796,19 @@ impl TypeError {
     /// the message) so a diagnostic reads "what is wrong" then "what to do".
     pub fn help(&self) -> Option<String> {
         Some(match &self.kind {
+            TypeErrorKind::UnknownName {
+                suggestion: Some(s),
+                ..
+            }
+            | TypeErrorKind::Unknown {
+                suggestion: Some(s),
+                ..
+            } => match s {
+                Suggestion::DidYouMean(n) => format!("did you mean `{n}`?"),
+                Suggestion::AddUse { path, qualified } => {
+                    format!("`{qualified}` is in `{path}` — add `use {path};`")
+                }
+            },
             TypeErrorKind::DotCall { method, .. } => {
                 format!("write `{method}(x)`, or `x |> {method}(..)` for a pipeline")
             }
@@ -1367,6 +1455,131 @@ impl Env {
     /// called as a plain function.
     pub fn fns(&self) -> &[FnSig] {
         &self.fns
+    }
+
+    /// What to offer for a value-position path that resolved to nothing. Exact name in
+    /// an unimported module first — `println` written bare or as `io::println` with no
+    /// `use std::io` is the single most-hit error a new user sees, and the toolchain
+    /// knew the answer all along — then a near-miss over what IS reachable: the
+    /// caller's locals, this module's and the prelude's functions and consts, and a
+    /// used module's functions when the path is qualified.
+    pub fn suggest_value(
+        &self,
+        module: &[String],
+        path: &[String],
+        locals: &[String],
+    ) -> Option<Suggestion> {
+        let last = path.last()?;
+
+        // Exact, elsewhere. Every hit here is unreachable as written — this is the
+        // error path, so reachable spellings already lost. Internal modules are not
+        // suggested: the fence exists to keep them out of exactly this kind of reach.
+        let exact = self
+            .fns
+            .iter()
+            .map(|f| (&f.name, &f.module))
+            .chain(self.consts.iter().map(|c| (&c.name, &c.module)))
+            .find(|(name, m)| {
+                *name == last
+                    && m.first().map(String::as_str) != Some(Self::PRELUDE)
+                    && !m.is_empty()
+                    && m.as_slice() != module
+                    && self.hidden_by_internal(module, path).is_none()
+            });
+        if let Some((name, m)) = exact {
+            let import = m.join("::");
+            let head = m.last().expect("checked non-empty");
+            return Some(Suggestion::AddUse {
+                path: import,
+                qualified: format!("{head}::{name}"),
+            });
+        }
+
+        // Near-misses over the reachable spellings.
+        let visible =
+            |m: &[String]| m == module || m.first().map(String::as_str) == Some(Self::PRELUDE);
+        if let [one] = path {
+            let fns = self
+                .fns
+                .iter()
+                .filter(|f| visible(&f.module))
+                .map(|f| f.name.as_str());
+            let consts = self
+                .consts
+                .iter()
+                .filter(|c| visible(&c.module))
+                .map(|c| c.name.as_str());
+            if let Some(hit) = nearest(
+                one,
+                locals.iter().map(String::as_str).chain(fns).chain(consts),
+            ) {
+                return Some(Suggestion::DidYouMean(hit.to_string()));
+            }
+            // Nothing reachable is close; a misspelling of an UNIMPORTED name still has
+            // one answer worth giving — `printline` should come back as `io::println`
+            // plus the `use` that makes it reachable.
+            let elsewhere = self
+                .fns
+                .iter()
+                .filter(|f| {
+                    !visible(&f.module)
+                        && f.module.first().map(String::as_str) != Some(Self::PRELUDE)
+                })
+                .map(|f| f.name.as_str());
+            let hit = nearest(one, elsewhere)?;
+            let m = &self.fns.iter().find(|f| f.name == hit)?.module;
+            let head = m.last()?;
+            return Some(Suggestion::AddUse {
+                path: m.join("::"),
+                qualified: format!("{head}::{hit}"),
+            });
+        }
+        // Qualified: the module half is taken as written, the name half fuzzed against
+        // that module's functions — `io::printlm` should come back as `io::println`.
+        let (name, head) = (path.last()?, &path[..path.len() - 1]);
+        let m_last = head.last()?;
+        let in_module = self
+            .fns
+            .iter()
+            .filter(|f| f.module.last() == Some(m_last))
+            .map(|f| f.name.as_str());
+        let hit = nearest(name, in_module)?;
+        Some(Suggestion::DidYouMean(format!("{m_last}::{hit}")))
+    }
+
+    /// `suggest_value`'s twin for a type-position path: exact type name in an
+    /// unimported module, else the nearest declared type name.
+    pub fn suggest_type(&self, module: &[String], path: &[String]) -> Option<Suggestion> {
+        let last = path.last()?;
+        let split = |key: &str| -> (String, String) {
+            match key.rsplit_once("::") {
+                Some((m, n)) => (m.to_string(), n.to_string()),
+                None => (String::new(), key.to_string()),
+            }
+        };
+        let exact = self.decls.keys().map(|k| split(k)).find(|(m, n)| {
+            n == last && !m.is_empty() && !m.starts_with(Self::PRELUDE) && m != &module.join("::")
+        });
+        if let Some((m, n)) = exact {
+            let head = m.rsplit("::").next().unwrap_or(&m).to_string();
+            return Some(Suggestion::AddUse {
+                path: m,
+                qualified: format!("{head}::{n}"),
+            });
+        }
+        let names: Vec<String> = self.decls.keys().map(|k| split(k).1).collect();
+        let hit = nearest(last, names.iter().map(String::as_str))?;
+        Some(Suggestion::DidYouMean(hit.to_string()))
+    }
+
+    /// The nearest protocol method name, for a dispatch that found nothing.
+    pub fn suggest_method(&self, name: &str) -> Option<Suggestion> {
+        let methods = self
+            .protocols
+            .iter()
+            .flat_map(|p| p.methods.iter())
+            .map(|m| m.name.as_str());
+        Some(Suggestion::DidYouMean(nearest(name, methods)?.to_string()))
     }
 
     /// The poison. Recovery only: it is produced where a diagnostic has already
@@ -2425,7 +2638,13 @@ impl Env {
     /// declaration costs one diagnostic and everything downstream stays well-formed.
     pub fn instantiate(&mut self, key: &str, args: Vec<TyId>, span: &Span) -> TyId {
         let Some(decl) = self.decls.get(key) else {
-            self.error(span.clone(), TypeErrorKind::Unknown(key.to_string()));
+            self.error(
+                span.clone(),
+                TypeErrorKind::Unknown {
+                    name: key.to_string(),
+                    suggestion: None,
+                },
+            );
             return self.error_ty;
         };
         let decl = decl.clone();

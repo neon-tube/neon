@@ -94,7 +94,13 @@ fn an_unknown_name_is_one_diagnostic_and_a_poison() {
     let mut e = env("");
     let t = ty(&mut e, "Nope | i64");
     assert!(e.is_error(t), "poison propagates to the top of the spec");
-    assert_eq!(kinds(&e), vec![TypeErrorKind::Unknown("Nope".into())]);
+    assert_eq!(
+        kinds(&e),
+        vec![TypeErrorKind::Unknown {
+            name: "Nope".into(),
+            suggestion: None
+        }]
+    );
 }
 
 #[test]

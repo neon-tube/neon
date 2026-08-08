@@ -1,0 +1,12 @@
+//@ compile-fail
+//@ error-contains: nothing named `io::printlm` is in scope
+//
+// The qualified-typo half of the suggestion machinery: the module half of the path is
+// taken as written and the name half fuzzed against that module's functions, so the
+// Help line (pinned by the inert oracle) says: did you mean `io::println`?
+
+use std::io;
+
+fn main() {
+    io::printlm("hi")
+}

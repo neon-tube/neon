@@ -49,6 +49,9 @@ basics/shadowing.neon
 basics/shadowing_changes_type.neon
 basics/str_literals.neon
 basics/test_blocks_do_not_run.neon
+basics/unknown_name_suggestions.neon
+basics/unknown_name_typo_in_used_module.neon
+basics/unknown_type_suggestion.neon
 closures/capture_is_by_value_and_sealed.neon
 closures/capture_local.neon
 closures/closure_outlives_its_scope.neon

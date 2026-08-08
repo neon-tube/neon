@@ -1,0 +1,12 @@
+//@ compile-fail
+//@ error-contains: unknown type `Lst`
+//
+// A type typo in a signature is a declaration-phase error, which preempts every body
+// check — so it gets its own file. The Help line (pinned by the inert oracle) says:
+// did you mean `List`?
+
+fn type_typo(xs: Lst[i64]) -> i64 {
+    0
+}
+
+fn main() {}
