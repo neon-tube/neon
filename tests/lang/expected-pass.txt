@@ -333,6 +333,7 @@ types/erased_recursive_record_shares_its_payload.neon
 types/erased_runtime_type_keeps_its_name.neon
 types/generic_record_covariant.neon
 types/generics_are_covariant.neon
+types/intersecting_a_recursive_record_keeps_its_layout.neon
 types/intersection_flattens.neon
 types/intersection_requires_every_operand.neon
 types/is_a_structural_type_is_not_vacuously_true.neon

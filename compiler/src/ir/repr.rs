@@ -646,9 +646,25 @@ fn repr_components(t: &Types, ty: TyId, cyclic: &HashSet<TyId>, boxed: &HashSet<
         // The cut in `repr_rec` is keyed by `TyId` and a union's variants are expanded
         // from their record atoms, so without this the boxed record was laid out by value
         // inside the very union its own field points back through.
-        let r = match pos.as_slice() {
-            [only] if boxed.contains(only) => Repr::BoxedRec(*only),
-            _ => record_intersection(t, &pos, cyclic, boxed),
+        // A boxed atom ANYWHERE on the path makes the path that boxed record — not only when
+        // it is the path's sole atom.
+        //
+        // `Node & { v: i64 }` is a two-atom path, and the check used to fire on single-atom
+        // paths only, so it went to `record_intersection`. That destructures each atom's repr
+        // as `Repr::Record` to merge fields, and a boxed atom's repr is a `BoxedRec` — a
+        // pointer — so the `if let` simply did not match and `Node` contributed NOTHING. The
+        // path came out as the bare `{ v: i64 }` struct while every value inhabiting it is a
+        // pointer to a `Node`, and reading `.v` through the intersection returned 0 where the
+        // same field through `Node` returned 7. A silent wrong answer, and lead L6's shape
+        // with a different symptom than the non-termination it predicted.
+        //
+        // Picking the boxed atom is not a heuristic: a boxed record is nominal, and a value
+        // on this path is one. The other atoms are structural views it already satisfies —
+        // an atom it did not satisfy would make the path empty. Two boxed atoms means two
+        // distinct nominals, which is an empty path, so which one is picked cannot matter.
+        let r = match pos.iter().find(|a| boxed.contains(a)) {
+            Some(&b) => Repr::BoxedRec(b),
+            None => record_intersection(t, &pos, cyclic, boxed),
         };
         if !records.contains(&r) {
             records.push(r);

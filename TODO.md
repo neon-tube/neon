@@ -375,8 +375,9 @@ Owner's call on timing; recorded so it is not lost.
 
 Marked as such because nobody built a repro. Worth a pass, not worth asserting.
 
-**Five have been investigated and four were real** — L1 (a user `marker Ord` inherited the
-built-in rule), L3 (one rank for five variants, so a union had two layouts), L4
+**Six have been investigated and five were real** — L1 (a user `marker Ord` inherited the
+built-in rule), L3 (one rank for five variants, so a union had two layouts), L6 (an intersection
+containing a self-referencing record read the wrong offsets), L4
 (qualified-path impls never matching), L5 (duplicate `TyId`s reaching the backend), all
 confirmed and fixed; L2 did not reproduce. That is worth knowing before
 treating the rest as noise. Each fix is pinned by a corpus file.
@@ -398,10 +399,20 @@ treating the rest as noise. Each fix is pinned by a corpus file.
   reduced to `A`'s repr and no call site could be assigned from it. "A union of variables
   cannot arise from a value" was the note; true of a value, false of a signature. Both are
   pinned by `types/a_union_is_one_layout_however_it_is_reached.neon`.
-- **L6.** `repr_components` checks `boxed` only on single-atom DNF paths; a multi-atom path
-  falls to `record_intersection`, which lays each atom out inline — a second non-termination
-  if such a type is constructible. The lead doubts its own constructibility; nobody has
-  tried to build one.
+- ~~**L6.**~~ **Confirmed and fixed 2026-08-08.** Constructible after all: `Node & { v: i64 }`
+  where `Node` refers to itself. The mechanism was exactly as described and the symptom was
+  milder and worse than the predicted non-termination — the walk terminates and lies.
+  `record_intersection` destructures each atom's repr as a plain record to merge fields, and
+  a boxed atom's repr is a POINTER, so the match did not fire and `Node` contributed nothing.
+  The path came out as a bare `{ v: i64 }` struct describing a type whose values are all
+  pointers, and reading `.v` through the intersection gave 0 where the same field of the same
+  value through `Node` gave 7.
+
+  A boxed atom anywhere on a path now makes the path that record. Not a heuristic: a boxed
+  record is nominal, so a value on the path is one, and the other atoms are structural views
+  it already satisfies — one it did not satisfy would make the path empty. Pinned by
+  `types/intersecting_a_recursive_record_keeps_its_layout.neon`, which also keeps the
+  non-recursive intersection correct, since that always was.
 - **L7.** `normalize_union([Nullable(Str), Null])` disagrees with `repr_of(str|null|null)`.
   Blocked in the front end today, so it needs a repr-level test rather than a program.
 

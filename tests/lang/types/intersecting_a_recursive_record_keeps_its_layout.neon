@@ -1,0 +1,56 @@
+// An intersection that contains a self-referencing record is that record, and reads through
+// it see the same fields at the same offsets.
+//
+// A record that refers to itself is stored behind a pointer -- laying it out by value would
+// be an infinite struct. The check for "this path is a boxed record" fired only when the
+// path had a SINGLE atom, and `Node & { v: i64 }` has two. So it went to the field-merging
+// path instead, which destructures each atom's repr as a plain record to collect its fields
+// -- and a boxed atom's repr is a pointer, so the match simply did not fire and `Node`
+// contributed nothing at all.
+//
+// The result was a bare `{ v: i64 }` struct describing a type whose values are all pointers
+// to a `Node`. Reading `.v` through the intersection gave 0 where the same field of the same
+// value through `Node` gave 7: a silent wrong answer, in a program that compiled clean.
+//
+// Recorded as unproven lead L6, which predicted a non-termination -- the layout walk never
+// finishing on an infinite struct. The mechanism was right and the symptom milder and worse:
+// the walk terminates, and lies.
+//
+// The non-recursive case below was always correct and is here to keep it that way: it is the
+// same shape without the pointer, and it is what made the boxed case identifiable as the
+// specific defect rather than intersections being broken generally.
+
+use std::io;
+
+record Node { next: Node | null, v: i64 }
+record Flat { a: i64, b: str }
+
+type BoxedView = Node & { v: i64 }
+type FlatView = Flat & { a: i64 }
+
+fn through_boxed_view(x: BoxedView) -> i64 {
+    x.v
+}
+fn through_node(n: Node) -> i64 {
+    n.v
+}
+fn through_flat_view(x: FlatView) -> i64 {
+    x.a
+}
+fn through_flat(f: Flat) -> i64 {
+    f.a
+}
+
+fn main() {
+    let n = Node { next: null, v: 7 };
+    io::println(to_string(through_node(n)));
+    io::println(to_string(through_boxed_view(n)));
+
+    // A chain, so the pointer is actually followed rather than only held.
+    let head = Node { next: n, v: 1 };
+    io::println(to_string(through_boxed_view(head)));
+
+    let f = Flat { a: 7, b: "s" };
+    io::println(to_string(through_flat(f)));
+    io::println(to_string(through_flat_view(f)));
+}
