@@ -65,6 +65,26 @@ tree-sitter external scanner entirely (nesting is why it exists).
 
 ---
 
+## Perf — the reference numbers
+
+Measured 2026-08-08, `bench/run_all_benchmarks.py --only c,neon,go --runs 10`. C and Go are
+the two references that matter: C is the floor, Go is the nearest language making the same
+trade (compiled, GC'd, no manual lifetimes).
+
+| Benchmark      | C      | Neon   | Go     | Neon vs C | Go vs C |
+|----------------|--------|--------|--------|-----------|---------|
+| word-frequency | 0.385s | 0.329s | 0.400s | **0.85×** | 1.04×   |
+| n-body         | 0.691s | 0.674s | 1.005s | **0.98×** | 1.45×   |
+| binary-trees   | 0.673s | 0.781s | 0.965s | 1.16×     | 1.43×   |
+| brainfuck      | 0.237s | 0.308s | 0.461s | 1.30×     | 1.94×   |
+
+Neon is between C and Go on all four, and nearer C on all four. The margin over Go is widest
+where Neon is furthest from C — brainfuck, where Neon is 1.5× Go's speed.
+
+Use `--runs 10`; 3 runs spreads ~8% here. Per-run history is in `bench/*/.bench_cache.json`.
+
+---
+
 ## Perf — what the word-frequency profile says to build
 
 From `bench/word-frequency/` (10M generated tokens counted in a `Map[str, i64]`),
@@ -75,7 +95,7 @@ releasing 10M temporary five-byte keys. Two languages beat C on this bench and e
 a tell: Zig at 0.51× formats integers with generated code (no snprintf), LuaJIT at
 0.76× interns strings so table keys are nearly free.
 
-**Status: 1.69× C → 0.90×.** Neon is faster than the C reference on this benchmark.
+**Status: 1.69× C → 0.85×.** Neon is faster than the C reference on this benchmark.
 Items 1 and 2 are done; item 3 was **built and rejected** (see below); item 4 is unstarted
 and its premise has changed. Re-profile before building anything here — every cost the
 original profile named has now been paid off or disproved.
