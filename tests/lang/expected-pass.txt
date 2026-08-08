@@ -190,6 +190,7 @@ modules/imports_do_not_cross_unit_boundaries.neon
 modules/path_rules_are_testable_on_any_host.neon
 modules/prelude_names_can_be_shadowed.neon
 operators/and_or_precedence.neon
+operators/arith_domain.neon
 operators/bitwise.neon
 operators/bool_ops.neon
 operators/comparison.neon

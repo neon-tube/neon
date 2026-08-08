@@ -1,0 +1,23 @@
+//@ compile-fail
+//@ error-contains: `str` has no `-`; it is defined only on `i64` and `f64`
+//@ error-contains: `bool` has no `+`; it is defined only on `i64`, `f64` and `str`
+//@ error-contains: has no `*`; it is defined only on `i64` and `f64`
+//@ error-contains: `bool` has no `bnot`; it is defined only on `i64`
+//
+// Each operator is defined on a fixed domain — `+` on `i64`, `f64` and `str`
+// (concatenation), the rest of the arithmetic on `i64` and `f64`, the bitwise
+// family and `bnot` on `i64` — because that is exactly what codegen emits.
+// Sharing a type is not enough: every line below pairs two operands of one
+// type, and every line is wrong.
+//
+// This file exists because the checker once stopped at "the operands share a
+// type": `"a" - "b"` and `[1] * [2]` sailed through to the C compiler, where
+// the error surfaced as `neon_i64_sub` on structs, and `true + false` COMPILED
+// AND RAN as C integer addition on a bool.
+
+fn main() {
+    let s = "a" - "b";
+    let b = true + false;
+    let l = [1] * [2];
+    let n = bnot true;
+}

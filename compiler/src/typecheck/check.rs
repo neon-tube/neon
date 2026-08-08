@@ -15,7 +15,7 @@ use super::narrow::{self, Projected};
 use super::print::print;
 use super::resolve::Scope;
 use super::result::{DefKind, DefSite, TypecheckResult};
-use super::types::TyId;
+use super::types::{TyId, Types};
 use crate::ast::{self, BinOp, Expr, ExprKind, UnOp};
 use crate::lexer::Span;
 
@@ -1464,11 +1464,44 @@ impl Checker<'_> {
             ExprKind::Path(p) => self.path(module, e, p),
 
             ExprKind::Unary { op, rhs } => match op {
-                UnOp::Neg | UnOp::Bnot => self.expr(module, rhs, None),
-                // `not` is the one unary operator whose operand type is pinned by the
-                // operator itself. Reading the operand with no expected type and then
-                // returning `bool` regardless meant `!5` typechecked and produced a bool
-                // out of an integer — a plausible value where a diagnostic belonged.
+                // Pinned to the domain codegen implements, exactly as `binary`'s
+                // fallthrough pins its operators: `-` negates `i64` and `f64`, `bnot`
+                // complements `i64`. Unchecked, `-"a"` reached the C compiler as
+                // `neon_i64_neg` on a struct and `bnot true` compiled to C `~` on a
+                // bool. Same empty-meet test, same rigid-variable exemption.
+                UnOp::Neg | UnOp::Bnot => {
+                    let t = self.expr(module, rhs, None);
+                    let i = self.env.solver.t.i64();
+                    let domain = match op {
+                        UnOp::Neg => {
+                            let f = self.env.solver.t.f64();
+                            self.env.solver.t.union_all(&[i, f])
+                        }
+                        _ => i,
+                    };
+                    if self.outside_domain(domain, &[t]).is_some() {
+                        let (opt, domt) = match op {
+                            UnOp::Neg => ("-", "`i64` and `f64`"),
+                            _ => ("bnot", "`i64`"),
+                        };
+                        let ty = self.show(t);
+                        self.error(
+                            e.span.clone(),
+                            TypeErrorKind::NoArithmetic {
+                                op: opt.to_string(),
+                                ty,
+                                domain: domt.to_string(),
+                            },
+                        );
+                        return self.poison();
+                    }
+                    t
+                }
+                // `not`'s operand type is pinned by the operator itself — it was the
+                // first to be, before `-` and `bnot` above. Reading the operand with no
+                // expected type and then returning `bool` regardless meant `!5`
+                // typechecked and produced a bool out of an integer — a plausible value
+                // where a diagnostic belonged.
                 UnOp::Not => {
                     let b = self.env.solver.t.bool();
                     self.expr(module, rhs, Some(b));
@@ -2677,8 +2710,10 @@ impl Checker<'_> {
     /// operands as the same type.
     ///
     /// That fallthrough accepts any pair where one side is assignable to the other and
-    /// yields the *left* type. It does not consult a numeric protocol, so `str + i64` is
-    /// caught only because the two are unrelated, not because addition was checked.
+    /// yields the *left* type — and then checks the pair against the operator's domain
+    /// (`arith_domain`), so `str + i64` is caught as unrelated AND `str - str` is caught
+    /// as outside `-`'s domain. It used to stop at the first half: sharing a type was
+    /// the whole check, and `"a" - "b"` reached the C compiler.
     fn binary(
         &mut self,
         module: &[String],
@@ -2806,9 +2841,45 @@ impl Checker<'_> {
                     );
                     return self.poison();
                 }
+                // Sharing a type is necessary but not sufficient: each operator is
+                // defined on a fixed domain — `+` on `i64`, `f64` and `str` (concat),
+                // the rest of the arithmetic on `i64` and `f64`, the bitwise family on
+                // `i64` — because that is exactly what codegen emits. Without this,
+                // `"a" - "b"` and `[1] * [2]` reached the C compiler as `neon_i64_sub`
+                // on structs, and `true + false` compiled and RAN as C integer addition
+                // on a bool. Empty-meet rather than subtype, mirroring `Eq`'s overlap
+                // test above; a bare rigid variable passes it, which is deliberate —
+                // there is no numeric marker to bound one with, so a misuse surfaces at
+                // the instantiation.
+                let domain = arith_domain(&mut self.env.solver.t, op);
+                if let Some(bad) = self.outside_domain(domain, &[l, r]) {
+                    let ty = self.show(bad);
+                    self.error(
+                        e.span.clone(),
+                        TypeErrorKind::NoArithmetic {
+                            op: op.text().to_string(),
+                            ty,
+                            domain: arith_domain_text(op).to_string(),
+                        },
+                    );
+                    return self.poison();
+                }
                 l
             }
         }
+    }
+
+    /// The first of `tys` that cannot inhabit `domain` — its meet with it is empty —
+    /// or `None` when all can. Poisoned operands pass (already reported), and so does
+    /// a bare rigid variable (see the callers' comments).
+    fn outside_domain(&mut self, domain: TyId, tys: &[TyId]) -> Option<TyId> {
+        tys.iter().copied().find(|&ty| {
+            if self.env.is_error(ty) || super::generic::is_var(&self.env.solver.t, ty) {
+                return false;
+            }
+            let meet = self.env.solver.t.intersect(ty, domain);
+            self.env.solver.is_empty(meet)
+        })
     }
 
     /// An `if`. With both arms it is the union of them; with only a `then` it yields
@@ -3772,5 +3843,34 @@ impl Checker<'_> {
             }
         };
         self.error(span, kind);
+    }
+}
+
+/// What a binary arithmetic or bitwise operator is defined on — the checker's mirror of
+/// codegen's `prim`: `+` dispatches to `neon_str_add`/float `+`/`neon_i64_add`, the other
+/// arithmetic to the float or i64 form, and the bitwise family is emitted on integers
+/// only. Only the operators `binary`'s fallthrough arm handles arrive here.
+fn arith_domain(t: &mut Types, op: BinOp) -> TyId {
+    let i = t.i64();
+    match op {
+        BinOp::Add => {
+            let f = t.f64();
+            let s = t.str();
+            t.union_all(&[i, f, s])
+        }
+        BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem => {
+            let f = t.f64();
+            t.union_all(&[i, f])
+        }
+        _ => i,
+    }
+}
+
+/// `arith_domain`, spelled for a diagnostic.
+fn arith_domain_text(op: BinOp) -> &'static str {
+    match op {
+        BinOp::Add => "`i64`, `f64` and `str`",
+        BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem => "`i64` and `f64`",
+        _ => "`i64`",
     }
 }

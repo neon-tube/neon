@@ -321,6 +321,16 @@ pub enum TypeErrorKind {
         what: String,
         hint: String,
     },
+    /// Arithmetic or a bitwise op on a type outside the operator's domain. The old
+    /// fallthrough accepted any mutually-assignable pair and yielded the left type, so
+    /// `"a" - "b"` and `[1] * [2]` reached the C COMPILER as `neon_i64_sub` on structs,
+    /// and `true + false` compiled and ran as C integer addition on a bool. `domain`
+    /// spells what the operator is defined on, which is exactly what codegen emits.
+    NoArithmetic {
+        op: String,
+        ty: String,
+        domain: String,
+    },
 }
 
 impl fmt::Display for TypeError {
@@ -596,6 +606,9 @@ impl fmt::Display for TypeError {
             ),
             TypeErrorKind::NotImplemented { what, hint } => {
                 write!(f, "{what} is not implemented; {hint}")
+            }
+            TypeErrorKind::NoArithmetic { op, ty, domain } => {
+                write!(f, "`{ty}` has no `{op}`; it is defined only on {domain}")
             }
             TypeErrorKind::NoField { field, on } => {
                 write!(f, "`{on}` has no field `{field}`")
