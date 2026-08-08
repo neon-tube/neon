@@ -195,6 +195,11 @@ enum Command {
         #[command(flatten)]
         build: BuildOpts,
     },
+    /// Show a module's documentation: signatures and `///` docs, from the source.
+    Doc {
+        /// A stdlib module (`std::io`), a `.neon` file, or nothing for the module index.
+        target: Option<OsString>,
+    },
     /// Print the resolved sysroot.
     Sysroot {
         /// Print only the stdlib directory, as one bare path. For tools, not people —
@@ -260,6 +265,7 @@ fn main() -> Result<()> {
             filter,
             build,
         } => cmd::test::run(&file, filter, build.into()),
+        Command::Doc { target } => cmd::doc::run(target.as_ref()),
         Command::Sysroot { stdlib } => cmd::sysroot::run(stdlib),
         Command::Doctor => cmd::doctor::run(),
     }

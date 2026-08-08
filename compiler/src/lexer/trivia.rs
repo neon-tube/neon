@@ -94,3 +94,48 @@ impl Lexed {
             .filter(move |t| t.span.start >= start && t.span.end <= end)
     }
 }
+
+/// The `///` block immediately above `span`, as its joined text.
+///
+/// Doc comments never reach the AST: the lexer records them as trivia and the parser,
+/// which has no field to put them in, drops them. So the text is recovered by going
+/// back to the trivia table and taking the run of `Doc` comments that ends where the
+/// declaration begins.
+///
+/// "Immediately above" is the whole subtlety. A run is only the declaration's own
+/// documentation if nothing but whitespace separates the two — otherwise the `///`
+/// block documenting the *previous* function would be shown for this one, which is
+/// worse than showing nothing because it is confidently wrong. So the walk stops at
+/// the first gap containing a blank line.
+///
+/// Lives here so `neon doc` and the language server answer "what does this document
+/// itself as" identically — the LSP carried its own copy of this walk first.
+pub fn doc_above(text: &str, trivia: &[Trivia], span: &Span) -> Option<String> {
+    let mut lines: Vec<&str> = Vec::new();
+    let mut boundary = span.start;
+
+    for t in trivia.iter().rev() {
+        if t.span.end > boundary || t.kind != TriviaKind::Doc {
+            // Trivia is in source order, so the first one that is not an adjacent doc
+            // comment ends the run — but only once we are actually above the span.
+            if t.span.end > boundary {
+                continue;
+            }
+            break;
+        }
+        // Whatever sits between this comment and what follows it. A blank line here
+        // means the comment belongs to something else.
+        let gap = &text[t.span.end..boundary];
+        if !gap.trim().is_empty() || gap.matches('\n').count() > 1 {
+            break;
+        }
+        lines.push(t.text.trim());
+        boundary = t.span.start;
+    }
+
+    if lines.is_empty() {
+        return None;
+    }
+    lines.reverse();
+    Some(lines.join("\n"))
+}

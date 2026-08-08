@@ -32,7 +32,7 @@ mod tests;
 
 pub use error::{LexError, LexErrorKind};
 pub use token::{Span, Spanned, Token};
-pub use trivia::{Lexed, Trivia, TriviaKind};
+pub use trivia::{doc_above, Lexed, Trivia, TriviaKind};
 
 use unicode_normalization::UnicodeNormalization;
 

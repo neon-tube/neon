@@ -1,6 +1,7 @@
 pub mod build;
 pub mod check;
 pub mod compile;
+pub mod doc;
 pub mod doctor;
 pub mod fmt;
 pub mod init;
