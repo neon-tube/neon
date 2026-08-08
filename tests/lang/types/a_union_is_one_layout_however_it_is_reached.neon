@@ -1,0 +1,58 @@
+// One type, one memory layout, whichever route builds it.
+//
+// A union's variants are put in a canonical order so that the same type is the same C struct
+// everywhere. There are two routes to a union repr -- reading it off a `TyId`, and
+// substituting into one that mentions type variables -- and they used to establish that
+// order separately: one pushed variants in DNF-path order, the other re-derived the order
+// from a rank table. They agreed only where the rank happened to be unique.
+//
+// `Record`, `List`, `Map`, `Runtime` and `BoxedRec` all share a rank, because they are all
+// what a record atom becomes. So `R | List[i64]` written out and `A | B` substituted at
+// `A := R, B := List[i64]` produced two different structs for one type, and the backend
+// refused to assign between them. The order is now established once, by a key that is total
+// within a rank, and both routes sort by it.
+//
+// The second bug below was hiding the first. `repr_components` kept only the FIRST type
+// variable of a union -- "a union of variables cannot arise from a value", which is true of
+// a value and false of a SIGNATURE. `fn first[A, B](a: A, b: B) -> A | B` had its return
+// repr reduced to `A`'s, so `first$i64$str` was declared `-> i64` and no call site could be
+// assigned from it. Fixing that is what made the ordering disagreement reachable.
+
+use std::io;
+
+record R { a: i64 }
+
+type Either[A, B] = A | B
+
+fn first[A, B](a: A, b: B) -> A | B {
+    a
+}
+
+fn describe(x: R | List[i64]) -> str {
+    match x {
+        is R => "record",
+        is List[i64] => "list",
+    }
+}
+
+fn main() {
+    // Two variables in a union return, substituted at two scalars.
+    let s: i64 | str = first(1, "s");
+    io::println(match s {
+        is i64 => "int",
+        is str => "str",
+    });
+
+    // Two variants sharing a rank, reached by substitution, in both written orders.
+    let a: R | List[i64] = first(R { a: 1 }, [1, 2]);
+    io::println(describe(a));
+    let b: List[i64] | R = first([1, 2], R { a: 1 });
+    io::println(describe(b));
+
+    // And through a generic alias, which substitutes into the union rather than reading it
+    // off the type.
+    let c: Either[R, List[i64]] = R { a: 3 };
+    io::println(describe(c));
+    let d: Either[List[i64], R] = [3];
+    io::println(describe(d));
+}

@@ -375,17 +375,29 @@ Owner's call on timing; recorded so it is not lost.
 
 Marked as such because nobody built a repro. Worth a pass, not worth asserting.
 
-**Four have been investigated and three were real** — L1 (a user `marker Ord` inherited the
-built-in rule), L4 (qualified-path impls never matching), L5 (duplicate `TyId`s reaching the
-backend), all confirmed and fixed; L2 did not reproduce. That is worth knowing before
+**Five have been investigated and four were real** — L1 (a user `marker Ord` inherited the
+built-in rule), L3 (one rank for five variants, so a union had two layouts), L4
+(qualified-path impls never matching), L5 (duplicate `TyId`s reaching the backend), all
+confirmed and fixed; L2 did not reproduce. That is worth knowing before
 treating the rest as noise. Each fix is pinned by a corpus file.
 
 - **L2.** `ordered.rs:90/165` match bare `"List"`/`"Map"`. **No repro, 2026-08-04**: a user
   `record Map { a: i64 }` in its own module is correctly treated as an ordinary ordered
   record. One shape only, so "not reproduced" rather than disproved — the bare-name match is
   still there to be read.
-- **L3.** `repr.rs::variant_rank` collapses five variants into one sort rank used as a
-  canonical layout ordering. Never probed.
+- ~~**L3.**~~ **Confirmed and fixed 2026-08-08.** `variant_rank` gave `Record`, `List`,
+  `Map`, `Runtime` and `BoxedRec` one rank, and the sort is stable, so two same-rank variants
+  kept whatever order they ARRIVED in — which the two routes to a union repr do not agree on:
+  `repr_of` pushes in DNF-path order, a substitution hands them over as written. `R |
+  List[i64]` and the substituted `A | B` became two C structs for one type. The order is now
+  established ONCE, by a key total within a rank, and both routes sort by it rather than one
+  pushing and the other re-deriving.
+
+  It was masked by a second bug found in the same probe: `repr_components` kept only the
+  first type variable of a union, so `fn first[A, B](a: A, b: B) -> A | B` had its return
+  reduced to `A`'s repr and no call site could be assigned from it. "A union of variables
+  cannot arise from a value" was the note; true of a value, false of a signature. Both are
+  pinned by `types/a_union_is_one_layout_however_it_is_reached.neon`.
 - **L6.** `repr_components` checks `boxed` only on single-atom DNF paths; a multi-atom path
   falls to `record_intersection`, which lays each atom out inline — a second non-termination
   if such a type is constructible. The lead doubts its own constructibility; nobody has

@@ -615,11 +615,23 @@ fn repr_components(t: &Types, ty: TyId, cyclic: &HashSet<TyId>, boxed: &HashSet<
         comps.push(Repr::Tag);
     }
 
-    // Rigid variables — abstract until monomorphisation. A union of variables cannot
-    // arise from a value, so the first name is enough.
+    // Rigid variables — abstract until monomorphisation. EVERY name, not just the first.
+    //
+    // "A union of variables cannot arise from a value, so the first name is enough" is what
+    // stood here, and the first half is true of a value while the second is false of a
+    // SIGNATURE. `fn first[A, B](a: A, b: B) -> A | B` has exactly that return type, and
+    // keeping only `A` made the instance return `A`'s repr: `first$i64$str` was declared
+    // `-> i64`, and the call site — which correctly wanted `i64 | str` — could not be
+    // assigned from it. Dropping the tail of a union is silent here and only becomes visible
+    // where the two reprs meet.
+    //
+    // The names arrive sorted and deduped (`Types::atomset` canonicalises), so the order is
+    // a function of the type rather than of how it was written.
     let vars = t.atomset_of(d.vars);
-    if !vars.neg && !vars.names.is_empty() {
-        comps.push(Repr::Var(t.name_str(vars.names[0]).to_string()));
+    if !vars.neg {
+        for n in &vars.names {
+            comps.push(Repr::Var(t.name_str(*n).to_string()));
+        }
     }
 
     // Each DNF path is a *conjunction* of its positive atoms — an intersection, one record
@@ -660,6 +672,10 @@ fn repr_components(t: &Types, ty: TyId, cyclic: &HashSet<TyId>, boxed: &HashSet<
         });
     }
 
+    // Sorted by the same key `normalize_union` uses, so the canonical order is established
+    // ONCE rather than being pushed here and re-derived there. Those were "one specification
+    // in two places", and the places disagreed for anything sharing a rank.
+    comps.sort_by_key(variant_key);
     combine(comps)
 }
 
@@ -813,7 +829,7 @@ pub fn normalize_union(variants: Vec<Repr>) -> Repr {
     // substituted `T | null` comes out as `[Null, i64]` — variables are collected after
     // the base bits — while the concrete `i64 | null` is `[i64, Null]`, and the two
     // become different C structs for one type.
-    seen.sort_by_key(variant_rank);
+    seen.sort_by_key(variant_key);
     combine(seen)
 }
 
@@ -835,6 +851,22 @@ pub fn normalize_union(variants: Vec<Repr>) -> Repr {
 /// covers `Nullable`, `Recursive`, `Any` and `Never`, none of which `repr_components`
 /// pushes as a union component — `Nullable` is made by `combine` *after* the ordering is
 /// fixed, and the others only ever appear nested inside a variant.
+/// The full sort key: the rank, then a total tiebreak within it.
+///
+/// The rank alone is not a total order — `Record`, `List`, `Map`, `Runtime` and `BoxedRec`
+/// all share one, because they are all what a record atom becomes and `repr_components`
+/// pushes them together. A stable sort therefore left two same-rank variants in whatever
+/// order they ARRIVED, and the two paths do not agree on that: `repr_of` pushes in DNF-path
+/// order, while a substitution hands them over in the order the type was written. So
+/// `R | List[i64]` and the substituted `A | B` at `A := R, B := List[i64]` came out as two
+/// different C structs for one type, and the backend refused to assign between them.
+///
+/// The debug spelling is the tiebreak because it is total and a function of the shape alone.
+/// It is only ever compared, never parsed or stored, and unions are small.
+fn variant_key(r: &Repr) -> (u8, String) {
+    (variant_rank(r), format!("{r:?}"))
+}
+
 fn variant_rank(r: &Repr) -> u8 {
     match r {
         Repr::I64 => 0,

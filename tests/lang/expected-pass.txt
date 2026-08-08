@@ -308,6 +308,7 @@ strings/utf8_len_is_bytes.neon
 strings/utf8_slice_splits_sequence.neon
 types/a_module_path_may_not_be_forged.neon
 types/a_nominal_name_is_not_a_module_identity.neon
+types/a_union_is_one_layout_however_it_is_reached.neon
 types/alias_is_transparent.neon
 types/an_alias_does_not_rename_a_primitive.neon
 types/any_cast_checks_the_tag.neon
