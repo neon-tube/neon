@@ -66,9 +66,11 @@ union still reaches lowering's abstract-receiver path:
 
     fn show[T](v: T) -> str { "#{v}" }    // at T = A | B
 
-compiles clean, exits 0, and prints `<todo: bound: abstract receiver>` (`TODO.md` §7). It
-needs the same variant-switch machinery as `Resolution::Switch` below — a feature, not a
-fix.
+used to compile clean, exit 0, and print `<todo: bound: abstract receiver>`. It needed the
+same variant-switch machinery as `Resolution::Switch` below, and got it: both lower to an
+if-else chain over the checker's arms, each testing the receiver with the runtime tag test
+`is` compiles to, projecting to the arm's type, and calling that arm's impl directly. Pinned
+as `protocols/union_receiver_dispatches_by_variant.neon`.
 
 ## The algorithm, for a concrete receiver
 
@@ -264,10 +266,10 @@ The checker decides; **nothing downstream re-resolves.** The previous implementa
 `method_to_protocol` map that was last-write-wins — the same class of bug as discarding
 per-expression types, and the same fix: record the decision where it is made.
 
-One live instance of the older shape remains, in the checker rather than here:
-`check.rs:619` writes an interpolation hole's `to_string` resolution to the **hole
-expression's own** `ExprId`, so `"#{area(q)}"` destroys `area(q)`'s own resolution and
-miscompiles (`TODO.md` §2).
+**Stale, now fixed.** An interpolation hole's `to_string` resolution used to be written to
+the hole expression's own `ExprId`, so `"#{area(q)}"` destroyed `area(q)`'s own resolution
+and miscompiled. The hole's resolution lives in its own table (`interp_call`) now, so the two
+can never collide; `"#{area(q)}"` on a `Sq { side: 3 }` prints `9`.
 
 ## Default method bodies
 
@@ -283,8 +285,8 @@ the *impls* are what is ranked — not where each impl's body came from.
 
 **Does not hold — a default body is never type-checked.** `check.rs`'s `decls` calls
 `fn_body(module, m, &[])` for a protocol method with a body, so the subject is unbound and a
-signature mentioning `T` reports `unknown type T` at the declaration. Verified 2026-07-19;
-`TODO.md` §6. The consequence for this file is that the dispatch path relying on a default
+signature mentioning `T` reports `unknown type T` at the declaration. Verified 2026-07-19,
+and still true. The consequence for this file is that the dispatch path relying on a default
 (step 7's signature fallback) cannot currently be exercised at all.
 
 ## Known limitation: binary methods
@@ -330,10 +332,11 @@ passes today for a *weaker* reason than it will later. Its protocol is local, so
 ownership is checkable it becomes "you own `Area`; drop `orphan`". The test is right about
 the rule it names and wrong about the one it does not.
 
-A second caveat, and it is `typechecker.md`'s: every one of these checks is an emptiness
-query over a nominal identity that is a **bare name** (`TODO.md` §1). Two modules each
-declaring `record Secret` intersect, so overlap and gap-filling are computed against a
-coarser notion of type than the rules assume.
+A second caveat used to live here: every one of these checks is an emptiness query over a
+nominal identity that is a **bare name**, so two modules each declaring `record Secret`
+intersect and overlap is computed against a coarser notion of type than the rules assume.
+**Fixed** — identity is qualified (`identity.md`), the `#nominal` tag IS the declaration key,
+and two modules' `Secret`s are disjoint. An impl for each coexists and dispatches correctly.
 
 **Stale, now fixed:** this document used to say `OrphanOverlaps` could only name the
 protocol because printing a type needed a `TyId` formatter that did not exist. `print.rs`
@@ -344,12 +347,25 @@ residual itself — which was always the point of the representation.
 
 Design questions: none open. Every case the corpus pins has an answer here.
 
-Implementation, in the order they bite:
+Implementation. Items 1-4 below are **done** — they were what the serialization work was
+for, and `docs/design/serialization.md` records what each cost:
 
-1. `Resolution::Switch` lowers to a string constant (above; `TODO.md` §7 is its twin).
-2. `Resolution::Bound` at a union instantiation, same missing machinery.
-3. Generic impls (`impl[T] P for List[T]`) never apply.
-4. Bounded impls do not parse.
+1. ~~`Resolution::Switch` lowers to a string constant.~~ Both it and `Resolution::Bound` at
+   a union instantiation lower to a per-variant switch.
+2. ~~`Resolution::Bound` at a union instantiation.~~ It also carries `subject_pos` now, so a
+   dispatch whose subject is the RETURN reads its head from the result rather than from
+   `args[0]` — which was silently the wrong value.
+3. ~~Generic impls (`impl[T] P for List[T]`) never apply.~~ `match_head` treats the impl's
+   own generics as holes and matches by unification.
+4. ~~Bounded impls do not parse.~~ They parse, and the context is discharged under the
+   substitution by `dispatch::satisfies`.
+
+Still open:
+
 5. Default method bodies are unchecked, which also makes step 7's default fallback
    unreachable.
 6. Ownership-based coherence, blocked on `use` resolving a foreign module.
+7. `Resolution::Bound` picks an impl by head string with no specificity ordering, so a
+   concrete `impl P for List[i64]` under a generic `impl[T] P for List[T]` loses to the
+   generic one there. A generic impl also declines a union receiver needing a different
+   substitution per variant. Both want the same fix: arms carrying their own substitution.

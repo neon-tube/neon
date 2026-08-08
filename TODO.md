@@ -1,71 +1,27 @@
 # TODO
 
-Everything known-broken or undecided as of 2026-07-22, distilled from six middle-end
-audits, a compiler-wide collapsing-key sweep, the CBMC models and a fuzzing run — and
-then burned down. The narrowing and serialization work of 2026-08-03 turned up four more
-wrong-answer defects; all four are fixed and corpus-pinned, so the P0/P1 sections are
-empty again. resolved items are removed, not struck through, and
-their write-ups live in the design docs they produced (`docs/design/identity.md`,
-`docs/design/opacity.md`, `docs/design/checked-casts.md`) and in the corpus files the
-fixes are pinned by.
+What is known-broken or undecided. Resolved items are **removed**, not struck through: their
+reasoning lives in the design doc it produced (`docs/design/`) and their behaviour in the
+corpus file that pins it. The exception is the perf sections, where a completed item is the
+measurement that explains the current number and deleting it would make the remaining items
+unreadable.
 
-Everything else is of a different kind: one structural gap awaiting infrastructure (§19),
-one language decision (§16), the perf programs, one verification-tooling gap (13c), the
-serialization roadmap (the plan-of-record for finishing dispatch — closed 2026-08-03; only
-union decode remains), and the deliberately-separate unproven leads and
-environment hazards. Each item still has a repro or a file:line.
+The P0 and P1 sections are empty. They were emptied by the 2026-07-22 audit sweep, refilled
+by the serialization and narrowing work of 2026-08-03/04 — which turned up six wrong-answer
+defects, every one of them a program that compiled and did the wrong thing — and emptied
+again. Each fix is corpus-pinned.
 
----
+What is left is of four kinds:
 
-## P1 — `is` against a structural record type is always false — ~~FIXED 2026-08-03~~
+- **A design worth having**: `TODO` erroring at the call site rather than the definition.
+- **Owner's calls**: block comments (§16), Kani's timing (§18), and the stdlib-derive
+  direction (§19).
+- **Measured work**: the three perf profiles, `@cfg`'s host/target split (§17), and one
+  verification-tooling gap (13c).
+- **Unproven leads**, kept deliberately separate because nobody has built a repro. Three of
+  the four anyone has investigated turned out to be real defects.
 
-Found and fixed the same day, while building 13d. Kept here as the write-up rather than
-deleted, because 13d below is the work it was blocking and reads against it. It was a
-**silently wrong answer**, not a decline:
-
-    type Wide   = { v: i64 | str }
-    type Narrow = { v: str }
-
-    fn f(w: Wide) -> str {
-        match w {
-            is Narrow => "narrow",
-            _ => "wide",
-        }
-    }
-
-    f({ v: "x" })   // "wide". Should be "narrow".
-
-`is Narrow` is `TypeSpecKind::Named`, so `lower.rs::type_test` emits `Op::IsVariant` with
-the resolved repr in `tested`. A structural record has no nominal name to compare, and the
-backend's rule for a *concrete* (non-erased) subject is to read `tested` as "not that
-variant" — see the comment at `lower.rs:2668`. For a tuple or arrow spec that rule is right
-and was chosen deliberately (`ConstBool(true)` was the bug it replaced). For a record
-refinement whose discriminator is a field's runtime tag it is simply wrong: the value IS a
-`Narrow`, and answering statically false silently takes the wrong arm.
-
-The corpus does not catch it because the only structural `is` tests are opacity ones
-(`records/opaque_no_structural_test.neon`), where answering false is the DESIRED outcome —
-so the tests that touch this path assert the behaviour that is wrong everywhere else.
-
-**The fix** (`backend/c.rs::record_shape_test`): on a concrete record subject, a conjunction
-over the tested shape's fields — nothing for a field already declared at the shape's type, a
-tag comparison for one declared as a union, recursion for one declared as a record. A shape
-naming a field the value lacks is a static no. Undecidable shapes (a nullable field, a
-non-record target) fall back to the old static answer rather than to `false`, so it only ever
-answers where it can answer correctly. Pinned as `match/is_against_a_structural_shape.neon`.
-
-Two things it must NOT do, both of which it got wrong first and the corpus caught:
-
-- **Nominal identity is a different question.** The structural test applies only when the
-  TARGET is structural. `is Point` is not "has these fields" (`is_sum_type.neon`), and the
-  unit record is what makes the distinction load-bearing rather than tidy: a named record
-  with no fields has nothing to compare, so a field-wise test is vacuously true and `is
-  Empty` matched every record in the program (`records/unit_record.neon`).
-- **Opacity was never actually a constraint**, though it looked like one. `s is { code: i64 }`
-  on an opaque record is rejected by the CHECKER —
-  `records/opaque_no_structural_test.neon` is a `compile-fail` — so a structural test against
-  an opaque shape never reaches codegen and answering the reachable ones honestly cannot
-  launder anything.
+Each item still has a repro or a file:line.
 
 ---
 
@@ -333,55 +289,6 @@ built the Neon row.
 
 ---
 
-### 13d. A projected field carried the vacuous negation `prune` removes — ~~FIXED 2026-08-03~~
-
-`Solver::prune` drops a negation that subtracts nothing where narrowing produces one, which
-is why a narrowed arm now behaves as the type it narrowed to. Negations are born in *two*
-places, though, and the second is `narrow.rs`'s projection: `rec_neg_field` subtracts each
-negated atom's field from the field being read, so projecting through a record negation that
-survived pruning yields the same useless shape one level down.
-
-It takes structural records to reach, which is why nothing hit it before. Two NOMINAL records
-are always disjoint — by tag, or by arguments — so a negation between them is vacuous, pruned
-on the way in, and `rec_neg_field` never runs with a survivor. Overlap needs a written-out
-record type:
-
-    type Wide   = { v: List[i64] | Map[str, i64], n: i64 }
-    type Narrow = { v: Map[str, i64], n: i64 }
-
-    fn f(w: Wide) -> i64 {
-        match w {
-            is Narrow => 0,
-            _ => list::len(w.v),   // w.v: `List[i64] & !Map[str, i64]`, declined
-        }
-    }
-
-**Both halves landed together, after P1, and the repro above is the test**
-(`records/narrowed_field_read_projects.neon`).
-
-The first half is one line: prune in `Projected::new`, the second birthplace of a vacuous
-negation. Guarding both birthplaces is what makes `prune` complete without being recursive —
-no cycle guard for `mu` types, and no cost on the types that carry no negation.
-
-The second half is lowering. That prune alone makes the checker accept the program, and then
-codegen emits `_3 = _0.f_v;` — the field's declared union repr assigned to a `neon_list*` —
-because a field read was emitted at the *refined* repr while storage keeps the declared one.
-It now reads at the declared repr and `Op::Cast`s to the refined one, the same projection
-`lower_dispatch_switch` applies to a union receiver, unchecked because the checker has
-already proved the variant.
-
-The ordering against P1 was not optional, and shipping this first would have been worse than
-shipping nothing. Every program that exercises 13d needs two overlapping record types, so it
-needs structural records, so it needs `is` against a structural shape to work. While that
-test was a static false, the value took the wrong arm and this projection then reinterpreted
-it at that arm's repr: `map::len(w.v)` on a `Map` read as a `List` printed 94608184888736,
-where the same program without the projection was a compile error. Both halves were written,
-measured against exactly that, and held back until P1 was fixed.
-
-Separately and pre-existing, found while probing this: flow narrowing does not track field
-paths at all, so `match w.v { is List[i64] => list::len(w.v) }` refines nothing and reports
-the whole union. Same area, different gap, and the more likely one to be noticed first.
-
 ### 13c. CBMC cannot reach map resize, clone or drop
 
 The heap is modelled as untyped bytes, so a witness release read out of a heap map is a
@@ -395,283 +302,30 @@ pipeline, or types that distinguish a drop from a witness release.
 
 ---
 
-## Serialization — completing protocol dispatch
-
-A stdlib JSON module wants an encode/decode protocol pair with library impls for the
-recursive cases and a derive for records — the serde shape, but resolved statically at
-monomorphisation so there are no dictionaries. None of it was expressible until dispatch was
-finished. The concrete pieces, in order, each closing an item already listed above; items 1-6
-are built, and what remains is decode (item 6's tail).
-
-The pair is `ToJson`/`FromJson` rather than `Serialize`/`Deserialize` — format-specific by
-decision, with the reasoning in item 6.
-
-1. ~~**Lower `Resolution::Switch` and `Resolution::Bound` on a union receiver**~~ —
-   **built 2026-07-22** (former items 7 and 7c): a dispatched call on a union receiver
-   switches per variant — tag test, projection, direct call, widening join
-   (`lower.rs::lower_dispatch_switch`), pinned as
-   `protocols/union_receiver_dispatches_by_variant.neon`. The RESIDUE is exactly the
-   litmus test below: the built-in structural `to_string`/`==` walks are not impls, so
-   a union hole in a string interpolation still has nothing to switch to per variant
-   (`"#{u}"` on `Sq | Rect` is a checker error naming the uncovered remainder, and the
-   `Bound` path's per-variant impl lookup finds nothing for a record's Display). Items
-   2-5 below are what close it.
-
-2. ~~**Parse `where` on impls.**~~ — **built 2026-08-01.** `ast::ImplDecl.wheres`, printed by
-   the formatter, carried onto `ImplDef` as `(param, protocol path)` like `FnSig::wheres`.
-
-3. ~~**Impl-head unification, not intersection**~~ (absorbed former item 7b) — **built
-   2026-08-01.** `dispatch.rs::match_head` treats the impl's own generics as holes and
-   matches the receiver against the head via `generic::infer`, yielding `T ↦ i64`; the
-   emptiness test then judges the *substituted* head exactly as it judges a monomorphic
-   target, so a template that lines up structurally with an unrelated type is still
-   rejected. The substitution flows into the selection's ret/throws (`result_of`) and
-   into lowering, which counts the impl's generics as monomorphising generics alongside
-   the method's. Pinned as `protocols/generic_impl_head.neon`.
-
-   Three things had to be fixed underneath, each its own defect:
-   an impl's generics were not in scope in its own methods' signatures (`fn size(p:
-   Pair[T])` was "unknown type `T`"); a generic impl's body was lowered once, generically,
-   tripping codegen's type-variable guard; and the impl body index derived its key from
-   the syntax while dispatch derived it from the `ImplDef` — agreeing for a plain nominal
-   and for nothing else. That third one is now a single spelling, `impl_head` via
-   `impl_def_at`, which also closes the tuple half of the `_ => String::new()` collapse.
-
-4. ~~**Discharge the context under the subst.**~~ — **built 2026-08-01.** `where T:
-   Serialize` under `T ↦ i64` is a subgoal answered by `dispatch::satisfies`, a real
-   applicability query rather than `Env::type_satisfies` — which compares against the
-   impls' *written* targets and so answers no for every generic impl, the same defect one
-   level down. A failed bound declines the impl rather than erroring, so coverage is
-   computed over what really applies and the diagnostic names the uncovered values. A
-   cycle (`mu Tree = List[Tree]`) assumes its own goal; otherwise each subgoal is
-   structurally smaller. The impl's `where`s are also in scope in its bodies, which is
-   what makes a *recursive* bounded impl expressible. Pinned as `protocols/bounded_impl.neon`.
-
-5. ~~**Records need a derive.**~~ — **the mechanism is built, 2026-08-01**, and
-   `@derive(Display)` is the first protocol through it (`compiler/src/derive.rs`, pinned
-   as `records/derive_display.neon`). It generates an ordinary impl appended to the
-   record's module — checked, lowered and overridable like hand-written code — with an
-   interpolated string as the body, so each field is rendered by whatever impl covers it
-   and nested/generic records need no special support. A generic record derives a bounded
-   impl, which only works because of items 3 and 4.
-
-   Generation is a pass, not an annotation processor: `expand`'s `Context` cannot see the
-   AST by design, so `@derive`'s processor validates and `crate::derive` writes. `expand`
-   itself calls the pass, because four pipelines parse a module and the only thing they all
-   agree on is calling `expand`.
-
-6. ~~**The JSON encoder.**~~ — **built 2026-08-03.** `stdlib/std/json.neon`: a `Json` value
-   (`mu type Json = null | bool | i64 | f64 | str | List[Json] | Map[str, Json]`), a
-   `ToJson` protocol with library impls for the primitives and the recursive cases, a
-   `stringify`/`quote` renderer, and `@derive(ToJson)` as the second protocol through the
-   derive mechanism (`derive.rs::to_json_impl`). Pinned as `records/derive_to_json.neon` and
-   `protocols/json_encodes_through_library_impls.neon`.
-
-   It is `ToJson`, **not** a format-generic `Serialize`, and that was a decision rather than
-   a shortcut. Serde's genericity comes from a `Serializer` type parameter threaded through
-   every impl; here it would need a protocol whose methods accept field values of arbitrary
-   type — a nested higher-order bound, landing exactly on the `Resolution::Bound`
-   specificity limit recorded below — and it would buy nothing, because monomorphisation
-   means there is no dictionary to share and there is one format. `impl[T] ToJson for T
-   where T: Serialize` re-expresses it generically later, on the bounded-impl machinery item
-   4 already built, so the choice forecloses nothing.
-
-   Three things worth knowing, each of which cost something to find:
-
-   - **The derive writes ABSOLUTE paths for its scaffolding** (`std::json::Json`,
-     `std::json::object`) while keeping the author's spelling for the protocol. A generated
-     body that only compiled when the author happened to `use std::json` would break on
-     someone else's file. Fully-qualified paths resolve with no import, which is what makes
-     this work.
-   - **The protocol name resolves like any other name**, through the author's imports; the
-     derive gets no private route to it, and a bare `@derive(ToJson)` in a module that
-     imported nothing is "unknown protocol `ToJson`" — what the equivalent hand-written impl
-     says there. So the spellings are the ordinary three (`use std::json` +
-     `@derive(json::ToJson)`, `use std::json::ToJson` + `@derive(ToJson)`, or a fully
-     qualified `@derive(std::json::ToJson)`), all pinned in the corpus file. Resolving a bare
-     derivable name to the module the compiler knows it lives in was tried and **rejected**:
-     it makes `@derive` a second name resolver, agreeing with the real one only by luck, for
-     the sake of saving an import. `Display` needs no import only because it is in the
-     prelude — a fact about the prelude, not a privilege of the derive.
-
-   Building it also surfaced and fixed two latent middle-end defects: L5 under Unproven
-   leads, which it graduated, and the narrowing gap now fixed in `Solver::prune` — a match
-   arm's subject carries the earlier arms' exclusions (`Map[str, Json] & !List[Json]`), a
-   type equal to `Map[str, Json]` that does not look like it, and roughly ten "destructure
-   this single atom" queries declined it. Pinned as
-   `match/narrowed_arm_is_the_type_it_narrowed_to.neon`.
-
-6b. ~~**The JSON decoder.**~~ — **built 2026-08-03**, and with it the roadmap is closed.
-   `FromJson` is `fn from_json(j: Json) throws JsonError -> T`, dispatched on the type the
-   result is CHECKED against, with library impls for the primitives and the recursive cases
-   and `@derive(FromJson)` for records. Pinned as `records/derive_from_json.neon` and
-   `protocols/json_decodes_by_expected_type.neon`.
-
-   Return-position dispatch existed in the checker (`dispatch.rs:105`) and had never been
-   exercised end to end. Three defects had to be fixed, and none could bite `ToJson`, which
-   dispatches on an argument and returns a `Json` that does not mention the subject:
-
-   - **`Resolution::Bound` read the receiver from `args[0]` regardless.** For a
-     return-position call that is an unrelated argument, so it emitted `<todo: bound:
-     abstract receiver>` — and an argument whose type happened to have an impl would have
-     dispatched on it and silently run the wrong one. The variant now carries `subject_pos`,
-     and `None` means the head comes from the return repr.
-   - **`protocol_method_result` returned the protocol's own subject variable.** Inside
-     `impl[V] FromJson for Map[str, V]` the call's type came back as `T`, so it only
-     type-checked in the `List[T]` impl next door, whose parameter happens to be spelled `T`
-     too. It now substitutes the bound parameter.
-   - **Only the first derive on a record was ever lowered.** Every generated impl carried
-     the RECORD's span, and `lower.rs::impl_def_at` correlates an impl's AST with its
-     `ImplDef` by `(module, span)` taking the first match — so the second impl's methods were
-     indexed under the first one's protocol (`ToJson$P$from_json`, a key nothing looks up)
-     and its body was silently never lowered. Unreachable while `Display` was the only
-     derivable protocol. Each impl now takes its argument's span, which distinguishes
-     `@derive(A) @derive(B)` and `@derive(A, B)` alike.
-
-   One deliberate asymmetry with encoding: an `i64` node decodes as an `f64`. JSON has a
-   single number type, so a document written anywhere else spells 1.0 as `1`, and refusing
-   it would fail every round trip through another language on whole numbers. The reverse is
-   not done — that direction loses information rather than recovering it.
-
-   **Still open, and now the only serialization item:** union decode, whose extra obligation
-   is recorded at the end of this section. Nothing else is missing.
-
-**Litmus test for "done": passed for `Display`/`List`, 2026-08-01.**
-`impl[T] Display for List[T] where T: Display` is expressible as an ordinary library impl
-and renders `[[1, 2], [3]]` correctly — the nested case, where the bound is discharged
-against `List[i64]` and answered by the same impl. Pinned as
-`protocols/library_impl_for_a_container.neon`.
-
-What the litmus was said to have NOT done was the *deletion* of the baked-in structural
-walks. Checked 2026-08-03, and that sentence was wrong in both halves:
-
-- **There is no built-in `to_string` walk left to delete.** `to_string` on a list, a tuple
-  or a record is "no impl of `Display`" today; `to_string_symbol` covers `i64`/`f64`/`bool`
-  only, and those are real `@native impl Display` declarations in the prelude — library
-  impls, not a walk. Nothing to remove.
-- **`==`/`cmp` must NOT be deleted.** Structural comparison is a decision, not an
-  omission: `docs/decisions.md` "Comparison is structural, and ordering is total within a
-  type" (2026-07-19) explicitly *replaced* "comparison operators are protocol calls", and
-  says no impl is required and none can override it, with no `Eq` and no `Ord` protocol.
-  Deleting those walks would undo that decision rather than finish this roadmap. The same
-  entry singles out `to_string` as the one that is rightly a protocol, because formatting
-  varies and equality does not.
-
-What is genuinely left is the third clause: the `List`/`Map` analogues are unwritten, so a
-user must hand-write `impl[T] Display for List[T]` to render a list. Both impls were written
-on 2026-08-03 and work — lists, nested lists and interpolation holes all render, and a map
-sorts its keys so the rendering is a function of the value (which needs `K: Ord` on top of
-`K: Display`). Both are now IN the tree, in `std::collections::list` and `std::collections::map`, and
-`protocols/library_impl_for_a_container.neon` exercises them instead of defining its own —
-which is what closing the litmus means: rendering a list is something the stdlib does, not
-something each program re-derives.
-
-Landing them required fixing a hole they would otherwise have turned into a regression. Two
-impls of one protocol for the SAME target checked clean, in the same module, and then
-collided in lowering on `collect_impl_bodies`'s `protocol$head$method` key — one body won
-the slot and the other's call sites reached a `<todo: ..>` marker. `check_overlap` permits
-nesting and spelled it `a <: b || b <: a`, which is true of two equal targets: they are
-mutual subtypes, so a duplicate read as "nested". Nesting is now required to be STRICT.
-Pinned as `protocols/two_impls_for_one_target_is_an_error.neon`. Without it, every program
-that already wrote its own `impl[T] Display for List[T]` would have become a silent
-miscompile; with it, they get a diagnostic naming the duplicate.
-
-Two known limits of the matcher, neither blocking and both honest failures rather than
-wrong answers: a generic impl declines a **union receiver** that would need a different
-substitution per variant (`Pair[i64] | Pair[str]` — `infer` binds nothing against a union,
-so the impl is not applicable and the diagnostic names the uncovered type); and the
-`Resolution::Bound` path picks an impl by head string with no specificity ordering, so a
-concrete `impl P for List[i64]` sitting under a generic `impl[T] P for List[T]` would lose
-to the generic one there. Both want the same fix — arms carrying their own substitution.
-
-~~Union *decode* has one extra obligation the encode side doesn't: choosing an arm.~~ —
-**settled 2026-08-04, and not the way this entry proposed.**
-
-The plan was for the compiler to require the arms' JSON projections be pairwise disjoint and
-reject overlap. That cannot live in dispatch: only the protocol knows which documents each
-impl accepts, so "these two arms cannot both match" is a fact about JSON, and a general
-mechanism would have to invent semantics it cannot verify.
-
-What was actually wrong was worse than arm ordering. A `Resolution::Switch` picks an arm by
-reading the RECEIVER's runtime tag, and a return-position dispatch has no receiver — so
-lowering switched on `args[0]`, which for `from_json(j: Json) -> T` is the document. It
-compared the document's tag against the subject's variants, rebuilt an argument from the
-projected payload, and gave the last arm no test at all: `dec(true)` on an `i64 | str` read a
-bool payload as a `neon_str` and **segfaulted silently**. Same shape as the `Bound` path's
-`args[0]` assumption fixed the day before, in the other resolution.
-
-So the answer is that dispatch REFUSES, with a diagnostic naming the escape hatch: one impl
-for the whole union, which inspects what it was given and decides. Selecting it needs one
-rule beyond ordinary specificity — `most_specific` prefers the narrower heads, which is right
-when there is a value to test and impossible when there is not, so in return position an impl
-covering the whole subject wins instead. Pinned both ways, as
-`protocols/return_dispatch_onto_a_union_needs_one_impl.neon` and
-`protocols/return_dispatch_onto_an_uncovered_union_fails.neon`.
-
-A `@derive(FromJson)` for unions could still generate that covering impl, and the
-disjointness check belongs *there* — in the derive, where the format is known — rather than
-in dispatch. Nothing needs it yet.
-
----
-
 ## Later — not now
 
-### 17. `std::path`/`std::fs` and `@cfg` — ~~redesigned 2026-08-05~~; the target/host split remains
+### 17. `@cfg`'s keys are the HOST, not the target
 
-`std::path` is no longer POSIX-only. The separator, what counts as a root, and how a path
-splits live in `posix` and `win` rule sets, and everything else is derived from them through
-`components`/`render`. `neon check --cfg windows` type-checks the Windows delegators, and
-`modules/path_rules_are_testable_on_any_host.neon` RUNS both rule sets on whatever host CI
-uses.
+`Config::for_host` seeds `@cfg` from the machine the compiler is running on, and `--cfg KEY`
+adds to that. Neither describes a machine to build *for*. Harmless while nothing
+cross-compiles, and not harmless the moment something does: a program built on Linux for
+Windows would take every `@cfg(linux)` branch.
 
-The arrangement is the interesting part, and it is what item 1 of this entry was really
-about. Both rule sets are ordinary modules compiled everywhere; only the four delegators in
-`plat` are `@cfg`-ed. Putting the rules themselves behind `@cfg` would have dropped them
-before the checker on every other platform — so the Windows half would have shipped compiled
-by nobody, which is the same silent-wrong-program failure this entry opened with, relocated
-rather than fixed. Choosing is the one job `@cfg` can do without hiding code.
+The sharp edge today is that `--cfg` ADDS. With `--cfg windows` on Linux both keys are live,
+so `@cfg(windows)`/`@cfg(not(windows))` pairs select correctly while a
+`@cfg(linux)`/`@cfg(windows)` pair keeps both. That is why `std::path`'s rule sets are
+selected by `not(windows)` rather than by naming each platform.
 
-`--cfg KEY` on `neon check` is what makes even the delegators checkable, and
-`Config::for_host` is now the single place the host's keys are derived (three sites derived
-them independently before).
+Whoever adds `--target` owns this line, and should make it the only way to set the keys.
 
-**`std::path` and `std::fs` were redesigned around `Path` on 2026-08-05.** A path is an
-opaque `Path` rather than a `str`, `of`/`to_str` are the only doors, and `std::fs` takes
-`Path` everywhere. That reversed a documented decision, and `path.neon`'s header records
-which parts of the old argument held: the load-bearing one — "`fs` takes `str`, so a `Path`
-means a cast at every call site" — was only true while the two modules were changed
-separately. Every corpus golden is byte-identical, so the API moved and the semantics did
-not. Pinned by `paths/a_path_is_not_a_string.neon`.
+**The related gap, and the one blocking real Windows work:** `neon compile` and `neon run`
+have no `--cfg` at all, and pick their runtime archive by host flavour. So a `@cfg(windows)`
+branch can be type-checked (`neon check --cfg windows`) and never *run* — even though
+`verify/windows.sh` proves the toolchain is there: mingw-w64 cross-compiles a Neon program to
+a PE32+ executable and Wine runs it. Closing this is what turns `std::fs`'s five Windows
+`TODO`s from unverifiable into implementable.
 
-**The syscall surface landed 2026-08-05**: `mkdir`, `rename`, `is_dir`, `size`, `read_dir`
-and `copy`. POSIX bodies; the Windows halves are `TODO(..)`, which is a compile error naming
-what is missing, so a Windows build stops at the hole instead of linking a stub. The C side
-still compiles and links on Windows and returns `-ENOSYS` there, which is belt and braces —
-the Neon guard is what a user meets.
-
-`read_dir` returns entry NAMES as a NUL-separated string from the native, split in Neon. A
-runtime function cannot build a `List[str]`: that needs the element's value-witness, which
-codegen generates per type and hands only to the natives it special-cases. NUL is the one
-byte a POSIX filename cannot contain, so the split is lossless. `copy` needs no native at
-all — it is `read` plus `write`, and says so.
-
-Not done, and each is a rule to add rather than a redesign: a `Dir` HANDLE type (this is
-`read_dir` returning names, not an open directory), permissions, timestamps, symlink
-operations, and the Windows bodies the TODOs name.
-
-**Still open, and it is item 2 unchanged: the keys are the HOST, not the target.** `--cfg`
-ADDS keys rather than describing a machine to build for, so with `--cfg windows` on Linux
-both keys are live: a `@cfg(windows)`/`@cfg(not(windows))` pair selects correctly, and a
-`@cfg(linux)`/`@cfg(windows)` pair would keep both. Whoever adds `--target` owns making these
-agree and should make it the only way to set them.
-
-**Also still open, and smaller than it looks:** the Windows rules cover `\` and `/` as
-separators, `C:\` and `\\server` as roots, and correctly refuse to call a drive-relative
-`C:x` or `\x` absolute. They do not cover case-insensitive comparison, `\\?\`
-extended-length prefixes, or reserved device names (`CON`, `NUL`). Each is a rule to add to
-one module with a test beside it, not a redesign.
-
-### 19b. Derives should eventually live in the stdlib
+### 19. Derives should eventually live in the stdlib
 
 Owner's direction, recorded so the intent behind `derive.rs`'s shape is not lost. Today a
 derive is a Rust unit struct in `DERIVABLE`; the destination is a derive written in Neon, in
@@ -719,63 +373,48 @@ Owner's call on timing; recorded so it is not lost.
 ## Unproven leads
 
 Marked as such because nobody built a repro. Worth a pass, not worth asserting.
-(L4 — qualified-path impls never matching — graduated: confirmed real and fixed with the
-identity change. L5 — duplicate `TyId`s reaching the backend — graduated 2026-08-03:
-confirmed with a repro and fixed, see below. L1 and L8 — graduated 2026-08-04, when the list
-was finally worked through; L2 did not reproduce; L3, L6 and L7 are still unprobed and the
-notes below say what each would take.)
 
-**Three of the four leads anyone has investigated turned out to be real defects.** That is
-worth knowing before deciding this list is noise.
+**Four have been investigated and three were real** — L1 (a user `marker Ord` inherited the
+built-in rule), L4 (qualified-path impls never matching), L5 (duplicate `TyId`s reaching the
+backend), all confirmed and fixed; L2 did not reproduce. That is worth knowing before
+treating the rest as noise. Each fix is pinned by a corpus file.
 
-- ~~**L1.**~~ **Confirmed and fixed 2026-08-04.** Real, and the declaration check had it too:
-  `is_known_marker` matched the bare name, so `mod mine { marker Ord }` was accepted where
-  `marker Frobnicable` beside it is correctly rejected as having no rule — and
-  `satisfies_marker` then answered the user's marker from the built-in structural rule. Both
-  now test identity against the prelude's reserved module path. Pinned as
-  `protocols/a_user_marker_named_ord_is_not_the_marker.neon`. Same shape as the impl-body and
-  derive-span collisions: a key two declarations can produce.
-- **L2.** `ordered.rs:90/165` match bare `"List"`/`"Map"`. **No repro, 2026-08-04.** A user
+- **L2.** `ordered.rs:90/165` match bare `"List"`/`"Map"`. **No repro, 2026-08-04**: a user
   `record Map { a: i64 }` in its own module is correctly treated as an ordinary ordered
-  record — `smaller(mine::Map { a: 1 }, mine::Map { a: 2 })` compiles and answers `true`. One
-  shape only, so this is "not reproduced" rather than "disproved"; the bare-name match is
-  still there to be read, and a shape where it misfires may exist.
+  record. One shape only, so "not reproduced" rather than disproved — the bare-name match is
+  still there to be read.
 - **L3.** `repr.rs::variant_rank` collapses five variants into one sort rank used as a
-  canonical layout ordering.
-- ~~**L5.**~~ **Confirmed and fixed 2026-08-03.** The lead named the hazard —
-  `repr.rs`/`ctype.rs` key on `HashMap<TyId, _>`, so two ids for one type are two C structs —
-  but not the source of the duplicates, which was `substitute`. It returned early only on an
-  *empty* substitution, so substituting into a type that mentions none of the bound variables
-  still rebuilt it; interning makes that the identity for an acyclic type, but a recursive one
-  goes through `subst_rec`'s reserve/define and comes back as a fresh id **every call**.
-  `impl[T] ToJson for List[T]`, whose method returns the recursive `mu Json`, therefore minted
-  a distinct `Json` per monomorphisation and gcc rejected the assignment between two
-  byte-identical structs (`incompatible types when assigning to type 'nu2' from type 'nu0'`).
-  Fixed by `Types::mentions_var`, the occurs-check `substitute` was missing; pinned as
-  `protocols/json_encodes_through_library_impls.neon`. Note this was a *latent* defect that
-  needed a generic impl returning a recursive type to surface — the shape the serialization
-  work built first.
+  canonical layout ordering. Never probed.
 - **L6.** `repr_components` checks `boxed` only on single-atom DNF paths; a multi-atom path
-  falls to `record_intersection`, which lays each atom out inline — a second
-  non-termination if such a type is constructible.
+  falls to `record_intersection`, which lays each atom out inline — a second non-termination
+  if such a type is constructible. The lead doubts its own constructibility; nobody has
+  tried to build one.
 - **L7.** `normalize_union([Nullable(Str), Null])` disagrees with `repr_of(str|null|null)`.
-  Blocked in the front end today; the repr-level defect is real.
-- ~~**L8.**~~ **Confirmed and fixed 2026-08-04.** A contradiction rather than a gap:
-  `docs/decisions.md` promises `==` works on every type, "unions by tag and then payload",
-  with no impl required and none possible, and `is_equatable` refused a union of two records
-  — its own diagnostic admitting the comparison "does not yet route by tag".
+  Blocked in the front end today, so it needs a repr-level test rather than a program.
 
-  The backend had always routed it. `eq_expr`'s `Repr::Union` arm compares the tags and then
-  the payload the tag selects, written for exactly this case. Only the checker refused:
-  `is_equatable` asked `record_fields` for a *single* record atom and gave up on `None`.
+### 20. Design docs cite `TODO.md` sections that no longer exist
 
-  The lead's caution — "the obvious relaxation is not sufficient, the second BDD path carries
-  a negative" — was right about the shape and wrong about the consequence. `A | B` comes back
-  as the paths `A` and `B ∧ ¬A`, and a negative only REMOVES inhabitants, so every value on a
-  path inhabits that path's positive atoms: judge the positives and the negatives need no
-  discharging at all. A path with no positive atom (`¬B` alone, every record except B, an
-  unbounded shape) is still declined. Pinned as
-  `operators/union_of_records_compares_by_tag.neon`.
+Bounded, mechanical, and worth doing by someone who can read the removed sections' history.
+
+`typechecker.md` states the convention — "open items have a number into `TODO.md`" — and the
+P0 burn-down of 2026-07-22 removed the items without updating the citations. What is left is
+a reference to a section a reader cannot find:
+
+- `typechecker.md`: §1, §5, §9, §10, §14
+- `stdlib.md`: item 13, item 17
+- `errors.md`: item 13
+
+Two of these were checked on 2026-08-08 and were not merely dangling but WRONG — the doc
+described a defect that had been fixed. `dispatch.md`'s §2 (an interpolation hole's
+`to_string` resolution overwriting the hole's own) and §1 (nominal identity as a bare name,
+so two modules' `Secret`s intersect) both read as live bugs; both are fixed, and both are now
+corrected in place with the corpus file that pins them. `stdlib.md` called lead L1 unproven
+when it had been confirmed and fixed.
+
+That is the reason this is worth doing rather than tidying: a stale citation is a dead link,
+but a stale *claim* beside it is misinformation, and the two travel together. Each remaining
+reference needs the same treatment — read what the section said, check whether it still
+holds, then either fix the claim or drop the citation.
 
 ## Environment hazards
 

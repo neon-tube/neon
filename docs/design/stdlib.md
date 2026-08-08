@@ -91,8 +91,11 @@ type's structure. `Ordering` survives as the return type for the `_by` functions
 (`cmp::max_by`, `list::sort_by`), which take the comparison as an argument and need no bound
 at all. See "Comparison is structural" and "Markers" in `docs/decisions.md`.
 
-*Known-broken:* `env.rs::satisfies_marker` matches the bare protocol name `"Ord"`, so a user
-`marker Ord` in any module may inherit the built-in rule (`TODO.md` lead L1, unproven).
+*Was known-broken:* `env.rs::satisfies_marker` matched the bare protocol name `"Ord"`, so a
+user `marker Ord` in any module used to inherit the built-in rule. **Fixed** — `is_known_marker`
+and `satisfies_marker` test identity against the prelude's reserved module path, so a user's
+`marker Ord` is "no rule for marker `Ord`" like any other name the compiler does not know
+(`protocols/a_user_marker_named_ord_is_not_the_marker.neon`).
 
 ## `Error` is decoupled from `Display`
 
