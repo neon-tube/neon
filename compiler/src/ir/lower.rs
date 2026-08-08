@@ -3511,6 +3511,32 @@ impl Lower<'_> {
                 self.b
                     .emit(Op::Prim(PrimOp::Eq, vec![subj, lit]), Repr::Bool, bty)
             }
+            // `is A | B` — membership in ANY member, an OR of each member's own test.
+            // This used to fall into the nameless catch-all below, whose IsVariant
+            // carried no variant and the whole UNION as `tested`: codegen answered
+            // false for every concrete subject, so an exhaustive match with a
+            // union-typed arm fell off its last test into `unreachable` at runtime.
+            // Each member's test here is the same one it would get written alone; the
+            // member's `tested` repr is recovered by pairing the spec's members with
+            // the resolved union's variants by head name.
+            ast::TypeSpecKind::Union(members) => {
+                let variants: Vec<Repr> = match self.tested_repr(id) {
+                    Some(Repr::Union(vs)) => vs,
+                    Some(one) => vec![one],
+                    None => vec![],
+                };
+                let mut acc: Option<Value> = None;
+                for m in members {
+                    let t = self.union_member_test(subj, m, &variants, bty);
+                    acc = Some(match acc {
+                        Some(a) => self
+                            .b
+                            .emit(Op::Prim(PrimOp::Or, vec![a, t]), Repr::Bool, bty),
+                        None => t,
+                    });
+                }
+                acc.unwrap_or_else(|| self.b.emit(Op::ConstBool(false), Repr::Bool, bty))
+            }
             // A structural type spec — a tuple `(i64, str)`, an arrow `(i64) -> str`.
             // These have no head name to write, but they are not unanswerable: the
             // checker resolved the spec to a type, and `Op::IsVariant` compares *that*
@@ -3524,6 +3550,59 @@ impl Lower<'_> {
             // guessing, and reads as "not that variant" on a concrete one.
             _ => {
                 let tested = self.tested_repr(id);
+                self.b.emit(
+                    Op::IsVariant {
+                        value: subj,
+                        variant: String::new(),
+                        tested,
+                    },
+                    Repr::Bool,
+                    bty,
+                )
+            }
+        }
+    }
+
+    /// One member of a union type-spec, as its own runtime test. `variants` is the
+    /// resolved union's repr list, consulted so a named member's `IsVariant` carries
+    /// the same `tested` precision it would carry written alone.
+    fn union_member_test(
+        &mut self,
+        subj: Value,
+        member: &ast::TypeSpec,
+        variants: &[Repr],
+        bty: TyId,
+    ) -> Value {
+        match &member.kind {
+            ast::TypeSpecKind::Null => self.b.emit(Op::IsNull(subj), Repr::Bool, bty),
+            ast::TypeSpecKind::Atom(a) => {
+                let lit = self.b.emit(Op::ConstAtom(a.clone()), Repr::Tag, bty);
+                self.b
+                    .emit(Op::Prim(PrimOp::Eq, vec![subj, lit]), Repr::Bool, bty)
+            }
+            ast::TypeSpecKind::Named { path, .. } => {
+                let variant = path.last().cloned().unwrap_or_default();
+                let tested = variants
+                    .iter()
+                    .find(|v| repr_head(v).as_deref() == Some(variant.as_str()))
+                    .cloned();
+                self.b.emit(
+                    Op::IsVariant {
+                        value: subj,
+                        variant,
+                        tested,
+                    },
+                    Repr::Bool,
+                    bty,
+                )
+            }
+            // A structural member (a tuple, an arrow) inside a union spec: match it to
+            // the one headless variant when there is exactly one — two structural
+            // members of one union are already indistinguishable at the type level.
+            _ => {
+                let headless: Vec<&Repr> =
+                    variants.iter().filter(|v| repr_head(v).is_none()).collect();
+                let tested = (headless.len() == 1).then(|| headless[0].clone());
                 self.b.emit(
                     Op::IsVariant {
                         value: subj,

@@ -1,0 +1,36 @@
+// `is A | B` — one arm covering several members, in both pattern and expression
+// position. The test is membership in ANY member: an OR of the same per-member tests
+// each would get written alone.
+//
+// This file exists because the union spec used to fall into the nameless IsVariant
+// catch-all, which answers false for every concrete subject: `name(Green {})` below
+// type-checked, passed exhaustiveness, and fell off its own match into `unreachable`
+// at runtime. The suite was green; the program died.
+
+use std::io;
+
+record Red {}
+record Green {}
+record Blue {}
+type Color = Red | Green | Blue
+
+fn name(c: Color) -> str {
+    match c {
+        is Red | Green => "warm",
+        is Blue => "cool",
+    }
+}
+
+fn main() {
+    io::println(name(Red {}));
+    io::println(name(Green {}));
+    io::println(name(Blue {}));
+
+    // Expression position, and the primitive members: named, null, atom.
+    let v: i64 | str | null = "s";
+    io::println(if v is str | null { "sn" } else { "int" });
+    let w: i64 | str | null = 5;
+    io::println(if w is str | null { "sn" } else { "int" });
+    let x: :a | :b | :c = :b;
+    io::println(if x is :a | :b { "ab" } else { "c" });
+}
