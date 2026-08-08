@@ -424,6 +424,13 @@ treating the rest as noise. Each fix is pinned by a corpus file.
 
 Not bugs in the compiler, but they have cost real time and have invalidated evidence.
 
+- **`cargo test | grep FAILED` finding nothing does not mean the tests passed.** A build
+  failure prints no `test result` lines at all, so a grep for failure is empty and reads as
+  green — which is how a `BuildConfig` initializer in `#[cfg(test)]` code, missing two new
+  fields, passed a local check and broke CI. `cargo build` does not compile test targets;
+  `cargo test --no-run` does. Count the `^test result: ok` lines (there are 15) rather than
+  grepping for the absence of failure.
+
 - **A green local build is not evidence about Windows, or about the linker.** Two CI breaks
   in three days came from taking it as one: `-lm` sat before the archive on the link line
   and glibc 2.34+ resolved `sqrt` anyway, and `cap` was unused inside a `#ifdef _WIN32`

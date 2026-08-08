@@ -514,6 +514,8 @@ mod tests {
             allocator: Allocator::System,
             stacktrace,
             cflags: vec![],
+            cfg: vec![],
+            runtime: None,
         }
     }
 
