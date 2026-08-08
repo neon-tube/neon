@@ -52,6 +52,27 @@ impl<'a> Renderer<'a> {
         secondary: &[(Range<usize>, String)],
         help: Option<&str>,
     ) -> String {
+        self.render_kind(ReportKind::Error, span, msg, secondary, help)
+    }
+
+    /// As `render_full`, reported as a warning: same layout, yellow, and the caller
+    /// does not exit over it — a warning is a note on a program that compiles.
+    pub fn render_warning(&mut self, span: Range<usize>, msg: &str) -> String {
+        self.render_kind(ReportKind::Warning, span, msg, &[], None)
+    }
+
+    pub fn eprint_warning(&mut self, span: Range<usize>, msg: &str) {
+        eprint!("{}", self.render_warning(span, msg));
+    }
+
+    fn render_kind(
+        &mut self,
+        kind: ReportKind<'static>,
+        span: Range<usize>,
+        msg: &str,
+        secondary: &[(Range<usize>, String)],
+        help: Option<&str>,
+    ) -> String {
         let span = self.underline(span);
         let id = self.cache.0.clone();
 
@@ -62,7 +83,11 @@ impl<'a> Renderer<'a> {
             .with_message("")
             .with_order(0);
         if self.color {
-            primary = primary.with_color(Color::Red);
+            primary = primary.with_color(if matches!(kind, ReportKind::Warning) {
+                Color::Yellow
+            } else {
+                Color::Red
+            });
         }
 
         let mut labels = vec![primary];
@@ -79,7 +104,7 @@ impl<'a> Renderer<'a> {
             labels.push(label);
         }
 
-        let mut report = Report::build(ReportKind::Error, (id, span))
+        let mut report = Report::build(kind, (id, span))
             .with_config(
                 // Spans are byte offsets. Ariadne counts characters unless told
                 // otherwise, which puts the underline inside an `é`.

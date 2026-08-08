@@ -62,6 +62,37 @@ pub fn eprint_type_error(
     }
 }
 
+/// Render the checker's warnings, each against the file its span indexes — the user's
+/// program or the owning stdlib source, by the same rule as `eprint_type_error`. Never
+/// exits: a warning is a note on a program that compiles.
+pub fn eprint_warnings(
+    warnings: &[neon_compiler::typecheck::result::Warning],
+    user_path: &Path,
+    user_src: &str,
+    std_sources: &[(String, String)],
+) {
+    for w in warnings {
+        let stdlib = (!w.module.is_empty())
+            .then(|| {
+                std_sources
+                    .iter()
+                    .find(|(rel, _)| neon_compiler::stdlib::module_path(rel) == w.module)
+            })
+            .flatten();
+        match stdlib {
+            Some((rel, wsrc)) => {
+                let shown = std::path::PathBuf::from(format!("<stdlib>/{rel}"));
+                let mut r = Renderer::for_stderr(&shown, wsrc);
+                r.eprint_warning(w.span.clone(), &w.message);
+            }
+            None => {
+                let mut r = Renderer::for_stderr(user_path, user_src);
+                r.eprint_warning(w.span.clone(), &w.message);
+            }
+        }
+    }
+}
+
 /// Type-check a source file, exiting with rendered diagnostics on any error.
 /// `cfg` adds `@cfg` keys on top of the host's. A `@cfg`-guarded branch is dropped before
 /// the checker, so without this the branch for another platform can be neither checked nor
@@ -131,6 +162,9 @@ pub fn check(path: &Path, lib: bool, cfg: &[String]) -> Result<Checked> {
         }
         std::process::exit(1);
     }
+    // Warnings render like errors — against the owning source, stdlib or user — and
+    // change nothing else: the compile continues.
+    eprint_warnings(&result.warnings, path, &src, &std_sources);
     Ok(Checked {
         env,
         result,

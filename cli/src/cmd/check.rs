@@ -62,7 +62,7 @@ pub fn run(file: &OsString, lib: bool, cfg: &[String]) -> Result<()> {
     // would report the same mistake twice. When they are sound, `check_module` returns
     // every diagnostic of the run — its own and the ones raised while resolving
     // annotations — so there is one list either way.
-    let errors = if env.errors().is_empty() {
+    let (result, errors) = if env.errors().is_empty() {
         // `check_all` over every module, not `check_module` over the program alone.
         // `check_module`'s own doc says it is for callers with nothing else to check and
         // that a real compilation goes through `check_all` "so the stdlib is checked into
@@ -72,9 +72,10 @@ pub fn run(file: &OsString, lib: bool, cfg: &[String]) -> Result<()> {
         // verbs disagree about the same file" trap the derive pass was restructured to
         // avoid. It also made `--cfg windows` unable to see a `TODO` in a `@cfg`-guarded
         // stdlib branch, which is most of what that flag is for.
-        neon_compiler::typecheck::check::check_all(&mut env, &modules).1
+        let (r, e) = neon_compiler::typecheck::check::check_all(&mut env, &modules);
+        (Some(r), e)
     } else {
-        env.take_errors()
+        (None, env.take_errors())
     };
     if !errors.is_empty() {
         for e in &errors {
@@ -83,6 +84,9 @@ pub fn run(file: &OsString, lib: bool, cfg: &[String]) -> Result<()> {
         let n = errors.len();
         eprintln!("{n} error{}", if n == 1 { "" } else { "s" });
         std::process::exit(1);
+    }
+    if let Some(result) = &result {
+        crate::frontend::eprint_warnings(&result.warnings, &path, &src, &std_sources);
     }
     Ok(())
 }

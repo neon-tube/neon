@@ -113,6 +113,20 @@ pub struct TypecheckResult {
     /// The resolved type carries the arguments the path only spells, which lets the
     /// backend derive the tag with the *same* function that stamped it into the box.
     tested_types: HashMap<ExprId, TyId>,
+    /// Non-fatal notes the checker attaches to a CLEAN program — performance traps a
+    /// user cannot see any other way, like a read that forces every write in a loop to
+    /// copy its list. Frontends render these and continue; nothing downstream reads
+    /// them, and an empty list is the common case.
+    pub warnings: Vec<Warning>,
+}
+
+/// One warning: where, and what to say. `module` names the declaring module so a
+/// frontend can render against the right source file, exactly as `TypeError` does.
+#[derive(Debug, Clone)]
+pub struct Warning {
+    pub module: Vec<String>,
+    pub span: Span,
+    pub message: String,
 }
 
 impl TypecheckResult {
