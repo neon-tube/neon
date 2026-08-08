@@ -180,18 +180,35 @@ bracket-jump shape so the algorithms match:
 | C, same algorithm                 | 6.36G        | 0.234s | 1.00× |
 
 `ir::unique`'s header already called this — "three bounds checks that cannot be hoisted,
-~11%". It is right, and the number is 15%.
+~11%". It is right, and 11% is also what a *sound* pass can claim. The rest of the 24%
+above is a ceiling, not a target:
 
-**Build: bounds-check hoisting.** Two rules cover the table's second and third rows:
-an index that is a loop induction variable bounded by the guard (`while i < n`, `n =
-list::len(xs)`) needs no check at all; a check on a loop-invariant list whose index is
-in range needs one test *before* the loop, not per iteration. The second rule is what
-gets `args[i]`, where `len(args) >= len(kinds)` is not provable in the body but is
-testable once on entry. Worth ~15% here and it applies to any indexing loop, so
-word-frequency and binary-trees should be re-measured after.
+| soundly eliminable                      | time   | vs C  |
+|-----------------------------------------|--------|-------|
+| `args[i]` + `cells[ptr]` write          | 0.269s | 1.15× |
 
-The last 3% (`cells[ptr]`, a data-dependent index) is not recoverable and not worth
-chasing.
+**The easy half is already done — by gcc.** Removing the `cells[ptr]` *write* check by
+hand gains nothing (0.332s, no better than baseline): same list, same index, same block,
+so gcc had already CSE'd it against the dominating read's check. A plain
+redundant-check-elimination pass therefore buys ~zero. Do not build one expecting a win.
+
+**The whole available 11% is one case: `args[i]`.** It needs a cross-list fact gcc cannot
+get — `len(args) >= len(kinds)` — so the dominating check on `kinds[i]` covers it. Two
+routes: loop versioning (test once on entry, two loop bodies, doubles the loop's code), or
+hoist `m = min(len(kinds), len(args))` before the loop and check `i >= m` once to cover
+both accesses. The `min` is preferred: both lengths are loop-invariant so it is free per
+iteration, and it is observationally identical because no side effect sits between the two
+reads, so trapping at the first rather than the second is unobservable.
+
+**What does *not* apply here:** the textbook rule "an index that is a loop induction
+variable bounded by the guard needs no check". `i = args[i]` (main.neon:150,154) makes `i`
+data-dependent, not monotone. The guard gives `i < n`; the emitted check is a single
+*unsigned* compare (`cmp len; jae`) covering both bounds at once, so proving only the
+upper bound saves nothing — and `i >= 0` comes from `link_brackets` via `args`, which is
+interprocedural. Neither `kinds[i]` nor `cells[ptr]` is recoverable.
+
+Before building this, check it pays elsewhere: brainfuck and n-body are the only benches
+that index at all (`bench/*/neon/src/*.neon`), and n-body is already 0.98× C.
 
 Two hypotheses were measured and **rejected** — do not re-propose them from this profile:
 
