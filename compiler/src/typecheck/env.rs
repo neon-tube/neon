@@ -662,6 +662,11 @@ pub struct Protocol {
     /// super may be declared in any module and order does not matter.
     pub supertraits: Vec<Vec<String>>,
     pub methods: Vec<FnSig>,
+    /// The names of the methods that carry a DEFAULT BODY. An impl that does not write one
+    /// of these still has it, so `ImplDef::methods` inherits the signature and `lower.rs`
+    /// lowers the protocol's body under the impl's key. Recorded here because only the AST
+    /// knows a body was written, and `impl_def` does not have it.
+    pub defaults: Vec<String>,
     pub span: Span,
     /// Declared as `marker P` -- no methods, no impls, satisfied by a compiler rule
     /// keyed on the name rather than by an impl search. See `marker_rule`.
@@ -1259,6 +1264,7 @@ impl Env {
                         subject_arity: p.subject_arity,
                         supertraits,
                         methods: vec![],
+                        defaults: vec![],
                         span: d.span.clone(),
                         is_marker: p.is_marker,
                     });
@@ -1449,6 +1455,8 @@ impl Env {
                         .map(|m| self.fn_sig(module, m, std::slice::from_ref(&subject), &d.span))
                         .collect();
                     self.protocols[id.0].methods = methods;
+                    self.protocols[id.0].defaults =
+                        p.methods.iter().filter(|m| m.body.is_some()).map(|m| m.name.clone()).collect();
                 }
                 ast::DeclKind::Impl(i) => self.impl_def(module, i, &d.span),
                 ast::DeclKind::Mod(m) => {
@@ -1587,7 +1595,54 @@ impl Env {
             let ty = self.solver.t.var(id);
             vars.push(ScopeVar { name: g.clone(), ty, arity: 0 });
         }
-        let methods = i.methods.iter().map(|m| self.fn_sig(module, m, &vars, span)).collect();
+        let mut methods: Vec<FnSig> =
+            i.methods.iter().map(|m| self.fn_sig(module, m, &vars, span)).collect();
+
+        // A method the impl does not write, but the protocol gives a body for, still belongs
+        // to this impl. Its signature is the protocol's with the SUBJECT substituted for this
+        // impl's target: `fn greet(v: T) -> str` on `impl Greet for P` is `fn greet(v: P)`.
+        //
+        // Without this the impl had no such method, and `lower_dispatch` -- which looks the
+        // method up in `ImplDef::methods` -- emitted `<todo: dispatch: no method>` as the
+        // program's OUTPUT, from a program that compiled clean and exited 0. The checker was
+        // never at fault: it checks a default body with the subject bound as a rigid
+        // variable, so the body was type-correct all along and only its signature and code
+        // were missing from the impl.
+        //
+        // Only for a plain subject. A constructor subject (`for C[_]`) is not a type, so
+        // there is nothing to substitute, and no protocol with one has default bodies.
+        if let Some(target) = target {
+            if self.protocols[protocol.0].subject_arity == 0 {
+                let subject = self.protocols[protocol.0].subject.clone();
+                let sname = self.solver.t.name(&subject);
+                let subst = std::collections::HashMap::from([(sname, target)]);
+                let inherited: Vec<FnSig> = self.protocols[protocol.0]
+                    .methods
+                    .iter()
+                    .filter(|m| self.protocols[protocol.0].defaults.contains(&m.name))
+                    .filter(|m| !i.methods.iter().any(|w| w.name == m.name))
+                    .cloned()
+                    .collect();
+                let _ = subst;
+                for mut m in inherited {
+                    // The subject becomes the METHOD's own generic rather than being
+                    // substituted away. The signature still mentions `T`, and the body was
+                    // checked once with `T` rigid, so what has to happen at each call is a
+                    // monomorphisation -- which is exactly what the generic-instance path
+                    // already does for `impl[T] P for List[T]`. Substituting here instead
+                    // produced a monomorphic signature over a body still full of `T`, and
+                    // the variable reached codegen.
+                    //
+                    // The receiver binds it: the first parameter is the subject, so
+                    // `match_repr` against a concrete argument yields `T := P`.
+                    if !m.generics.contains(&subject) {
+                        m.generics.insert(0, subject.clone());
+                    }
+                    m.module = module.to_vec();
+                    methods.push(m);
+                }
+            }
+        }
 
         let wheres =
             i.wheres.iter().filter_map(|w| bound_path(w).map(|p| (w.param.clone(), p))).collect();

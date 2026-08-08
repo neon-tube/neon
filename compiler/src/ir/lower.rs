@@ -835,6 +835,24 @@ fn collect_impl_bodies<'a>(
                             out.insert(mangle_impl(&proto, &head, &m.name), m);
                         }
                     }
+                    // A method the impl does not write, but the protocol gives a body for,
+                    // is lowered HERE under the impl's own key.
+                    //
+                    // Without this the key simply had no body and `lower_dispatch` emitted
+                    // `<todo: dispatch: no method>` — a compiler marker as the program's
+                    // output, from a program that compiled clean and exited 0. The checker
+                    // was never the problem: it checks a default body with the subject
+                    // bound as a rigid variable, so `greet`'s body was type-correct all
+                    // along and only the code was missing.
+                    //
+                    // One body per impl rather than one shared: it is a template, and each
+                    // impl instantiates it at its own target, which is also what lets the
+                    // calls inside it dispatch to that impl's other methods.
+                    for m in default_bodies(env, module, decls, def.protocol) {
+                        if !i.methods.iter().any(|w| w.name == m.name) {
+                            out.entry(mangle_impl(&proto, &head, &m.name)).or_insert(m);
+                        }
+                    }
                 }
             }
             DeclKind::Mod(m) => {
@@ -845,6 +863,37 @@ fn collect_impl_bodies<'a>(
             _ => {}
         }
     }
+}
+
+/// The protocol's methods that carry a default body.
+///
+/// Found by walking `decls` for the `protocol` declaration whose id matches, rather than by
+/// name: two modules may declare a protocol of the same name, and since identity was
+/// qualified they are different protocols. Searches the module's own decls and its nested
+/// mods, which is where a protocol declared alongside its impls lives.
+fn default_bodies<'a>(
+    env: &Env,
+    module: &[String],
+    decls: &'a [Decl],
+    protocol: crate::typecheck::env::ProtocolId,
+) -> Vec<&'a ast::FnDecl> {
+    let mut out = Vec::new();
+    for d in decls {
+        match &d.kind {
+            DeclKind::Protocol(p) => {
+                if env.lookup_protocol(module, &[p.name.clone()]) == Some(protocol) {
+                    out.extend(p.methods.iter().filter(|m| m.body.is_some()));
+                }
+            }
+            DeclKind::Mod(m) => {
+                let mut inner = module.to_vec();
+                inner.push(m.name.clone());
+                out.extend(default_bodies(env, &inner, &m.decls, protocol));
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 /// Lower an impl method, whose types come from its `FnSig` and whose code from the AST.

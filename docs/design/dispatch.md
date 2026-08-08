@@ -285,9 +285,10 @@ the *impls* are what is ranked — not where each impl's body came from.
 
 **Does not hold — a default body is never type-checked.** `check.rs`'s `decls` calls
 `fn_body(module, m, &[])` for a protocol method with a body, so the subject is unbound and a
-signature mentioning `T` reports `unknown type T` at the declaration. Verified 2026-07-19,
-and still true. The consequence for this file is that the dispatch path relying on a default
-(step 7's signature fallback) cannot currently be exercised at all.
+signature mentioning `T` reported `unknown type T` at the declaration. **Fixed** — the
+subject is bound as a rigid variable when the body is checked, and an impl inherits any
+defaulted method it does not write, so step 7's signature fallback is exercised for the first
+time (`protocols/default_body_runs.neon`).
 
 ## Known limitation: binary methods
 
@@ -362,8 +363,8 @@ for, and `docs/design/serialization.md` records what each cost:
 
 Still open:
 
-5. Default method bodies are unchecked, which also makes step 7's default fallback
-   unreachable.
+5. ~~Default method bodies are unchecked, which also makes step 7's default fallback
+   unreachable.~~ Both fixed 2026-08-08.
 6. Ownership-based coherence, blocked on `use` resolving a foreign module.
 7. `Resolution::Bound` picks an impl by head string with no specificity ordering, so a
    concrete `impl P for List[i64]` under a generic `impl[T] P for List[T]` loses to the

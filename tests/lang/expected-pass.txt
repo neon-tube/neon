@@ -232,6 +232,7 @@ protocols/ambiguous_call.neon
 protocols/bounded_impl.neon
 protocols/declare_and_impl.neon
 protocols/default_body_is_checked.neon
+protocols/default_body_runs.neon
 protocols/dispatch_on_receiver.neon
 protocols/generic_impl.neon
 protocols/generic_impl_head.neon

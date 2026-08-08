@@ -372,9 +372,11 @@ was a last-write-wins `method_to_protocol` map.
 
 **Not checked:** a protocol method's *default body*. `check.rs`'s `decls` calls
 `fn_body(module, m, &[])` for it, so the protocol's subject is unbound and any mention of
-`T` in the body is `unknown type T`. Verified 2026-07-19, and re-verified 2026-08-08 with a
-worse symptom than this describes: the program compiles CLEAN and prints
-`<todo: dispatch: no method>` as its output. See `TODO.md` §21. `dispatch.rs`'s
+`T` in the body is `unknown type T`. **Both halves are now false**, and were separately: the
+checker binds the subject as a rigid variable when it checks a default body, and as of
+2026-08-08 the impl inherits the method too, so the body is reached at run time. Verified by
+`protocols/default_body_runs.neon`, including a default body whose inner call lands on an
+impl's override. `dispatch.rs`'s
 `result_of` carries a fallback for an impl relying on a default, and its doc records that
 the path is currently unreachable for exactly this reason.
 

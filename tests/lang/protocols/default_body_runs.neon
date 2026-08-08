@@ -1,0 +1,56 @@
+// A protocol's default method body: an impl that does not write the method still has it.
+//
+// This compiled clean, exited 0, and printed `<todo: dispatch: no method>` as the program's
+// OUTPUT -- the last reachable instance of a class of compiler markers that were fixed in
+// July. The checker was never at fault: it checks a default body with the subject bound as a
+// rigid variable, so the body was type-correct all along. What was missing was on the impl.
+//
+// Two halves. `ImplDef::methods` inherits the signature of a defaulted method the impl does
+// not write, with the SUBJECT kept as the method's own generic rather than substituted away:
+// the body was checked once with `T` rigid, so each impl is a monomorphisation, which is
+// what the generic-instance path already does for `impl[T] P for List[T]`. And
+// `collect_impl_bodies` indexes the protocol's body under that impl's key, so there is code
+// to call.
+//
+// `shout(Q)` is the case worth reading: a default body whose inner call lands on the impl's
+// OVERRIDE rather than on the default it was written beside.
+
+use std::io;
+
+protocol Greet for T {
+    fn name(v: T) -> str
+    fn greet(v: T) -> str {
+        "hi #{name(v)}"
+    }
+    // A default calling another default.
+    fn shout(v: T) -> str {
+        "#{greet(v)}!"
+    }
+}
+
+record P { n: str }
+record Q { n: str }
+
+// Writes only the required method; `greet` and `shout` come from the protocol.
+impl Greet for P {
+    fn name(v: P) -> str {
+        v.n
+    }
+}
+
+// Overrides one default and inherits the other.
+impl Greet for Q {
+    fn name(v: Q) -> str {
+        v.n
+    }
+    fn greet(v: Q) -> str {
+        "yo #{v.n}"
+    }
+}
+
+fn main() {
+    io::println(greet(P { n: "p" }));
+    io::println(shout(P { n: "p" }));
+    io::println(greet(Q { n: "q" }));
+    io::println(shout(Q { n: "q" }));
+}

@@ -992,9 +992,8 @@ cannot supply them: a default can compute from fields the type already has, but 
 create storage.
 
 *(Default method bodies are, separately, never typechecked at all — the protocol's subject
-is unbound when they are checked. Still broken, and worse than it reads: a program with a
-default body compiles clean and prints `<todo: dispatch: no method>` as its output. See
-`TODO.md` §21.)*
+is unbound when they are checked. **Fixed** — the subject is bound as a rigid variable, and
+the impl inherits any method it does not write, so a default body is both checked and run.)*
 
 ### `throws` is unconstrained; `Error` is required only at the top
 

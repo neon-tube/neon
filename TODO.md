@@ -6,11 +6,12 @@ corpus file that pins it. The exception is the perf sections, where a completed 
 measurement that explains the current number and deleting it would make the remaining items
 unreadable.
 
-P0 is empty. P1 holds one item, found on 2026-08-08 by re-verifying a design doc's claim
-rather than by anyone hitting it — a protocol default body prints a compiler marker as
-program output. The section was emptied by the 2026-07-22 audit sweep, refilled by the
-serialization and narrowing work of 2026-08-03/04 — six wrong-answer defects, every one a
-program that compiled and did the wrong thing — and emptied again before this one.
+The P0 and P1 sections are empty. They were emptied by the 2026-07-22 audit sweep, refilled
+by the serialization and narrowing work of 2026-08-03/04 — six wrong-answer defects, every
+one a program that compiled and did the wrong thing — and emptied again. The last of them
+was found on 2026-08-08 by re-verifying a design doc's claim rather than by anyone hitting
+it: a protocol's default body printed a compiler marker as program output. Each fix is
+corpus-pinned.
 
 What is left is of four kinds:
 
@@ -23,34 +24,6 @@ What is left is of four kinds:
   the four anyone has investigated turned out to be real defects.
 
 Each item still has a repro or a file:line.
-
----
-
-## P1 — a protocol's default method body prints a compiler marker
-
-Found 2026-08-08 by re-verifying a doc claim rather than by anyone hitting it. Known in
-outline since 2026-07-19 — `typechecker.md` and `dispatch.md` both say a default body is
-never type-checked — but the symptom they describe is milder than the real one.
-
-    protocol Greet for T {
-        fn name(v: T) -> str
-        fn greet(v: T) -> str { "hi #{name(v)}" }
-    }
-    record P { n: str }
-    impl Greet for P { fn name(v: P) -> str { v.n } }
-
-    greet(P { n: "x" })     // prints `<todo: dispatch: no method>`
-
-The docs say it "reports `unknown type T` at the declaration". It does not. The program
-**compiles clean, exits 0, and prints a compiler marker as its output** — the same class as
-the union-receiver and abstract-receiver markers that were fixed in July, and the last one
-still reachable.
-
-`check.rs`'s `decls` calls `fn_body(module, m, &[])` for a protocol method with a body, so
-the subject is unbound; the body is not checked, and the call inside it never gets a
-resolution, so lowering emits the marker. The fix is to check a default body with the
-subject bound as a rigid variable — the same treatment an impl's own generics get — which
-also makes `dispatch.rs`'s step-7 signature fallback reachable for the first time.
 
 ---
 
