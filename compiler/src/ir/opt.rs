@@ -218,7 +218,7 @@ fn dead_code(
                 .iter()
                 .map(|inst| {
                     let dead = inst.result.is_some_and(|v| !used.contains(&v));
-                    !(dead && !effects::op_is_effectful(f, &inst.op, pure, pure_natives))
+                    !dead || effects::op_is_effectful(f, &inst.op, pure, pure_natives)
                 })
                 .collect()
         })

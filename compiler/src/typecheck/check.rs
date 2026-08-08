@@ -19,6 +19,10 @@ use super::types::TyId;
 use crate::ast::{self, BinOp, Expr, ExprKind, UnOp};
 use crate::lexer::Span;
 
+/// What a condition tells each branch: `(name, narrowed type)` pairs to shadow in the
+/// then-branch and in the else-branch respectively. See `cond_refinements`.
+type Refinements = (Vec<(String, TyId)>, Vec<(String, TyId)>);
+
 /// A single module at the root path. Only tests and callers with nothing else to check
 /// use this; a real compilation goes through `check_all` so the stdlib is checked into
 /// the same result.
@@ -152,7 +156,7 @@ pub fn check_all(
     let mut errors = c.env.take_errors();
     errors.extend(std::mem::take(&mut c.errors));
     // Stable, so two diagnostics at one span keep the order they were raised in.
-    errors.sort_by(|a, b| (a.span.start, a.span.end).cmp(&(b.span.start, b.span.end)));
+    errors.sort_by_key(|e| (e.span.start, e.span.end));
     let mut seen = Vec::new();
     errors.retain(|e| {
         let key = (e.span.clone(), e.kind.clone());
@@ -700,7 +704,9 @@ impl Checker<'_> {
                     // A constructor subject (`for C[_]`) is not a plain rigid and
                     // stays unbound — no stdlib protocol with one has default bodies.
                     let mut extra: Vec<(String, super::env::ProtocolId)> = vec![];
-                    if let Some(pid) = self.env.lookup_protocol(module, &[p.name.clone()]) {
+                    if let Some(pid) =
+                        self.env.lookup_protocol(module, std::slice::from_ref(&p.name))
+                    {
                         extra.push((p.subject.clone(), pid));
                     }
                     for w in &p.wheres {
@@ -2814,7 +2820,7 @@ impl Checker<'_> {
     /// can receive a `never` binding: a test that always or never matches refines
     /// nothing rather than poisoning a branch (see narrow.rs's module docs for why a
     /// `never` binding is the trap).
-    fn cond_refinements(&mut self, cond: &Expr) -> (Vec<(String, TyId)>, Vec<(String, TyId)>) {
+    fn cond_refinements(&mut self, cond: &Expr) -> Refinements {
         let nothing = (vec![], vec![]);
         match &cond.kind {
             ExprKind::Is { lhs, .. } => {
@@ -2879,7 +2885,7 @@ impl Checker<'_> {
         subject: TyId,
         refined: narrow::Refined,
         flip: bool,
-    ) -> (Vec<(String, TyId)>, Vec<(String, TyId)>) {
+    ) -> Refinements {
         let Some((then_ty, else_ty)) = refined.both() else { return (vec![], vec![]) };
         let top = self.env.solver.t.any();
         let subject_is_top = self.env.solver.is_subtype(top, subject);

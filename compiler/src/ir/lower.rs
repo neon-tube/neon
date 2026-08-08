@@ -889,10 +889,11 @@ fn default_bodies<'a>(
     let mut out = Vec::new();
     for d in decls {
         match &d.kind {
-            DeclKind::Protocol(p) => {
-                if env.lookup_protocol(module, &[p.name.clone()]) == Some(protocol) {
-                    out.extend(p.methods.iter().filter(|m| m.body.is_some()));
-                }
+            DeclKind::Protocol(p)
+                if env.lookup_protocol(module, std::slice::from_ref(&p.name))
+                    == Some(protocol) =>
+            {
+                out.extend(p.methods.iter().filter(|m| m.body.is_some()));
             }
             DeclKind::Mod(m) => {
                 let mut inner = module.to_vec();

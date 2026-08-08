@@ -220,10 +220,11 @@ impl TypeTable {
             // A back-edge carries no structure, so register the type it names instead —
             // once. The guard is what stops the cycle re-entering itself forever.
             Repr::Recursive(ty) => {
-                if self.resolved.insert(*ty) {
-                    if let Some(u) = self.recursive.get(ty).cloned() {
-                        self.register(&u);
-                    }
+                if !self.resolved.insert(*ty) {
+                    return;
+                }
+                if let Some(u) = self.recursive.get(ty).cloned() {
+                    self.register(&u);
                 }
             }
             // A heap-allocated record: register the layout it points at, then the wrapper

@@ -7,6 +7,10 @@
 use crate::ast::Module;
 use crate::{lexer, parser};
 
+/// Parsed stdlib modules, each under its path prefix, plus the next free expression id —
+/// the one the program is numbered from so ids stay unique across the whole compilation.
+pub type ParsedStdlib = (Vec<(Vec<String>, Module)>, u32);
+
 /// The module prefix a stdlib-relative path denotes: `std/io.neon` → `["std","io"]`,
 /// `std/collections/list.neon` → `["std","collections","list"]`.
 pub fn module_path(rel: &str) -> Vec<String> {
@@ -46,7 +50,7 @@ pub fn parse_with(
 pub fn parse_from(
     sources: &[(String, String)],
     base: u32,
-) -> Result<(Vec<(Vec<String>, Module)>, u32), String> {
+) -> Result<ParsedStdlib, String> {
     parse_from_with(sources, base, &crate::expand::Config::for_host([]))
 }
 
@@ -59,7 +63,7 @@ pub fn parse_from_with(
     sources: &[(String, String)],
     base: u32,
     config: &crate::expand::Config,
-) -> Result<(Vec<(Vec<String>, Module)>, u32), String> {
+) -> Result<ParsedStdlib, String> {
     let mut out = Vec::with_capacity(sources.len());
     let mut next = base;
     // The stdlib goes through `expand` like any user module — here, at the one
