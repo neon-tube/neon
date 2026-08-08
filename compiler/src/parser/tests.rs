@@ -1013,7 +1013,7 @@ fn use_trees_in_every_shape() {
         "use x::y as w;",
         "use x::*;",
         "use x::{a, b as c};",
-        "use std::collections::{list, map};",
+        "use std::{list, map};",
         "use thing::Frobulate::frobulate;",
         "use a::{b::{c, d}, e::*};",
     ] {

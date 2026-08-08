@@ -8,7 +8,7 @@
 
 use std::io;
 use std::string;
-use std::collections::list;
+use std::list;
 
 fn dump(label: str, rows: List[List[i64]]) {
     let parts: List[str] = [];

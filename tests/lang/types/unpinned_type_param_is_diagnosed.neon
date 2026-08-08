@@ -13,7 +13,7 @@
 // annotated and turbofish spellings of this same call infer fine and are pinned across the
 // collections corpus.
 
-use std::collections::list;
+use std::list;
 
 fn make[T]() -> List[T] { list::new() }
 

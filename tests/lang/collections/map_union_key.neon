@@ -12,7 +12,7 @@
 // by scanning a nearly empty table, which is how this survived.
 
 use std::io;
-use std::collections::map;
+use std::map;
 
 fn main() {
     let nullable: Map[str | null, i64] = map::new();

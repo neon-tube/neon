@@ -4,7 +4,7 @@
 
 Two declarations are the same type when they were written at the same path under the same
 name. `vault::Secret` and `forge::Secret` are different types. `List` declared in
-`std::collections::list` is `std::collections::list::List` wherever it is written from.
+`std::list` is `std::list::List` wherever it is written from.
 
 ## What it is today, and why that is a hole
 
@@ -57,10 +57,10 @@ artifact of identity being *wrong*, not a property worth preserving.
    `as` compare on erased values. Qualify the checker but not the tag and the checker
    distinguishes two same-named types while the runtime cannot — a fresh soundness hole
    of exactly the class `opacity.md` exists to close. This is why the change is atomic.
-3. **`List` and `Map` now qualify under `std::collections`.** They were moved out of the
+3. **`List` and `Map` now qualify under `std` directly.** They were moved out of the
    prelude on 2026-07-20 (so that their opacity owner is a real module rather than the
    root every program shares), so the literal-matching sites below must expect
-   `std::collections::list::List`, not `List`.
+   `std::list::List`, not `List`.
 4. **A same-named type in the program and the stdlib stops colliding**, which is what
    `tests/lang/modules/prelude_names_can_be_shadowed.neon` pins. The checker already
    handles it since the prelude moved to its own scope; the backend does not, and panics

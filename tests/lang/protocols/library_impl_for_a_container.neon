@@ -4,7 +4,7 @@
 // head bound `T` to, and one lowered body per element type.
 //
 // It used to be written HERE, in the test, to prove the machinery could express it. It now
-// lives in `std::collections::list` and `std::collections::map`, so this file exercises the
+// lives in `std::list` and `std::map`, so this file exercises the
 // real impls instead of a fixture. That is what closing the litmus means: rendering a list
 // is something the stdlib does, not something each program re-derives.
 //
@@ -17,8 +17,8 @@
 // (docs/decisions.md, "Comparison is structural").
 
 use std::io;
-use std::collections::list;
-use std::collections::map;
+use std::list;
+use std::map;
 
 record Point { x: i64, y: i64 }
 

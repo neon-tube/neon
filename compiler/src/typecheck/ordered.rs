@@ -91,11 +91,11 @@ fn equatable_rec(env: &Env, ty: TyId, seen: &mut Vec<TyId>) -> bool {
             // A map compares by content, so its *values* must be comparable. Its keys
             // already are -- a key type without content equality could not be hashed into
             // the table in the first place.
-            Some("std::collections::map::Map") => match arg_of(env, ty, 1) {
+            Some("std::map::Map") => match arg_of(env, ty, 1) {
                 Some(val) => equatable_rec(env, val, seen),
                 None => false,
             },
-            Some("std::collections::list::List") => match arg_of(env, ty, 0) {
+            Some("std::list::List") => match arg_of(env, ty, 0) {
                 Some(elem) => equatable_rec(env, elem, seen),
                 None => false,
             },
@@ -215,8 +215,8 @@ fn ordered_rec(env: &Env, ty: TyId, bound: &HashSet<String>, seen: &mut Vec<TyId
     } else {
         match super::nominal_head_of(env, ty).as_deref() {
             // Opaque and pointer-backed: no elements reachable, nothing to compare.
-            Some("std::collections::map::Map") => false,
-            Some("std::collections::list::List") => match arg_of(env, ty, 0) {
+            Some("std::map::Map") => false,
+            Some("std::list::List") => match arg_of(env, ty, 0) {
                 Some(elem) => ordered_rec(env, elem, bound, seen),
                 None => false,
             },

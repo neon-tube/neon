@@ -5,7 +5,7 @@
 // writes every cell independently.
 
 use std::io;
-use std::collections::list;
+use std::list;
 
 fn main() {
     let n = 3;

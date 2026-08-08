@@ -18,7 +18,7 @@
 // `¬B` alone, every record except B, an unbounded shape -- is still declined.
 
 use std::io;
-use std::collections::list;
+use std::list;
 
 record A { a: i64 }
 record B { b: str }

@@ -3975,7 +3975,7 @@ fn arith_domain_text(op: BinOp) -> &'static str {
 /// else in the toolchain will ever say why. `ir::unique` detects the same shape only to
 /// silently decline its rewrite; this is the user-facing half of that analysis.
 ///
-/// Syntactic on purpose: the callee must RESOLVE to `std::collections::list::set` (a
+/// Syntactic on purpose: the callee must RESOLVE to `std::list::set` (a
 /// user function named `set` does not trigger it), the list argument must be a bare
 /// local, and the read is any later mention of that local in the same loop body. That
 /// misses aliases and flow — a lint may — but it cannot misfire on a program the cliff
@@ -4009,9 +4009,10 @@ fn stale_write_lint(
                 if let (ExprKind::Path(p), Some(first)) = (&callee.kind, args.first()) {
                     if let ExprKind::Path(fp) = &first.kind {
                         if let [name] = fp.as_slice() {
-                            let is_std_set = self.env.fn_named(self.module, p).is_some_and(|s| {
-                                s.name == "set" && s.module == ["std", "collections", "list"]
-                            });
+                            let is_std_set = self
+                                .env
+                                .fn_named(self.module, p)
+                                .is_some_and(|s| s.name == "set" && s.module == ["std", "list"]);
                             if is_std_set {
                                 self.out.push(name.clone());
                             }

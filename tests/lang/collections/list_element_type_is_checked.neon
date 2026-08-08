@@ -6,7 +6,7 @@
 // to a union to accommodate the push.
 
 use std::io;
-use std::collections::list;
+use std::list;
 
 fn main() {
     let xs: List[i64] = [1, 2, 3];

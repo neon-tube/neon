@@ -97,11 +97,11 @@ fn split(s: str, sep: str) -> List[str] {
         let rest = s;
         let at = raw::index_of(rest, sep);
         while at >= 0 {
-            out = std::collections::list::push(out, raw::slice_unchecked(rest, 0, at));
+            out = std::list::push(out, raw::slice_unchecked(rest, 0, at));
             rest = raw::slice_unchecked(rest, at + byte_len(sep), byte_len(rest));
             at = raw::index_of(rest, sep);
         };
-        std::collections::list::push(out, rest)
+        std::list::push(out, rest)
     }
 }
 
@@ -118,7 +118,7 @@ fn lines(s: str) -> List[str] {
         // need a list slice, and this needs nothing.
         let body = trim_end_of(s, "\n");
         for part in split(body, "\n") {
-            out = std::collections::list::push(out, trim_end_of(part, "\r"));
+            out = std::list::push(out, trim_end_of(part, "\r"));
         };
         out
     }

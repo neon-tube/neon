@@ -12,7 +12,7 @@ use crate::{lexer, parser};
 pub type ParsedStdlib = (Vec<(Vec<String>, Module)>, u32);
 
 /// The module prefix a stdlib-relative path denotes: `std/io.neon` → `["std","io"]`,
-/// `std/collections/list.neon` → `["std","collections","list"]`.
+/// `std/list.neon` → `["std","collections","list"]`.
 pub fn module_path(rel: &str) -> Vec<String> {
     let rel = rel.strip_suffix(".neon").unwrap_or(rel);
     // The prelude gets a path of its own — one no source can write. Resolution consults
@@ -99,10 +99,10 @@ mod tests {
     #[test]
     fn module_path_from_relative() {
         assert_eq!(module_path("std/io.neon"), vec!["std", "io"]);
-        assert_eq!(
-            module_path("std/collections/list.neon"),
-            vec!["std", "collections", "list"]
-        );
+        assert_eq!(module_path("std/list.neon"), vec!["std", "list"]);
+        // Nested directories still map by path — the mechanism outlived the stdlib's
+        // use of it (collections/ was flattened away).
+        assert_eq!(module_path("std/a/b.neon"), vec!["std", "a", "b"]);
         // The prelude declares at a path of its own, which resolution consults last so
         // its short names need no `use` and a program can still shadow any of them. NOT
         // the root: that is the program's own path, and sharing it made prelude opaques

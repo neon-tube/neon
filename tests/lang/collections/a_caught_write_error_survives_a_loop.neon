@@ -5,7 +5,7 @@
 // printing "caught".
 
 use std::io;
-use std::collections::list;
+use std::list;
 
 fn main() {
     let acc = list::repeat(0, 3);

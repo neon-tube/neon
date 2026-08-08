@@ -2,8 +2,8 @@
 //
 // Kept small on purpose. A name here is a name no program can declare, so the bar is
 // "syntax needs it", not "it is useful". Everything else lives in the module that owns it:
-// `ParseError` in `std::string`, `KeyError` in `std::collections::map`, `IoError`, `Bytes`
-// and `IoList` in `std::fs`, `Mappable` in `std::collections::list`.
+// `ParseError` in `std::string`, `KeyError` in `std::map`, `IoError`, `Bytes`
+// and `IoList` in `std::fs`, `Mappable` in `std::list`.
 //
 // What is here, and why:
 //   Display, Error      `#{x}` desugars to `to_string(x)`; `main`'s implicit channel
@@ -13,11 +13,11 @@
 //                       their runtime representations, so they must be unambiguous.
 //   range               `for i in range(a, b)` is the loop idiom; moving it would put an
 //                       import in front of every counted loop.
-//   IndexError          thrown by both `std::string` and `std::collections::list`, so it
+//   IndexError          thrown by both `std::string` and `std::list`, so it
 //                       has no single owner to move to. A shared `std::error` would be the
 //                       home if one existed.
 //   Ordering            returned by the `_by` callbacks that `std::cmp` and
-//                       `std::collections::list` both take -- same shared-owner problem.
+//                       `std::list` both take -- same shared-owner problem.
 //
 // Declared at the root, so these names resolve by their short names from any module.
 //
@@ -42,19 +42,19 @@ fn range(from: i64, to: i64) -> List[i64] {
     let out: List[i64] = [];
     let i = from;
     while i < to {
-        out = std::collections::list::push(out, i);
+        out = std::list::push(out, i);
         i = i + 1;
     };
     out
 }
 
 // The built-in collections. They are DECLARED by the modules that implement them --
-// `std::collections::list` and `::map` -- and only re-exported here so `List[T]` needs no
+// `std::list` and `::map` -- and only re-exported here so `List[T]` needs no
 // `use`. Declaring them at the root instead made the root their opacity owner, and the
 // root is the user's own module path: every program could reach inside its own `List`.
 // See docs/design/opacity.md on the prelude/root path collision.
-use std::collections::list::List;
-use std::collections::map::Map;
+use std::list::List;
+use std::map::Map;
 
 // ---- markers ----
 
@@ -86,7 +86,7 @@ protocol Error for T {
     fn message(v: T) -> str
 }
 
-/// Thrown by two modules -- `std::string` and `std::collections::list` -- which is why it
+/// Thrown by two modules -- `std::string` and `std::list` -- which is why it
 /// is here rather than owned by one of them.
 ///
 /// `Display` renders the value; `Error::message` explains the failure. Here they read the

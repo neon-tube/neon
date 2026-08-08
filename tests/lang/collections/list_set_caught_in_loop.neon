@@ -13,7 +13,7 @@
 // identical anyway: the rewrite is an optimisation, never a semantics.
 
 use std::io;
-use std::collections::list;
+use std::list;
 
 fn fill(n: i64, extra: i64) -> str {
     let acc = list::repeat(0, n);

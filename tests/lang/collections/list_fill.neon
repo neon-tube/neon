@@ -11,7 +11,7 @@
 // one index leaves the rest alone. That is the property a tape depends on.
 
 use std::io;
-use std::collections::list;
+use std::list;
 
 fn main() {
     // Same length, every element replaced.

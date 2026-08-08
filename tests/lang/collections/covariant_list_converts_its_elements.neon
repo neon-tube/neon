@@ -22,8 +22,8 @@
 // runs clean under `--sanitize address`.
 
 use std::io;
-use std::collections::list;
-use std::collections::map;
+use std::list;
+use std::map;
 
 record R { s: str }
 

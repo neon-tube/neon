@@ -9,7 +9,7 @@
 // The map itself: nominal, covariant in its arguments, and opaque -- the storage is
 // native. Declared here rather than in the prelude for the same reason `List` is: the
 // declaring module owns it, and the prelude's path is the root every program shares.
-use std::collections::list;
+use std::list;
 use std::string;
 
 opaque record Map[K, V] {}

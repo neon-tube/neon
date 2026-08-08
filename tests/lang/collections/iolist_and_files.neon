@@ -22,7 +22,7 @@ use std::io;
 use std::path;
 use std::string;
 use std::fs;
-use std::collections::list;
+use std::list;
 
 fn write_via_handle(p: path::Path, doc: fs::IoList) throws fs::IoError -> null {
     let f = try fs::create(p);

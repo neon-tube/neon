@@ -9,7 +9,7 @@
 
 use std::io;
 use std::string;
-use std::collections::list;
+use std::list;
 
 fn id[T](x: T) -> T { x }
 fn relay[T](x: T) -> T { id(x) }

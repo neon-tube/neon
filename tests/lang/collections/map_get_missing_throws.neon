@@ -14,7 +14,7 @@
 
 use std::io;
 use std::string;
-use std::collections::map;
+use std::map;
 
 fn main() {
     let m: Map[str, i64] = map::set(map::set(map::new(), "zero", 0), "one", 1);

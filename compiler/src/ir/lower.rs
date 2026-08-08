@@ -692,7 +692,7 @@ pub fn lower_module_with<'a>(
     // which is exactly backwards: the instance is what the hot loop calls.
     // Through `mangle`, because a `FnSig` carries its module separately from its name
     // while a `Func` carries the two already joined -- comparing the bare `set` against
-    // `std__collections__list__set` matches nothing, silently.
+    // `std__list__set` matches nothing, silently.
     let inline_bases: Vec<String> = env
         .fns()
         .iter()

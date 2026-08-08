@@ -14,7 +14,7 @@
 // is what actually enforces this — the printed output would look correct either way.
 
 use std::io;
-use std::collections::list;
+use std::list;
 
 fn main() {
     // Heap strings, so a missed release is a real leak rather than a static literal.

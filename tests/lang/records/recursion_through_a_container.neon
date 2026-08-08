@@ -11,7 +11,7 @@
 // and still reported.
 
 use std::io;
-use std::collections::list;
+use std::list;
 
 record Tree { v: i64, kids: List[Tree] }
 

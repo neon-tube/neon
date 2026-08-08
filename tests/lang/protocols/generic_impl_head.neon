@@ -4,7 +4,7 @@
 // meet of a rigid `T` with any concrete type is empty, so before matching, a generic
 // impl parsed, checked its own body, and then applied to nothing at all.
 
-use std::collections::list;
+use std::list;
 use std::io;
 use std::string;
 

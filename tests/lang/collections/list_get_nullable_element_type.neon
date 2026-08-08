@@ -21,7 +21,7 @@
 
 use std::io;
 use std::string;
-use std::collections::list;
+use std::list;
 
 // Three outcomes, not two. A `T | null` get could only ever produce two.
 fn probe(xs: List[i64 | null], i: i64) -> str {

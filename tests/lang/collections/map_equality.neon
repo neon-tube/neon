@@ -6,7 +6,7 @@
 // the checker had nothing to say about it.
 
 use std::io;
-use std::collections::map;
+use std::map;
 
 fn main() {
     let a = map::set(map::set(map::new(), "x", 1), "y", 2);

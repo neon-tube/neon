@@ -22,8 +22,8 @@
 // selection serde spells `T::deserialize`, and it needs no turbofish because the checker
 // already carries an expected type to every call.
 
-use std::collections::list;
-use std::collections::map;
+use std::list;
+use std::map;
 use std::math;
 use std::string;
 
@@ -72,7 +72,7 @@ impl[V] ToJson for Map[str, V] where V: ToJson {
 
 /// An object from its fields, in one call. This is the shape `@derive(ToJson)` generates
 /// against: a derive that emitted a `map::new` and one `map::set` per field would work, but
-/// it would need `std::collections::map` in scope in the *user's* module to do it, and a
+/// it would need `std::map` in scope in the *user's* module to do it, and a
 /// generated body that depends on the author's imports is a generated body that breaks on
 /// someone else's file.
 fn object(fields: List[(str, Json)]) -> Json {
@@ -293,7 +293,7 @@ impl[V] FromJson for Map[str, V] where V: FromJson {
 
 /// One field of an object. This is the shape `@derive(FromJson)` generates against, for the
 /// reason `object` is on the encode side: a generated body must not depend on the author
-/// having imported `std::collections::map`.
+/// having imported `std::map`.
 ///
 /// A missing field is an error rather than null. A field whose type admits null can say so,
 /// and then `null` is what is in the document; conflating "absent" with "present and null"

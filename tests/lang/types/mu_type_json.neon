@@ -4,8 +4,8 @@
 
 use std::io;
 use std::string;
-use std::collections::list;
-use std::collections::map;
+use std::list;
+use std::map;
 
 mu type Json = null | bool | f64 | str | List[Json] | Map[str, Json]
 

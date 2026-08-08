@@ -326,8 +326,8 @@ fn atom_layout_successors(t: &Types, atom: u32, out: &mut Vec<TyId>) {
         return;
     }
     match name.as_deref() {
-        Some("std::collections::list::List") => out.extend(field_ty(t, atom, "#0")),
-        Some("std::collections::map::Map") => {
+        Some("std::list::List") => out.extend(field_ty(t, atom, "#0")),
+        Some("std::map::Map") => {
             out.extend(field_ty(t, atom, "#0"));
             out.extend(field_ty(t, atom, "#1"));
         }
@@ -568,7 +568,7 @@ fn value_atoms_of(t: &Types, ty: TyId, out: &mut Vec<u32>, seen: &mut HashSet<Ty
     for a in positive_atoms(&t.rec_bdd.paths(d.records)) {
         if matches!(
             nominal_name(t, a).as_deref(),
-            Some("std::collections::list::List") | Some("std::collections::map::Map")
+            Some("std::list::List") | Some("std::map::Map")
         ) {
             continue;
         }
@@ -815,12 +815,12 @@ fn record_repr(t: &Types, atom_idx: u32, cyclic: &HashSet<TyId>, boxed: &HashSet
     // `List` and `Map` still have their own reprs: their element types drive witness
     // emission and the codegen-assisted natives, so they move separately.
     match name.as_deref() {
-        Some("std::collections::list::List") => {
+        Some("std::list::List") => {
             let elem = field_ty(t, atom_idx, "#0")
                 .map_or(Repr::Never, |e| repr_rec(t, e, cyclic, boxed, false));
             return Repr::List(Box::new(elem));
         }
-        Some("std::collections::map::Map") => {
+        Some("std::map::Map") => {
             let k = field_ty(t, atom_idx, "#0")
                 .map_or(Repr::Never, |e| repr_rec(t, e, cyclic, boxed, false));
             let v = field_ty(t, atom_idx, "#1")

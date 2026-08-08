@@ -22,8 +22,8 @@
 // took the List arm and was reinterpreted there, printing 94608184888736 instead of 1.
 
 use std::io;
-use std::collections::list;
-use std::collections::map;
+use std::list;
+use std::map;
 
 type Wide = { v: List[i64] | Map[str, i64], n: i64 }
 type Narrow = { v: Map[str, i64], n: i64 }

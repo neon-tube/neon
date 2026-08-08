@@ -12,7 +12,7 @@
 
 use std::io;
 use std::string;
-use std::collections::map;
+use std::map;
 
 fn id(s: str) -> str { s }
 

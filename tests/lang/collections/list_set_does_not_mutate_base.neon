@@ -6,7 +6,7 @@
 
 use std::io;
 use std::string;
-use std::collections::list;
+use std::list;
 
 // Every index below is in range, so `[]` is the right tool: presence is already
 // established and there is nothing to handle.

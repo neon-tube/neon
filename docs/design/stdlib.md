@@ -66,7 +66,7 @@ is: **if you can write it without naming it, it is in the prelude.**
     List, Map            `record_repr` still matches these two names literally
     range                `for i in range(a, b)`; moving it would put an import in front
                          of every counted loop
-    IndexError           thrown by `std::string` and `std::collections::list` both, so it
+    IndexError           thrown by `std::string` and `std::list` both, so it
                          has no single owner
     Ordering             returned by the `_by` callbacks `std::cmp` and `list` both take
     impl Display         for `i64`, `f64`, `bool`, `str`
@@ -117,7 +117,7 @@ have one answer, not the two protocols being one.
 iteration in most programs and it must be a C loop over a contiguous buffer. It is not
 extensible to user containers.
 
-Transformation is eager and lives on an HKT protocol, in `std::collections::list`:
+Transformation is eager and lives on an HKT protocol, in `std::list`:
 
     protocol Mappable for C[_] {
         fn map[T, U](c: C[T], f: (T) -> U) -> C[U]
@@ -166,11 +166,11 @@ Module headers are the reference. The shape:
                          starts_with, ends_with, to_upper, to_lower, repeat, is_empty,
                          split, lines, trim, trim_start, trim_end, trim_end_of, replace,
                          ParseError
-    std::collections::list
+    std::list
                          Mappable (map/filter/fold), new, new_with_capacity, len, get, set,
                          push, concat, sort, sort_by, merge, is_empty, first, last,
                          contains, index_of, reverse, slice, sum
-    std::collections::map
+    std::map
                          new, len, get, get_or, set, contains, remove, keys, values,
                          is_empty, KeyError
     std::fs              File, IoError, Bytes, IoList, open, create, open_append, close,

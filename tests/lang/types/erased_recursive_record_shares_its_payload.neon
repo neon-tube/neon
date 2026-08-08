@@ -6,7 +6,7 @@
 // to a function, and an erasure in a loop.
 
 use std::io;
-use std::collections::list;
+use std::list;
 use std::string;
 
 record Node {

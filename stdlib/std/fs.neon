@@ -180,9 +180,9 @@ fn flatten(data: IoList) -> List[str] {
 /// was given plus whatever its subtree contributed.
 fn collect(data: IoList, acc: List[str]) -> List[str] {
     if data is Bytes {
-        std::collections::list::push(acc, data as Bytes as str)
+        std::list::push(acc, data as Bytes as str)
     } else if data is str {
-        std::collections::list::push(acc, data as str)
+        std::list::push(acc, data as str)
     } else {
         let out = acc;
         for part in data as List[IoList] {

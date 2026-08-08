@@ -14,7 +14,7 @@
 // `==` is fine on all three: equality is total. Only ordering is refused.
 
 use std::io;
-use std::collections::map;
+use std::map;
 
 record Node { v: i64, next: Node | null }
 

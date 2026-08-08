@@ -24,7 +24,7 @@
 
 use std::io;
 use std::string;
-use std::collections::list;
+use std::list;
 
 // `+`/`-` runs, `>`/`<` runs, output, input, and the two bracket ends.
 type Kind = :add | :move | :out | :in | :open | :close

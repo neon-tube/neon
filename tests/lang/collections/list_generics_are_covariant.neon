@@ -14,7 +14,7 @@
 
 use std::io;
 use std::string;
-use std::collections::list;
+use std::list;
 
 record Circle { radius: i64 }
 record Square { side: i64 }

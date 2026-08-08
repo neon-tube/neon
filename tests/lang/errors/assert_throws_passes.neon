@@ -5,7 +5,7 @@
 // because the handler's parameter takes the checker's exact error union, not `any`.
 
 use std::io;
-use std::collections::list;
+use std::list;
 
 type Boom = { message: str }
 impl Error for Boom {

@@ -136,7 +136,7 @@ use super::ssa::{Block, BlockId, Func, Inst, Op, PrimOp, Program, Target, Term, 
 use std::collections::{HashMap, HashSet};
 
 /// The lowered name of the stdlib write, before the monomorphised suffix.
-const SET_PREFIX: &str = "std__collections__list__set";
+const SET_PREFIX: &str = "std__list__set";
 
 /// A list value whose writes could become in-place, and the evidence for it.
 #[derive(Debug, Clone)]

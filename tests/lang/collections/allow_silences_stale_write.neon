@@ -6,7 +6,7 @@
 // warns anyway shows up as a diff here.)
 
 use std::io;
-use std::collections::list;
+use std::list;
 
 @allow(stale_write)
 fn sum_of_old(n: i64) -> i64 {

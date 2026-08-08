@@ -5,7 +5,7 @@
 
 use std::os;
 use std::io;
-use std::collections::list;
+use std::list;
 use std::string;
 
 fn main() {

@@ -11,7 +11,7 @@ record's contents are. Both compare the accessing module's path with the declari
 
 One visibility mechanism, module-granular. There is no per-item modifier.
 
-    // std::collections::list
+    // std::list
     internal mod raw {
         @native("neon_list_set") fn set_unchecked[T](xs: List[T], i: i64, v: T) -> List[T]
     }
@@ -22,14 +22,14 @@ One visibility mechanism, module-granular. There is no per-item modifier.
     }
 
 Names inside an `internal mod` resolve **only from the subtree rooted at the module that
-declared it**. `std::collections::list::raw` resolves from `std::collections::list` and
+declared it**. `std::list::raw` resolves from `std::list` and
 anything beneath it, and nowhere else. A path segment literally named `internal` marks a
 directory the same way, with the same rule.
 
 Subtree rather than parent-only, so two siblings can share an internal helper — a hashing
-or witness routine wanted by both `list` and `map` goes in `std::collections::internal` and
-is reachable from both. Parent-only would force it up into the parent and out of reach of
-the modules that need it.
+or witness routine wanted by both `std::list` and `std::map` would go in `std::internal`
+and be reachable from both. Parent-only would force it up into the parent and out of
+reach of the modules that need it.
 
 **Enforced while resolving a name**, in `Env::candidates` — the choke point every lookup
 passes through — not while checking a `use`. `candidates` calls `visible_from` and *drops*
@@ -164,7 +164,7 @@ the program's record, with the error surfacing in stdlib code the program never 
 Two filters apply there, both keyed on the unit that wrote the thing: a `use` binding is
 only consulted by its own unit, and a **single-segment** name is only read by the root
 application. Multi-segment paths still resolve, because at the root scope the "relative"
-reading *is* the absolute one — `std::collections::list::push` resolves from anywhere
+reading *is* the absolute one — `std::list::push` resolves from anywhere
 precisely because of it. Pinned by `modules/imports_do_not_cross_unit_boundaries.neon`.
 
 ### The prelude has a path of its own

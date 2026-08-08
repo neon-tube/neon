@@ -14,7 +14,7 @@
 // wrong slot.
 
 use std::io;
-use std::collections::list;
+use std::list;
 
 fn fill(m: List[List[i64]], n: i64) -> List[List[i64]] {
     for i in range(0, n) {

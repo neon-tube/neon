@@ -5,7 +5,7 @@
 // right column and no sanitizer says a word.
 
 use std::io;
-use std::collections::list;
+use std::list;
 
 fn main() {
     let acc = list::repeat(0, 3);

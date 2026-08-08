@@ -15,7 +15,7 @@
 use std::io;
 use std::math;
 use std::fmt;
-use std::collections::list;
+use std::list;
 
 record Body {
     x: f64,

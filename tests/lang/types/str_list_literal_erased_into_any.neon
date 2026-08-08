@@ -7,7 +7,7 @@
 // a sanitizer report is the expected failure mode here, not wrong output.
 
 use std::io;
-use std::collections::list;
+use std::list;
 
 fn main() {
     let ls: any = ["alpha", "beta", "gamma"];

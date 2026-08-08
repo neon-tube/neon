@@ -10,7 +10,7 @@
 
 use std::io;
 use std::string;
-use std::collections::list;
+use std::list;
 
 fn show(label: str, xs: List[i64]) {
     let parts: List[str] = [];

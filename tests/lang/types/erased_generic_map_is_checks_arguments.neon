@@ -6,7 +6,7 @@
 // position is enough to make the answer false.
 
 use std::io;
-use std::collections::map;
+use std::map;
 
 fn main() {
     let m: any = map::set(map::new[str, i64](), "a", 1);

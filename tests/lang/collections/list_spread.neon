@@ -9,7 +9,7 @@
 // silently miscompiled it; these values pin the real thing.
 
 use std::io;
-use std::collections::list;
+use std::list;
 
 fn main() {
     let xs = [3, 4];

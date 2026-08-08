@@ -83,7 +83,7 @@ fn final_has_native(src: &str, func: &str, symbol: &str) -> bool {
 
 const QUALIFIES: &str = r##"
 use std::io;
-use std::collections::list;
+use std::list;
 
 fn bump(xs: List[i64], n: i64) -> List[i64] {
     let acc = xs;
@@ -123,7 +123,7 @@ fn an_escape_into_a_container_disqualifies() {
     // qualifies — which is how the first version of this test refuted itself.)
     let src = r##"
 use std::io;
-use std::collections::list;
+use std::list;
 
 fn f(xs: List[i64], n: i64) -> List[List[i64]] {
     let acc = xs;
@@ -152,7 +152,7 @@ fn an_escape_behind_a_join_disqualifies() {
     // stopped at the first non-header carry, would have missed.
     let src = r##"
 use std::io;
-use std::collections::list;
+use std::list;
 
 fn f(xs: List[i64], n: i64) -> List[List[i64]] {
     let acc = xs;
@@ -186,7 +186,7 @@ fn a_read_after_the_write_disqualifies() {
     // `tests/lang/collections/a_read_after_a_loop_write_sees_the_old_list.neon`.
     let src = r##"
 use std::io;
-use std::collections::list;
+use std::list;
 
 fn main() {
     let acc = list::repeat(0, 3);
@@ -209,7 +209,7 @@ fn a_forked_write_disqualifies() {
     // Two writes consuming one value are two logical lists that must not share a buffer.
     let src = r##"
 use std::io;
-use std::collections::list;
+use std::list;
 
 fn main() {
     let acc = list::repeat(0, 3);
@@ -237,7 +237,7 @@ fn a_counted_element_is_declined() {
     // `tests/lang/collections/list_set_releases_a_replaced_element.neon`.
     let src = r##"
 use std::io;
-use std::collections::list;
+use std::list;
 
 fn g(n: i64) -> List[str] {
     let acc = list::repeat("x", 3);
@@ -266,7 +266,7 @@ fn a_caught_error_disqualifies() {
     // `tests/lang/collections/a_caught_write_error_survives_a_loop.neon`.
     let src = r##"
 use std::io;
-use std::collections::list;
+use std::list;
 
 fn main() {
     let acc = list::repeat(0, 3);
@@ -292,7 +292,7 @@ fn a_nested_write_qualifies_and_rewrites_per_level() {
     // went nested. Semantic twin: `tests/lang/collections/nested_write_in_place.neon`.
     let src = r##"
 use std::io;
-use std::collections::list;
+use std::list;
 
 fn fill(m: List[List[i64]], n: i64) -> List[List[i64]] {
     let i = 0;
@@ -323,7 +323,7 @@ fn a_row_read_after_the_leaf_write_disqualifies() {
     // in place it would show the new element where clone semantics show the old.
     let src = r##"
 use std::io;
-use std::collections::list;
+use std::list;
 
 fn fill(m: List[List[i64]], n: i64) -> List[List[i64]] {
     let i = 0;
@@ -352,7 +352,7 @@ fn a_caught_write_rewrites_behind_a_bounds_check() {
     // `tests/lang/collections/list_set_caught_in_loop.neon`.
     let src = r##"
 use std::io;
-use std::collections::list;
+use std::list;
 
 fn fill(n: i64) -> List[i64] {
     let acc = list::repeat(0, n);
@@ -382,7 +382,7 @@ fn a_handler_keeping_the_old_list_disqualifies() {
     // decline it — no special case needed.
     let src = r##"
 use std::io;
-use std::collections::list;
+use std::list;
 
 fn fill(n: i64) -> List[i64] {
     let acc = list::repeat(0, n);

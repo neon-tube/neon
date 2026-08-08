@@ -24,8 +24,8 @@
 // learn anything about negations.
 
 use std::io;
-use std::collections::list;
-use std::collections::map;
+use std::list;
+use std::map;
 
 type U = List[i64] | Map[str, i64]
 

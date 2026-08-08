@@ -9,7 +9,7 @@
 use std::io;
 use std::string;
 use std::cmp;
-use std::collections::list;
+use std::list;
 
 record Person { name: str, age: i64 }
 

@@ -12,7 +12,7 @@
 
 use std::io;
 use std::string;
-use std::collections::list;
+use std::list;
 
 // `try?` collapses the error to null right here, so `show` itself throws
 // nothing and needs no `throws` clause.

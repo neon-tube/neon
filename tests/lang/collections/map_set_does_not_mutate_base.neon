@@ -6,8 +6,8 @@
 
 use std::io;
 use std::string;
-use std::collections::list;
-use std::collections::map;
+use std::list;
+use std::map;
 
 // `at` is asked about keys that may be absent (that is half of what this file
 // checks), so it takes the deliberate path: `map::get` throws on a miss, `try?`

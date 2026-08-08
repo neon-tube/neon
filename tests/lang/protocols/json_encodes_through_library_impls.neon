@@ -17,7 +17,7 @@
 
 use std::io;
 use std::json;
-use std::collections::map;
+use std::map;
 
 fn main() {
     // Every arm of the union renders.

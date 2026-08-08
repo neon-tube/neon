@@ -24,7 +24,7 @@
 
 use std::io;
 use std::json;
-use std::collections::map;
+use std::map;
 
 fn decode_i64(j: json::Json) throws json::JsonError -> i64 { try json::from_json(j) }
 

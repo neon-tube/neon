@@ -9,7 +9,7 @@
 // functions total without ever letting invalid bytes pretend to be a `str`. See "The
 // process interface" in docs/decisions.md.
 
-use std::collections::list;
+use std::list;
 
 internal mod raw {
     @native("neon_os_argc") fn argc() -> i64

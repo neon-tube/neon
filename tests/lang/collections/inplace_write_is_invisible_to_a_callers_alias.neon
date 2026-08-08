@@ -9,7 +9,7 @@
 // the only thing standing between this output and a silent cross-owner mutation.
 
 use std::io;
-use std::collections::list;
+use std::list;
 
 fn bump(xs: List[i64], n: i64) -> List[i64] {
     let acc = xs;

@@ -11,7 +11,7 @@
 // intervening write and keeps the whole-record store.
 
 use std::io;
-use std::collections::list;
+use std::list;
 
 record P { a: i64, b: i64, c: i64 }
 

@@ -12,7 +12,7 @@
 
 use std::io;
 use std::path;
-use std::collections::list;
+use std::list;
 
 fn shown(v: str | null) -> str {
     v orelse "<none>"

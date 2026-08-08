@@ -12,8 +12,8 @@
 // are order-free, and the runner pins the exact line.
 
 use std::io;
-use std::collections::map;
-use std::collections::list;
+use std::map;
+use std::list;
 
 fn main() {
     let counts: Map[str, i64] = map::new();

@@ -11,7 +11,7 @@
 // value.
 
 use std::io;
-use std::collections::list;
+use std::list;
 
 fn main() {
     let li: any = [10, 20, 30];

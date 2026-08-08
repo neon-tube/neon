@@ -2027,7 +2027,7 @@ impl Env {
         // against `nominal_head`, which reads the `#nominal` tag — a qualified identity —
         // so spelling the head as whatever the author happened to type meant
         // `impl Mappable for List` produced `"List"` and never matched
-        // `"std::collections::list::List"`. It also meant an impl written with a
+        // `"std::list::List"`. It also meant an impl written with a
         // qualified path could not match one written bare, for the same reason: two
         // spellings of one type, compared as strings (TODO lead L4).
         let head = match &i.target.kind {
@@ -2136,8 +2136,8 @@ impl Env {
     /// Whether a fully-qualified name resolves from `module`.
     ///
     /// A name inside an `internal mod` is reachable only from the subtree rooted at the
-    /// module that declared it: `std::collections::list::raw` resolves from
-    /// `std::collections::list` and anything beneath it, and nowhere else. The same holds
+    /// module that declared it: `std::list::raw` resolves from
+    /// `std::list` and anything beneath it, and nowhere else. The same holds
     /// for a path segment literally named `internal`, which marks a directory the same way.
     ///
     /// This is checked while *resolving a name*, not while checking a `use`, so a
@@ -2203,8 +2203,8 @@ impl Env {
     /// identity work; see `docs/design/cross-library-identity.md`.
     const LIBRARY_OWNER: usize = usize::MAX;
 
-    pub const LIST: &'static str = "std::collections::list::List";
-    pub const MAP: &'static str = "std::collections::map::Map";
+    pub const LIST: &'static str = "std::list::List";
+    pub const MAP: &'static str = "std::map::Map";
 
     /// `path` as seen from `module`: an inner module's names shadow an outer's, a `use`
     /// binds its last segment, and a fully qualified path always works. Anything the
@@ -2276,7 +2276,7 @@ impl Env {
     ) {
         // Only the ROOT scope needs a boundary. Every module's ancestor walk ends at
         // `""` — the root application's scope — so that is the one place another unit's
-        // names are in reach; `std::collections::list` reaching its own `push` at its own
+        // names are in reach; `std::list` reaching its own `push` at its own
         // scope is ordinary resolution and must not be filtered. Applying this per *file*
         // instead isolated every stdlib module from the rest of the stdlib.
         let root_scope = scope.is_empty();
@@ -2307,7 +2307,7 @@ impl Env {
         // *need* `""` to reach `Display` and `Ordering`, and now reaches them through
         // `Env::PRELUDE` instead.
         // Only a SINGLE-segment name is withheld. At the root scope the "relative"
-        // reading is the absolute one -- `std::collections::list::push` resolves from
+        // reading is the absolute one -- `std::list::push` resolves from
         // anywhere precisely because this line pushes the joined key -- so skipping the
         // scope wholesale broke every qualified path from a library module. What must not
         // leak is a bare name, because a bare name at the root scope is a *program root

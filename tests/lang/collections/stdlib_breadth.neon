@@ -5,8 +5,8 @@
 use std::io;
 use std::string;
 use std::math;
-use std::collections::list;
-use std::collections::map;
+use std::list;
+use std::map;
 
 fn main() {
     // `split` is the inverse of `join`, including at the edges: a separator at either end

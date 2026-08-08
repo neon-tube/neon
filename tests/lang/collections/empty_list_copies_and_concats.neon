@@ -16,7 +16,7 @@
 // Every case below leaves at least one operand empty, including both.
 
 use std::io;
-use std::collections::list;
+use std::list;
 
 fn main() {
     let empty: List[i64] = [];

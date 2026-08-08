@@ -59,7 +59,7 @@
 // because the only byte with meaning is `/` and UTF-8 never produces it as a continuation.
 
 use std::string;
-use std::collections::list;
+use std::list;
 
 // ---- platform rules ----
 

@@ -17,7 +17,7 @@
 // argument evaluation order, and being passed around as a value.
 
 use std::io;
-use std::collections::list;
+use std::list;
 
 @inline
 fn double(x: i64) -> i64 { x * 2 }

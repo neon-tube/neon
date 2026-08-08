@@ -13,7 +13,7 @@
 
 use std::io;
 use std::string;
-use std::collections::list;
+use std::list;
 
 fn main() {
     let zeros = list::repeat(0, 5);

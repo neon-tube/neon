@@ -12,7 +12,7 @@
 // enough keys to force the table to grow, and asserts the maps are equal.
 
 use std::io;
-use std::collections::map;
+use std::map;
 
 fn main() {
     // Absent: the fallback is what reaches the closure.

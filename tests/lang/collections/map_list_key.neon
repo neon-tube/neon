@@ -11,7 +11,7 @@
 // *different* list that happens to be equal is the thing being checked.
 
 use std::io;
-use std::collections::map;
+use std::map;
 
 fn main() {
     let m = map::set(map::set(map::new(), [1, 2], "a"), [3], "b");
