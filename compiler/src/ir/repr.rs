@@ -841,6 +841,22 @@ pub fn normalize_union(variants: Vec<Repr>) -> Repr {
             seen.push(v);
         }
     }
+    // `Nullable(X)` already admits null, so a `Null` beside it adds nothing and must not
+    // make this a two-variant union.
+    //
+    // `repr_components` never emits a `Nullable` — `combine` makes one, after the ordering
+    // is fixed — so only this path can be handed the pair, and it is handed it by
+    // substitution: `fn opt[T](x: T, ..) -> T | null` at `T := str | null` asks for
+    // `(str | null) | null`. The type system flattens that to `str | null`, whose repr is a
+    // nullable string, i.e. a plain `neon_str`; without this line the instance returned a
+    // two-variant union struct instead, and the caller could not be assigned from it. That
+    // is lead L7's disagreement — `normalize_union([Nullable(Str), Null])` against
+    // `repr_of(str | null | null)` — reached through a generic rather than by writing the
+    // type, which the front end refuses.
+    if seen.iter().any(|c| matches!(c, Repr::Nullable(_))) {
+        seen.retain(|c| *c != Repr::Null);
+    }
+
     // Canonical order, matching the order `repr_components` pushes them. Without this a
     // substituted `T | null` comes out as `[Null, i64]` — variables are collected after
     // the base bits — while the concrete `i64 | null` is `[i64, Null]`, and the two

@@ -364,6 +364,7 @@ types/no_one_element_tuple.neon
 types/nominal_record_satisfies_opts_type.neon
 types/null_not_assignable_to_non_nullable.neon
 types/nullable.neon
+types/nullable_substituted_into_a_nullable.neon
 types/soft_cast_rejects_null_overlap.neon
 types/str_list_literal_erased_into_any.neon
 types/structural_record_width.neon

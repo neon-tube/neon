@@ -1,0 +1,40 @@
+// `T | null` at `T := str | null` is `str | null`, and has that type's layout.
+//
+// The type system flattens `(str | null) | null` -- a value is a string or it is null, and
+// asking twice adds nothing. The REPR did not: `Nullable(X)` already admits null, but a
+// `Null` sitting beside it was kept, and the pair became a two-variant union struct instead
+// of the plain nullable string `str | null` is.
+//
+// So the same type had two layouts depending on how it was reached, and the instance of
+// `opt` below returned a union struct to a caller expecting a `neon_str`.
+//
+// Recorded as unproven lead L7, which noted the front end refuses to WRITE `str | null |
+// null` and concluded it needed a repr-level test. It does not: a generic reaches it,
+// because substituting into `T | null` is how the shape arises in practice rather than by
+// anyone spelling it out.
+
+use std::io;
+
+fn opt[T](x: T, keep: bool) -> T | null {
+    if keep { x } else { null }
+}
+
+fn main() {
+    // T is already nullable, so the return flattens rather than nesting.
+    let a: str | null = "x";
+    io::println(opt(a, true) orelse "none");
+    io::println(opt(a, false) orelse "none");
+
+    // The null value itself survives the round trip.
+    let b: str | null = null;
+    io::println(opt(b, true) orelse "none");
+
+    // The ordinary case, where T is not nullable, still behaves.
+    io::println(opt("y", true) orelse "none");
+    io::println(opt("y", false) orelse "none");
+
+    // And a pointer-backed payload, which is the other thing `Nullable` is used for.
+    let xs: List[i64] | null = [1, 2];
+    let got = opt(xs, true);
+    io::println(if got is null { "null" } else { "list" });
+}

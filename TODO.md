@@ -375,12 +375,19 @@ Owner's call on timing; recorded so it is not lost.
 
 Marked as such because nobody built a repro. Worth a pass, not worth asserting.
 
-**Six have been investigated and five were real** — L1 (a user `marker Ord` inherited the
+**All seven have now been investigated, and six were real** — L1 (a user `marker Ord` inherited the
 built-in rule), L3 (one rank for five variants, so a union had two layouts), L6 (an intersection
-containing a self-referencing record read the wrong offsets), L4
+containing a self-referencing record read the wrong offsets), L7 (a nullable
+substituted into a nullable had two layouts), L4
 (qualified-path impls never matching), L5 (duplicate `TyId`s reaching the backend), all
 confirmed and fixed; L2 did not reproduce. That is worth knowing before
 treating the rest as noise. Each fix is pinned by a corpus file.
+
+**Nothing is left on this list but L2**, which did not reproduce. Every other lead someone
+wrote down and nobody checked turned out to be a real defect, and five of the six were silent
+wrong answers rather than declines — the class the corpus cannot see, because it checks that
+programs are accepted or rejected correctly and not that the compiled binary lays memory out
+right.
 
 - **L2.** `ordered.rs:90/165` match bare `"List"`/`"Map"`. **No repro, 2026-08-04**: a user
   `record Map { a: i64 }` in its own module is correctly treated as an ordinary ordered
@@ -413,8 +420,14 @@ treating the rest as noise. Each fix is pinned by a corpus file.
   it already satisfies — one it did not satisfy would make the path empty. Pinned by
   `types/intersecting_a_recursive_record_keeps_its_layout.neon`, which also keeps the
   non-recursive intersection correct, since that always was.
-- **L7.** `normalize_union([Nullable(Str), Null])` disagrees with `repr_of(str|null|null)`.
-  Blocked in the front end today, so it needs a repr-level test rather than a program.
+- ~~**L7.**~~ **Confirmed and fixed 2026-08-08.** Real, and reachable by a program after all:
+  the note said the front end refuses to write `str | null | null` and concluded it needed a
+  repr-level test, but substituting into `T | null` is how the shape actually arises.
+  `fn opt[T](x: T, ..) -> T | null` at `T := str | null` asked for `(str | null) | null`; the
+  type system flattens that, the repr did not, and the instance returned a two-variant union
+  struct to a caller expecting the plain `neon_str` a nullable string is. `Nullable(X)`
+  already admits null, so a `Null` beside it is now dropped. Pinned by
+  `types/nullable_substituted_into_a_nullable.neon`.
 
 ## Environment hazards
 
