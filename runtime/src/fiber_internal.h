@@ -19,6 +19,7 @@
 enum {
     NEON_FIBER_READY = 0, // on the run queue (or freshly created), waiting to run
     NEON_FIBER_RUNNING,   // currently executing
+    NEON_FIBER_BLOCKED,   // parked off the run queue, waiting to be woken (a channel, a Task)
     NEON_FIBER_DONE,      // body has returned
 };
 

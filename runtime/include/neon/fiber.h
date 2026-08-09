@@ -77,4 +77,16 @@ void neon_fiber_spawn(neon_fiber_fn fn, void* arg);
 // fibers, then this one again. The one safepoint this slice has; preemption is slice 6.
 void neon_fiber_sched_yield(void);
 
+// Park the current fiber: it leaves the run queue until neon_fiber_wake re-admits it, and the
+// scheduler runs everything else meanwhile. The caller MUST register a waker somewhere a
+// runnable fiber can reach (a channel's waiter list, a Task) before parking; otherwise, once
+// the run queue empties with this fiber still parked, the scheduler reports a deadlock rather
+// than hanging. Returns when woken. The blocking primitive channels and Task/await are built
+// on (src/fiber_chan.c).
+void neon_fiber_park(void);
+
+// Re-admit a parked fiber to the run queue. Call it from the fiber that satisfied whatever
+// `f` was waiting on (a send, a Task completion). Single-thread M=1: no queue race.
+void neon_fiber_wake(neon_fiber* f);
+
 #endif

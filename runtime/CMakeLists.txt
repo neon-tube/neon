@@ -33,7 +33,8 @@ set(NEON_RT_SOURCES
 # only ABI wired so far, so on anything else the fiber sources are simply left out and the
 # runtime builds without them. Win64 is a different ABI even on x86-64, hence NOT WIN32.
 if(NOT WIN32 AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
-    list(APPEND NEON_RT_SOURCES src/fiber.c src/fiber_sched.c src/fiber_swap_x86_64_sysv.S)
+    list(APPEND NEON_RT_SOURCES
+        src/fiber.c src/fiber_sched.c src/fiber_chan.c src/fiber_swap_x86_64_sysv.S)
     set(NEON_RT_HAS_FIBERS ON)
 endif()
 
@@ -278,7 +279,8 @@ if(NEON_RT_TESTS)
     # The fiber tests only build where the swap gadget does.
     if(NEON_RT_HAS_FIBERS)
         target_sources(neon_rt_tests PRIVATE
-            tests/fiber_test.c tests/fiber_sched_test.c tests/fiber_crash_test.c)
+            tests/fiber_test.c tests/fiber_sched_test.c tests/fiber_crash_test.c
+            tests/fiber_chan_test.c)
     endif()
     # The rich assertion and TEST macros use GNU C (__auto_type, constructors, _Generic).
     set_target_properties(neon_rt_tests PROPERTIES C_STANDARD 11 C_EXTENSIONS ON)

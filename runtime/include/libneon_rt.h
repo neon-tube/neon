@@ -13,6 +13,7 @@
 #include "neon/any.h"
 #include "neon/arena.h"
 #include "neon/arith.h"
+#include "neon/channel.h"
 #include "neon/core.h"
 #include "neon/encoding.h"
 #include "neon/fiber.h"
