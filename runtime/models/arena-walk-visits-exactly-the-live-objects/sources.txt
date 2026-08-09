@@ -1,0 +1,3 @@
+# The arena allocator (walk, alloc, free) and the trap its OOM paths reach.
+src/arena.c
+src/trap.c

@@ -158,3 +158,136 @@ TEST(an_empty_arena_drops_clean) {
     EXPECT_EQ(neon_arena_footprint(a), (size_t)0);
     neon_arena_drop(a);
 }
+
+// ---- walkability (neon_arena_walk) ----
+//
+// The teardown of a dying fiber walks its live objects to release their outgoing references
+// before the bulk-free. These pin that the walk sees EXACTLY the live objects — across
+// chunks, across freed/reused slots, and including big allocations.
+
+enum { WALK_MAX = 4096 };
+static neon_header* walk_seen[WALK_MAX];
+static int walk_seen_n;
+static void walk_collect(neon_header* h, void* ctx) {
+    (void)ctx;
+    if (walk_seen_n < WALK_MAX) {
+        walk_seen[walk_seen_n++] = h;
+    }
+}
+static bool walk_saw(neon_header* h) {
+    for (int i = 0; i < walk_seen_n; i++) {
+        if (walk_seen[i] == h) {
+            return true;
+        }
+    }
+    return false;
+}
+
+TEST(walk_visits_exactly_the_live_objects) {
+    neon_arena* a = neon_arena_create();
+    neon_header* h[10];
+    for (int i = 0; i < 10; i++) {
+        h[i] = (neon_header*)neon_arena_alloc(a, (size_t)(i * 8), no_drop);
+    }
+    for (int i = 0; i < 10; i += 2) {
+        neon_arena_free(a, h[i]); // free the even-indexed ones
+    }
+    walk_seen_n = 0;
+    neon_arena_walk(a, walk_collect, NULL);
+    for (int i = 0; i < 10; i++) {
+        EXPECT_EQ(walk_saw(h[i]), (i % 2 == 1)); // odd live, even freed
+    }
+    EXPECT_EQ(walk_seen_n, 5);
+    neon_arena_drop(a);
+}
+
+TEST(walk_spans_multiple_chunks) {
+    // ~80 bytes/slot over a 4 KB chunk is ~50 slots, so 1000 slots crosses ~20 chunks —
+    // exercising the per-chunk high-water and the retired-chunk `used` recorded on grow.
+    enum { N = 1000 };
+    neon_arena* a = neon_arena_create();
+    neon_header* h[N];
+    for (int i = 0; i < N; i++) {
+        h[i] = (neon_header*)neon_arena_alloc(a, 64, no_drop);
+    }
+    walk_seen_n = 0;
+    neon_arena_walk(a, walk_collect, NULL);
+    EXPECT_EQ(walk_seen_n, N);
+    for (int i = 0; i < N; i += 2) {
+        neon_arena_free(a, h[i]);
+    }
+    walk_seen_n = 0;
+    neon_arena_walk(a, walk_collect, NULL);
+    EXPECT_EQ(walk_seen_n, N / 2);
+    neon_arena_drop(a);
+}
+
+TEST(walk_visits_big_allocations) {
+    neon_arena* a = neon_arena_create();
+    neon_header* small = (neon_header*)neon_arena_alloc(a, 32, no_drop);
+    neon_header* big = (neon_header*)neon_arena_alloc(a, 2000, no_drop); // >512 → big list
+    walk_seen_n = 0;
+    neon_arena_walk(a, walk_collect, NULL);
+    EXPECT(walk_saw(small));
+    EXPECT(walk_saw(big));
+    EXPECT_EQ(walk_seen_n, 2);
+    neon_arena_drop(a);
+}
+
+TEST(walk_sees_a_reused_slot_as_one_live_object) {
+    neon_arena* a = neon_arena_create();
+    neon_header* x = (neon_header*)neon_arena_alloc(a, 16, no_drop);
+    neon_arena_free(a, x);
+    neon_header* y = (neon_header*)neon_arena_alloc(a, 16, no_drop); // reuses x's slot
+    EXPECT_EQ((void*)x, (void*)y);
+    walk_seen_n = 0;
+    neon_arena_walk(a, walk_collect, NULL);
+    EXPECT_EQ(walk_seen_n, 1); // the slot is live again, counted once
+    EXPECT(walk_saw(y));
+    neon_arena_drop(a);
+}
+
+TEST(walk_of_an_all_freed_arena_visits_nothing) {
+    neon_arena* a = neon_arena_create();
+    neon_header* h[5];
+    for (int i = 0; i < 5; i++) {
+        h[i] = (neon_header*)neon_arena_alloc(a, 16, no_drop);
+    }
+    for (int i = 0; i < 5; i++) {
+        neon_arena_free(a, h[i]);
+    }
+    walk_seen_n = 0;
+    neon_arena_walk(a, walk_collect, NULL);
+    EXPECT_EQ(walk_seen_n, 0);
+    neon_arena_drop(a);
+}
+
+TEST(walk_of_an_empty_arena_visits_nothing) {
+    neon_arena* a = neon_arena_create();
+    walk_seen_n = 0;
+    neon_arena_walk(a, walk_collect, NULL);
+    EXPECT_EQ(walk_seen_n, 0);
+    neon_arena_drop(a);
+}
+
+// The teardown pattern itself: each live object holds one outgoing reference to a shared
+// value (modelled as a counter). Teardown walks releasing those refs — each exactly once —
+// then bulk-frees the arena's own objects. Without the walk the shared refs would leak.
+static int shared_refs;
+static void release_one_outgoing(neon_header* h, void* ctx) {
+    (void)h;
+    (void)ctx;
+    shared_refs--;
+}
+
+TEST(teardown_walk_releases_every_outgoing_ref_once) {
+    shared_refs = 0;
+    neon_arena* a = neon_arena_create();
+    for (int i = 0; i < 50; i++) {
+        neon_arena_alloc(a, 24, no_drop);
+        shared_refs++; // each new object took one reference to the shared value
+    }
+    neon_arena_walk(a, release_one_outgoing, NULL);
+    EXPECT_EQ(shared_refs, 0); // released exactly once per live object
+    neon_arena_drop(a);        // the objects themselves go in the bulk-free
+}

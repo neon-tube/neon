@@ -61,6 +61,14 @@ typedef struct neon_header {
 // the same size-class scheme — so an arena block carries ARENA plus either a class or BIG.
 #define NEON_ALLOC_ARENA 0x20000u
 
+// Bit 18 marks a freed arena slot. An arena is WALKABLE (docs/design/fibers.md's teardown
+// walk): to step slot-by-slot the walk reads each slot's class from `flags`, so a freed slot
+// must keep its class bits and merely flag itself dead rather than clobbering `flags` with a
+// free-list link. The link lives in the `drop` field instead (offset 8), which a freed slot
+// no longer needs. Set by `neon_arena_free`, cleared when the slot is reallocated, read by
+// `neon_arena_walk` to skip the dead.
+#define NEON_ALLOC_FREED 0x40000u
+
 // A string is a view: a data pointer and length (the pair libc wants), plus the
 // refcounted allocation it points into. A literal has owner == NULL: static, never freed.
 typedef struct {

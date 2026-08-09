@@ -35,8 +35,18 @@ void* neon_arena_alloc(neon_arena* a, size_t bytes, void (*drop)(void*));
 // object must have come from `a`.
 void neon_arena_free(neon_arena* a, void* p);
 
+// Visit every LIVE object in the arena, in address order per chunk then the big list, calling
+// `visit(header, ctx)` on each. This is the walkability the teardown of a dying fiber needs
+// (docs/design/fibers.md): before the bulk-free, walk the live objects releasing their
+// OUTGOING references (resource cleanups, shared-value decrements) — `visit` is that release.
+//
+// The visitor must not allocate in, or free from, this arena: it releases references that
+// point OUTSIDE the arena, and leaves the arena's own objects for the bulk-free. Freed slots
+// are skipped; a freed slot keeps its class so the walk can step past it.
+void neon_arena_walk(const neon_arena* a, void (*visit)(neon_header*, void*), void* ctx);
+
 // Drop the whole arena: every chunk and every big allocation, in one pass, then the control
-// struct. Bulk-free only — the outgoing-reference walk is layered on in slice 4.
+// struct. Bulk-free only — pair it with neon_arena_walk first to release outgoing references.
 void neon_arena_drop(neon_arena* a);
 
 // Bytes the arena currently holds from the OS (chunks + big allocations). For tests and

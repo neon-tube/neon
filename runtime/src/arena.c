@@ -16,14 +16,21 @@
 
 #include "libneon_rt.h"
 
+#include <stddef.h> // offsetof
 #include <stdlib.h>
 
 // Same class scheme as the slab: 16-byte grain, 32 classes, 512-byte ceiling. A block is at
-// least 16 bytes, which holds the `next` pointer a free-list slot needs, and 16 is twice the
-// header's 8-byte alignment, so every block is `neon_header`-aligned.
+// least 16 bytes, and 16 is twice the header's 8-byte alignment, so every block is
+// `neon_header`-aligned.
 #define NEON_ARENA_GRAIN 16
 #define NEON_ARENA_CLASSES 32
 #define NEON_ARENA_MAX (NEON_ARENA_GRAIN * NEON_ARENA_CLASSES)
+
+// A freed slot threads the class free list through its `drop` field (offset 8), NOT offset 0,
+// so `rc` and `flags` survive the free and the walk can still read the slot's class to step
+// over it. `drop` is 8 bytes and a freed slot has no use for it. This is why the minimum slot
+// (class 0, 16 bytes = header only) still works: offset 8 is inside the header.
+#define NEON_ARENA_LINK_OFF offsetof(neon_header, drop)
 
 // The first chunk is small — an idle fiber should not cost 64 KB — and the arena grows by
 // more chunks of the same size. 4 KB is one page.
@@ -31,11 +38,13 @@
 
 typedef struct neon_arena_chunk {
     struct neon_arena_chunk* next;
-    // usable bytes follow, aligned: the header of a chunk is one pointer, and the bump
-    // region starts after it, kept 16-aligned by the padded size below.
+    size_t used; // bytes bumped from this chunk's region — its high-water, for the walk
+    // usable bytes follow, aligned: the header is two words, and the bump region starts
+    // after it, kept 16-aligned by NEON_ARENA_CHUNK_HDR below.
 } neon_arena_chunk;
 
-// The chunk header rounded up to the grain, so the bump region past it stays 16-aligned.
+// The chunk header (two words) rounded up to the grain, so the bump region past it stays
+// 16-aligned. sizeof(neon_arena_chunk) is 16 on 64-bit, exactly one grain.
 #define NEON_ARENA_CHUNK_HDR NEON_ARENA_GRAIN
 
 // A big allocation, threaded on its own list so drop can free it. The payload's
@@ -77,11 +86,17 @@ neon_arena* neon_arena_create(void) {
 // Add a fresh chunk and point the bump region at it. Called when the current chunk cannot
 // satisfy a request.
 static void neon_arena_grow(neon_arena* a) {
+    // Freeze the current (head) chunk's high-water before it stops being the bump target, so
+    // the walk can later step exactly its allocated extent and no further.
+    if (a->chunks != NULL) {
+        a->chunks->used = (size_t)(a->bump - ((char*)a->chunks + NEON_ARENA_CHUNK_HDR));
+    }
     neon_arena_chunk* chunk = malloc(NEON_ARENA_CHUNK);
     if (chunk == NULL) {
         neon_trap("out of memory");
     }
     chunk->next = a->chunks;
+    chunk->used = 0;
     a->chunks = chunk;
     a->footprint += NEON_ARENA_CHUNK;
     a->bump = (char*)chunk + NEON_ARENA_CHUNK_HDR;
@@ -111,7 +126,9 @@ void* neon_arena_alloc(neon_arena* a, size_t bytes, void (*drop)(void*)) {
         size_t bsz = neon_arena_class_size(cls);
         void* blk = a->free_list[cls];
         if (blk != NULL) {
-            a->free_list[cls] = *(void**)blk; // pop the reclaimed slot
+            // Pop the reclaimed slot: its free-list link lives at the drop offset (see
+            // NEON_ARENA_LINK_OFF). The full header is rewritten below, clearing FREED.
+            a->free_list[cls] = *(void**)((char*)blk + NEON_ARENA_LINK_OFF);
         } else {
             // Compare remaining bytes rather than forming `bump + bsz`: on the first
             // allocation `bump` is NULL, and even within a chunk `bump + bsz` can land more
@@ -151,8 +168,39 @@ void neon_arena_free(neon_arena* a, void* p) {
         return;
     }
     size_t cls = ((h->flags & NEON_ALLOC_CLASS_MASK) >> NEON_ALLOC_CLASS_SHIFT) - 1;
-    *(void**)p = a->free_list[cls];
+    // Mark the slot dead but keep its class in `flags` so the walk can step over it, and
+    // thread the free list through the drop field rather than clobbering the header.
+    h->flags |= NEON_ALLOC_FREED;
+    *(void**)((char*)p + NEON_ARENA_LINK_OFF) = a->free_list[cls];
     a->free_list[cls] = p;
+}
+
+void neon_arena_walk(const neon_arena* a, void (*visit)(neon_header*, void*), void* ctx) {
+    // Cast away const to freeze the current chunk's high-water — bookkeeping the walk needs;
+    // no object is touched by this. After it, every chunk can be stepped uniformly by `used`.
+    neon_arena* m = (neon_arena*)a;
+    if (m->chunks != NULL) {
+        m->chunks->used = (size_t)(m->bump - ((char*)m->chunks + NEON_ARENA_CHUNK_HDR));
+    }
+    for (neon_arena_chunk* c = m->chunks; c != NULL; c = c->next) {
+        char* p = (char*)c + NEON_ARENA_CHUNK_HDR;
+        char* end = p + c->used;
+        while (p < end) {
+            neon_header* h = (neon_header*)p;
+            // Every slot below the high-water was bump-allocated and so carries a class in
+            // `flags`, live or freed. Step by that class's size; visit only the live.
+            size_t cls = ((h->flags & NEON_ALLOC_CLASS_MASK) >> NEON_ALLOC_CLASS_SHIFT) - 1;
+            size_t bsz = neon_arena_class_size(cls);
+            if (!(h->flags & NEON_ALLOC_FREED)) {
+                visit(h, ctx);
+            }
+            p += bsz;
+        }
+    }
+    // Big allocations that are freed leave the list immediately, so every node here is live.
+    for (neon_arena_big* b = m->bigs; b != NULL; b = b->next) {
+        visit((neon_header*)(b + 1), ctx);
+    }
 }
 
 void neon_arena_drop(neon_arena* a) {
