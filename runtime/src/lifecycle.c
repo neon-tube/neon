@@ -42,6 +42,34 @@ void neon_release(neon_header* h) {
     }
 }
 
+// ---- the allocator ----
+//
+// Small heap objects come from a segregated-free-list slab, not straight from `malloc`.
+// The measured reason: on binary-trees ~60% of the run was glibc's bin machinery
+// (`_int_malloc`/`_int_free`), on 67M short-lived Nodes. A slab makes allocation a
+// free-list pop and freeing a push — no size search, no coalescing — which is the whole
+// cost when the objects are tiny and same-sized, exactly the shape a refcounted language
+// produces. It also recycles a just-freed block straight back, so the drop-tree-i /
+// build-tree-i+1 loop reuses cache-hot slots: FBIP reuse arriving by the runtime door,
+// where a compiler reuse-token pass cannot reach because alloc and free are in different
+// functions.
+//
+// The class is recovered on free from the header's `flags` (NEON_ALLOC_*), so there is no
+// per-object overhead and no aligned-slab pointer arithmetic; a block too big for any
+// class (>512 bytes, a long string say) goes straight to `malloc` and is marked
+// NEON_ALLOC_BIG. Slabs are never returned to the OS — the runtime has no GC and the free
+// list recycles within the process — so there is a destructor purely to keep LeakSanitizer
+// honest at exit.
+//
+// Under CBMC (`__CPROVER`) this collapses to plain `malloc`/`free`: the models verify the
+// refcount CONTRACT `neon_alloc` provides (a fresh header, rc 1) and the drop semantics,
+// which the slab does not change, and a global-free-list allocator is exactly the
+// stateful, unbounded-loop shape a model checker is worst at. The slab's own integrity —
+// right class, no overlap, no double-serve — is covered instead by ASan/LSan over the
+// whole corpus, which is the tool that actually catches a slab bug.
+
+#ifdef __CPROVER
+
 void* neon_alloc(size_t bytes, void (*drop)(void*)) {
     neon_header* h = malloc(sizeof(neon_header) + bytes);
     if (h == NULL) {
@@ -56,3 +84,99 @@ void* neon_alloc(size_t bytes, void (*drop)(void*)) {
 void neon_free(void* p) {
     free(p);
 }
+
+#else
+
+// 16-byte granularity up to 512 bytes: 32 classes. 16 is the minimum because a freed
+// block holds a `next` pointer, and the step matches the header's own 8-byte alignment
+// doubled, so every block is suitably aligned for a `neon_header`.
+#define NEON_SLAB_GRAIN 16
+#define NEON_SLAB_CLASSES 32
+#define NEON_SLAB_MAX (NEON_SLAB_GRAIN * NEON_SLAB_CLASSES)
+#define NEON_SLAB_CHUNK (64 * 1024) // one malloc carves this many bytes into blocks
+
+static void* neon_free_list[NEON_SLAB_CLASSES];
+static void* neon_slab_chunks; // linked list of raw chunks, freed only at exit
+
+static size_t neon_class_of(size_t total) {
+    return (total + NEON_SLAB_GRAIN - 1) / NEON_SLAB_GRAIN - 1;
+}
+
+static size_t neon_class_size(size_t cls) {
+    return (cls + 1) * NEON_SLAB_GRAIN;
+}
+
+// Carve a fresh chunk into blocks of class `cls`, thread all but the first onto the free
+// list, and return the first for the caller to hand out. The chunk's own first word links
+// it into `neon_slab_chunks` for teardown; blocks start after that.
+static void* neon_slab_refill(size_t cls) {
+    char* chunk = malloc(NEON_SLAB_CHUNK);
+    if (chunk == NULL) {
+        neon_trap("out of memory");
+    }
+    *(void**)chunk = neon_slab_chunks;
+    neon_slab_chunks = chunk;
+
+    size_t bsz = neon_class_size(cls);
+    char* base = chunk + NEON_SLAB_GRAIN; // past the chunk link, still bsz-aligned
+    size_t n = (NEON_SLAB_CHUNK - NEON_SLAB_GRAIN) / bsz;
+    for (size_t i = 1; i < n; i++) {
+        void* blk = base + i * bsz;
+        *(void**)blk = neon_free_list[cls];
+        neon_free_list[cls] = blk;
+    }
+    return base;
+}
+
+NEON_NOINLINE void* neon_alloc(size_t bytes, void (*drop)(void*)) {
+    size_t total = sizeof(neon_header) + bytes;
+    neon_header* h;
+    if (total > NEON_SLAB_MAX) {
+        h = malloc(total);
+        if (h == NULL) {
+            neon_trap("out of memory");
+        }
+        h->flags = NEON_ALLOC_BIG;
+    } else {
+        size_t cls = neon_class_of(total);
+        void* blk = neon_free_list[cls];
+        if (blk == NULL) {
+            blk = neon_slab_refill(cls);
+        } else {
+            neon_free_list[cls] = *(void**)blk;
+        }
+        h = (neon_header*)blk;
+        h->flags = (uint32_t)((cls + 1) << NEON_ALLOC_CLASS_SHIFT);
+    }
+    h->rc = 1;
+    h->drop = drop;
+    return h;
+}
+
+NEON_NOINLINE void neon_free(void* p) {
+    neon_header* h = (neon_header*)p;
+    if (h->flags & NEON_ALLOC_BIG) {
+        free(h);
+        return;
+    }
+    size_t cls = ((h->flags & NEON_ALLOC_CLASS_MASK) >> NEON_ALLOC_CLASS_SHIFT) - 1;
+    *(void**)p = neon_free_list[cls];
+    neon_free_list[cls] = p;
+}
+
+// Return every slab chunk to the OS at normal exit. Not for correctness — the process is
+// ending — but so LeakSanitizer's end-of-run check does not flag the retained chunks. On
+// a trap/`_exit` path this does not run, and neither does the leak check, so the two stay
+// consistent. GNU C only; MSVC does not run LSan, where the leak would be harmless anyway.
+#if defined(__GNUC__)
+__attribute__((destructor)) static void neon_slab_teardown(void) {
+    void* c = neon_slab_chunks;
+    while (c != NULL) {
+        void* next = *(void**)c;
+        free(c);
+        c = next;
+    }
+}
+#endif
+
+#endif

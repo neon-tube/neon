@@ -34,6 +34,16 @@ typedef struct neon_header {
 // construction and never be freed.
 #define NEON_IMMORTAL 1u
 
+// The slab allocator stashes each block's size class in the header's `flags`, so
+// `neon_free` can find the class from the pointer alone with no per-object overhead:
+// bits 8..15 hold `class + 1` (a zeroed flags word is thus never a valid class), and
+// bit 16 marks a block that came straight from `malloc` rather than a slab. Set by
+// `neon_alloc`, read by `neon_free`; see `src/lifecycle.c`. Bit 0 (`NEON_IMMORTAL`)
+// stays free of these.
+#define NEON_ALLOC_CLASS_SHIFT 8
+#define NEON_ALLOC_CLASS_MASK 0xff00u
+#define NEON_ALLOC_BIG 0x10000u
+
 // A string is a view: a data pointer and length (the pair libc wants), plus the
 // refcounted allocation it points into. A literal has owner == NULL: static, never freed.
 typedef struct {

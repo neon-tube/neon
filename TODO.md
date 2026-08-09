@@ -73,13 +73,15 @@ trade (compiled, GC'd, no manual lifetimes).
 
 | Benchmark      | C      | Neon   | Go     | Neon vs C | Go vs C |
 |----------------|--------|--------|--------|-----------|---------|
-| word-frequency | 0.385s | 0.329s | 0.400s | **0.85×** | 1.04×   |
-| n-body         | 0.691s | 0.674s | 1.005s | **0.98×** | 1.45×   |
-| binary-trees   | 0.673s | 0.781s | 0.965s | 1.16×     | 1.43×   |
-| brainfuck      | 0.237s | 0.308s | 0.461s | 1.30×     | 1.94×   |
+| word-frequency | 0.388s | 0.324s | 0.400s | **0.84×** | 1.04×   |
+| n-body         | 0.644s | 0.649s | 1.005s | 1.01×     | 1.45×   |
+| binary-trees   | 0.677s | 0.292s | 0.965s | **0.43×** | 1.43×   |
+| brainfuck      | 0.249s | 0.295s | 0.461s | 1.18×     | 1.94×   |
 
-Neon is between C and Go on all four, and nearer C on all four. The margin over Go is widest
-where Neon is furthest from C — brainfuck, where Neon is 1.5× Go's speed.
+binary-trees updated 2026-08-09 after the slab allocator (1.16× → **0.43×**, Neon 2.3×
+faster than C); the others re-measured the same day. Neon now BEATS C on two of the four,
+and the two it trails are the pure-compute cases (brainfuck's bounds checks, n-body's
+tie). The margin over Go is widest where Neon is furthest from C — brainfuck, ~1.5× Go.
 
 Use `--runs 10`; 3 runs spreads ~8% here. Per-run history is in `bench/*/.bench_cache.json`.
 
@@ -251,24 +253,40 @@ generational nursery: pointer-bump allocation and never touching the dead.
 
 In order:
 
-1. **A size-class slab behind `neon_alloc`.** Small same-size objects from a free list:
-   alloc is a pop, free is a push, versus glibc's bin machinery eating half the run.
-   This is also FBIP reuse arriving by the runtime door — the loop interleaves dropping
-   tree *i* with building tree *i+1*, so the slab recycles cache-hot slots exactly
-   where a compiler reuse-token analysis cannot reach (alloc and free live in different
-   functions here). Runtime-only. Projection: under C, since C stays on glibc. Costs:
-   a sizing/fragmentation policy, and `runtime/models/` must learn the new heap.
-   Bonus: also deletes word-frequency's per-token `cfree` cost.
+1. **A size-class slab behind `neon_alloc`. BUILT, 2026-08-09 — binary-trees 1.16× →
+   0.43×, Neon 2.3× faster than C.** Small same-size objects from a segregated free list:
+   alloc is a pop, free is a push, versus glibc's bin machinery that was ~60% of this run.
+   The projection held exactly — Neon beats C because C stays on glibc while the slab does
+   not. Two things the build taught that the plan did not foresee:
+   - The class is recovered on free from the header's `flags` (bits 8..15 hold class+1,
+     bit 16 marks a malloc'd big block), so there is zero per-object overhead and no
+     aligned-slab pointer masking. Blocks >512 bytes bypass to malloc.
+   - `neon_alloc`/`neon_free` are `NEON_NOINLINE`, and it is load-bearing. Inlined under
+     LTO, the bigger slab body bloated tight alloc/free loops and *regressed*
+     word-frequency 26% (0.33→0.44s) — same instructions, IPC 3.0→2.3, a pure stall.
+     Out-of-line (as `malloc` always was) recovers it: word-frequency 0.32s, back to
+     0.84× C. So the slab is a win on alloc BURSTS (binary-trees drains glibc's tcache
+     into `_int_malloc`) and neutral-to-better on tcache-friendly CHURN.
+   Runtime-only: the oracle is inert, and the models keep the malloc path under
+   `__CPROVER` (they verify the refcount CONTRACT the slab preserves; a global-free-list
+   allocator is the stateful shape CBMC is worst at, and ASan-over-corpus is what actually
+   catches a slab bug). Slabs are never returned to the OS; a GNU destructor frees the
+   chunks at exit purely so LSan stays quiet.
 2. **Devirtualise the drop.** Releases go through the header's function pointer — an
    indirect call per node, opaque to gcc. At a typed release site codegen knows the
    repr and can call the concrete drop directly (keeping the `rc == 0` test), letting
    small drops inline. A few percent, and it removes the same indirect-call barriers
    the brainfuck work just paid to remove elsewhere.
 
-   **Built and REJECTED, 2026-08-09.** `neon_release_drop(h, ned0)` — a `static inline`
-   release taking the drop by name so the constant propagates and the call goes direct —
-   works and is correct (compiles, runs, oracle-clean), and it is 5-6% *slower* on
-   binary-trees (0.82s vs 0.78s baseline, runs=15, C steady at 0.68s). The premise was
+   **Built and REJECTED, 2026-08-09, under LTO.** `neon_release_drop(h, ned0)` — a
+   `static inline` release taking the drop by name so the constant propagates and the call
+   goes direct — works and is correct (compiles, runs, oracle-clean), and it is 5-6%
+   *slower* on binary-trees (0.82s vs 0.78s baseline, runs=15, C steady at 0.68s).
+   Measured through `neon build`, which is `-flto` for release (`uses_lto` is
+   `!is_debug`) — the relevant condition, and the one that explains the loss: under LTO
+   the baseline `neon_release` already inlines whole-program and gcc partially
+   devirtualises `h->drop` on its own, so the indirect call was already cheap and
+   predicted, and forcing the direct call only added the recursive-inline bloat below. The premise was
    backwards for this bench: the Node drop is RECURSIVE (it releases two child Nodes), so
    devirtualising turns it into a directly self-recursive function that gcc partially
    inlines into itself, bloating the drop — while the indirect `h->drop` was a tight,
