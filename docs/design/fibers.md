@@ -2,9 +2,12 @@
 
 **Status:** design, nothing implemented. No `spawn`/`Channel`/scheduler exists in
 `compiler/src/` or `runtime/src/` today. This is the document to argue with before a line
-is written. It is the first of three related designs — **fibers** (here), then
-**executor pools** and **send-multiprocess** — which together are Neon's whole
-concurrency story and are deliberately *not* general shared-memory threading.
+is written. This document is **fibers, and only fibers.** Two further designs — a
+general-purpose **executor pool** (CPU-parallel `par_map`) and **send-multiprocess**
+(OS-process parallelism) — are pinned and out of scope; they are named at the end only to
+mark the seams they will attach to. The one piece of thread machinery that IS in scope
+here is a small internal **file-offload pool**, because `std::fs` under fibers depends on
+it on the readiness IO backends (epoll/kqueue/select) — see the IO-engine section.
 
 This file is the reasoning. Where it and a future module doc disagree, the module doc is
 nearer the code and this file is the bug.
@@ -77,7 +80,8 @@ That is the entire switch — a few nanoseconds. It is well-trodden (boost.conte
 Go's `gogo`, every fiber library), and it is the easy part. Three things ride on it that
 are **not** easy, and are the actual project:
 
-1. an async IO reactor, or blocking freezes the world;
+1. a completion-based IO engine (IOCP/io_uring/epoll/kqueue behind one interface), or
+   blocking freezes the world;
 2. a stack-lifetime and stack-size story;
 3. preemption, or a CPU-bound fiber starves the rest.
 
@@ -151,51 +155,89 @@ path, chosen dynamically:
 
 ```c
 neon_str neon_io_read_all(int64_t fd) {
-    neon_fiber* self = neon_current_fiber();
-    if (self == NULL) {
-        return blocking_read(fd);                 // main, or a pool worker: just block
+    if (neon_current_fiber() == NULL) {
+        return blocking_read(fd);          // main-before-any-spawn, or a pool worker: just block
     }
-    for (;;) {
-        ssize_t n = read(fd, buf, cap);
-        if (n >= 0) return ...;
-        if (errno == EAGAIN) {
-            neon_reactor_arm(fd, NEON_READABLE, self);
-            neon_fiber_park();     // swap to scheduler; resume HERE on readiness
-            continue;
-        }
-        return -errno;             // a real error, through the existing IoError channel
+    // On a fiber: hand the read to the IO engine and park. `submit` returns only when the
+    // op has completed — resumed by the scheduler draining the completion queue. The engine
+    // is completion-native on IOCP/io_uring and adapts readiness (arm epoll, then read) or
+    // pool-offloads a regular file underneath, invisibly.
+    neon_io_result r = neon_io_submit(NEON_OP_READ, fd, buf, cap);
+    if (r.err < 0) {
+        return -r.err;                     // through the existing IoError channel, unchanged
     }
+    return ...;                            // r.n bytes are already in buf
 }
 ```
 
 `main` runs *on a fiber* from the start (like Go's goroutine 1), so in practice the `NULL`
-branch is only taken by executor-pool workers — the code path stays uniform.
+branch is only ever taken by a file-offload pool worker — the code path stays uniform, and
+the *signature* of `fs::read` is unchanged in every context.
 
-## The reactor and the pool are a division of labour, not alternatives
+## The IO engine is completion-based (a proactor), because IOCP demands it
 
-The hardest truth in the whole design, and the one that dictates why the executor-pool
-design (next document) is not optional flavour but a *dependency* of file IO:
+The single most consequential architectural choice, forced by the platform targets:
+**IOCP (Windows) and io_uring (Linux ≥5.1) are COMPLETION models** — you submit "read this
+into this buffer" and the OS hands back the *finished* operation — while
+**epoll/kqueue/select are READINESS models** — the OS tells you a read *won't block* and
+you do it yourself. These are not two flavours of one interface; they are opposite
+control flows.
 
-- **Sockets and pipes are pollable.** `epoll`/`kqueue`/IOCP tell you when a read will not
-  block. These go through the **reactor**: arm, park, resume on readiness. This is the
-  netpoller.
-- **Regular files are NOT pollable.** `epoll` on a regular file reports "always ready," and
-  the `read` still blocks on the disk. There is no portable way to make disk IO
-  non-blocking (until `io_uring`, which is Linux-only and recent). So `fs::read` on an
-  actual file **cannot** be served by the reactor. Its only non-freezing option is to hand
-  the blocking call to a **dedicated OS thread** and park the fiber until it finishes —
-  Go's `entersyscall`.
+A runtime that wants both cannot pick readiness as its interface: emulating completion on
+readiness is easy (arm interest, wake, do the syscall), but emulating readiness on IOCP is
+a disaster (zero-byte reads, or falling back to `select` on Windows and discarding
+everything IOCP is for). So the interface is **completion**, and readiness backends are
+adapted up to it. This is exactly the choice libuv (Node) and Boost.Asio made, and for the
+same reason.
 
-So the fiber runtime needs both, and they partition the syscall universe:
+The fiber-facing operation is therefore always "submit and park, resume with the result":
 
-    pollable (sockets, pipes)   -> reactor (epoll/kqueue/IOCP)
-    unpollable (regular files)  -> executor pool (a blocking OS thread)
-    CPU-bound work              -> executor pool
+```c
+// One completion op: fiber submits, parks, and resumes here with `res` filled in.
+neon_io_result neon_io_submit(neon_io_op op, int64_t fd, void* buf, size_t len, ...);
+```
 
-The pool worker runs with `current_fiber() == NULL` (its stack is not a fiber stack), so
-the same native takes its plain-blocking branch there — the mechanism composes. The
-executor-pool design is the next document precisely because `std::fs` under fibers is
-incomplete without it.
+Under the hood, one small vtable, four backends, chosen at build/runtime:
+
+| backend            | model      | sockets/pipes | regular files       | when              |
+|--------------------|------------|---------------|---------------------|-------------------|
+| **IOCP**           | completion | native        | **native** (OVERLAPPED) | Windows       |
+| **io_uring**       | completion | native        | **native** (async disk) | Linux ≥5.1    |
+| **epoll**          | readiness  | adapted       | *pool offload*      | Linux fallback    |
+| **kqueue**         | readiness  | adapted       | *pool offload*      | BSD/macOS (later) |
+| **select**         | readiness  | adapted       | *pool offload*      | universal floor   |
+
+Two payoffs of picking completion as the interface fall straight out of that table:
+
+- **On the completion backends, regular-file IO is async natively.** IOCP with an
+  OVERLAPPED handle and io_uring both do disk reads asynchronously — the very thing epoll
+  cannot. So on Windows and modern Linux there is **no thread pool in the file path at
+  all**; `fs::read` submits to the engine and parks like any socket.
+- **The thread pool becomes a compatibility shim, not a core component.** It exists only to
+  give the *readiness* backends (epoll, kqueue, select) an answer for unpollable regular
+  files — `epoll` reports a file "always ready" while the `read` still blocks on the disk,
+  so on those backends a file op is handed to a **dedicated blocking OS thread** (Go's
+  `entersyscall`) and the fiber parks until it finishes. On the completion backends the
+  pool is simply unused for files.
+
+The pool worker runs with `neon_current_fiber() == NULL` (its stack is not a fiber stack),
+so the same native takes its plain-blocking branch there and the mechanism composes. This
+**internal file-offload pool is part of the fiber runtime** — small, fixed, and required
+for `std::fs` on readiness backends. It is NOT the general-purpose CPU executor pool
+(`par_map` and friends): that, and OS-process parallelism, are deliberately **pinned** and
+out of scope here (see the closing section). Fibers are the whole of this document.
+
+## Cancellation is part of the completion contract
+
+A completion model has to answer "the parked fiber no longer wants this op" — its channel
+closed, a timeout fired, the scheduler is shutting down. Readiness backends get this for
+free (just do not perform the syscall), but completion backends have an op in flight in the
+kernel: IOCP has `CancelIoEx`, io_uring has `IORING_OP_ASYNC_CANCEL`, and the buffer must
+stay pinned until the cancellation itself completes (the kernel may still write to it up to
+that point). So a submitted op owns its buffer until the engine reports the op *or its
+cancellation* done — the parked fiber, whose live stack holds the buffer, is exactly that
+owner, so the lifetime is correct by construction, but the cancellation handshake is real
+surface the engine vtable must carry.
 
 ## Stacks: fixed size, guard page, and the honest limit
 
@@ -305,21 +347,27 @@ reason, and it turns out to be what this needs.
    makes the runtime uniform), but it means the runtime stands up a scheduler before
    `nl_main`, which every non-fiber program then also pays for at startup. Measure it.
 
-## The road to parallelism (the next two documents)
+## Pinned: the two parallelism designs, and the seams they attach to
 
-Fibers get concurrency while preserving the memory model exactly. Parallelism comes next,
-and both routes reach it WITHOUT two threads on one heap:
+Fibers give *concurrency* while preserving the memory model exactly. *Parallelism* — using
+more than one core — is a separate concern, deliberately **pinned** here. Both future
+routes reach it WITHOUT two threads on one heap, and both are named now only so this design
+leaves the right seams:
 
-- **Executor pools** — a bounded set of OS threads that run *leaf* work: the unpollable
-  blocking syscalls fibers hand off (the file-IO dependency above), and CPU-bound tasks.
-  The refcount rule is kept by isolation — a pool task gets its own arena, its inputs are
-  *moved* in (`ir::unique` again) or read-only-and-pinned so it touches no shared `rc`, and
-  its result is moved out. This is the smaller, sooner design, and fibers need it for files.
-- **Send-multiprocess** — real OS processes running Neon code, isolated address spaces, no
-  shared heap at all, communicating by serialized messages over the `std::process` pipe
-  machinery already built. Full parallelism, full isolation; the cost is that every send
-  marshals. Whether a "Neon process" is a `fork` of the runtime (fast, copy-on-write,
-  POSIX-only) or a spawn-and-serialize (portable, but captures must marshal from birth) is
-  the decision that gates that whole design.
+- **Executor pool (CPU-parallel).** A bounded set of OS threads running *leaf* Neon work —
+  `list::par_map` and kin. The refcount rule is kept by isolation: a pool task gets its own
+  arena, its inputs are *moved* in (`ir::unique` proves `rc == 1`) or read-only-and-pinned
+  so it touches no shared `rc`, and its result is moved out. **Seam:** the same move-on-
+  unique boundary a channel send already uses. Distinct from this document's internal
+  file-offload pool, which runs no Neon code and touches no heap.
+- **Send-multiprocess.** Real OS processes running Neon code, isolated address spaces, no
+  shared heap at all, over the `std::process` pipe machinery already built. Full
+  parallelism, full isolation, at the cost that every send marshals. **Seam:** whatever a
+  channel `send` transfers must, for a cross-process channel, be *serializable* — which
+  ties this to `docs/design/serialization.md` and makes "sendable across a process" and
+  "sendable across a machine" one concept. Whether a Neon process is a `fork` (fast, COW,
+  POSIX-only, thread-hostile) or spawn-and-serialize (portable, marshal-on-send) is the
+  ruling that gates it, and it is not made here.
 
-Those are the circle-back. This document is the foundation they both stand on.
+Neither is built or committed. This document stands on its own: fibers, an IO engine, and
+the file-offload pool they require.
