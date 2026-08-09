@@ -24,8 +24,9 @@ enum {
 
 struct neon_fiber {
     void* sp;                 // suspended stack pointer — valid exactly while not running
-    void* stack;              // the heap stack allocation; NULL for the adopted root fiber
-    const void* stack_bottom; // low address of the usable stack, for the ASan annotations
+    void* stack;              // the stack allocation base (mmap or malloc); NULL for the root
+    size_t map_len;           // mmap length for munmap (0 when the stack came from malloc)
+    const void* stack_bottom; // low address of the USABLE stack (just above the guard page)
     size_t stack_size;
     void* fake_stack;         // ASan fake-stack save slot while this fiber is switched-away
     neon_arena* arena;        // this fiber's private heap; NULL for the root fiber

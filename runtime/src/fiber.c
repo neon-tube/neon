@@ -1,3 +1,9 @@
+// `REG_RIP`/`REG_RSP` for the overflow handler's context rewrite are glibc GNU extensions;
+// the define must precede the first libc include.
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 // Stackful cooperative fibers over the `neon_ctx_swap` gadget. This file is the C half: it
 // primes a fresh fiber's stack so the gadget's first `ret` lands in a bootstrap, tracks
 // which fiber is running on this thread, and — the part that is easy to get subtly wrong —
@@ -43,6 +49,43 @@ extern void neon_ctx_swap(void** from_sp, void* to_sp);
 void __sanitizer_start_switch_fiber(void** fake_stack_save, const void* bottom, size_t size);
 void __sanitizer_finish_switch_fiber(void* fake_stack_save, const void** bottom_old,
                                      size_t* size_old);
+#endif
+
+// ---- guard-page stacks and stack-overflow isolation ----
+//
+// A fiber stack is mmap'd with a PROT_NONE guard page at its low (growth) end, so an overflow
+// FAULTS on the guard instead of silently scribbling on the neighbouring heap. That much is
+// unconditional (POSIX).
+//
+// Turning that fault into the same clean fiber-kill as any other trap is Linux/x86-64 and
+// production-only (see the !NEON_ASAN gate): a SIGSEGV handler runs on a sigaltstack (the
+// fiber's own stack is, by definition, exhausted), but it does NOT try to switch away from
+// the signal handler — a non-returning handler leaves the altstack marked in-use and the
+// signal blocked. Instead it REWRITES the interrupted context to resume, via the kernel's own
+// sigreturn, on a healthy recovery stack (which unblocks the signal and clears the
+// on-altstack state for free); that recovery routine then does the ordinary
+// neon_fiber_on_trap switch. Under AddressSanitizer the handler is left OFF so ASan's own
+// SEGV handler reports the overflow — it detects stack-overflow well, and replacing it would
+// blind the whole test binary; the isolation path is validated by a standalone non-ASan
+// program instead.
+
+#if defined(__unix__) || (defined(__APPLE__) && defined(__MACH__))
+#  define NEON_FIBER_GUARDED 1
+#  include <sys/mman.h>
+#  include <unistd.h>
+#endif
+
+#if defined(NEON_FIBER_GUARDED) && defined(__linux__) && defined(__x86_64__) && !NEON_ASAN
+#  define NEON_FIBER_OVERFLOW_ISOLATION 1
+#  include <signal.h>
+#  include <ucontext.h>
+#endif
+
+#if defined(NEON_FIBER_GUARDED)
+static size_t neon_fiber_page(void) {
+    long p = sysconf(_SC_PAGESIZE);
+    return p > 0 ? (size_t)p : 4096u;
+}
 #endif
 
 // A fiber's stack floor. ASan-instrumented frames carry redzones and are deep, so a mean
@@ -122,25 +165,126 @@ void neon_fiber_on_trap(void) {
     __builtin_unreachable();
 }
 
+#if defined(NEON_FIBER_OVERFLOW_ISOLATION)
+#define NEON_FIBER_ALT_SIZE (64u * 1024u)
+#define NEON_FIBER_RECOVERY_SIZE (64u * 1024u)
+
+static _Thread_local bool t_sig_ready;
+static _Thread_local void* t_altstack;  // sigaltstack the SEGV handler runs on
+static _Thread_local void* t_recovery;  // healthy stack the handler redirects sigreturn onto
+static volatile sig_atomic_t g_segv_installed; // process-wide; M=1 is single-threaded
+
+// Runs on the recovery stack after sigreturn — a healthy stack, signal already unblocked.
+// Reports the overflow with an async-signal-safe write and kills the fiber the usual way.
+static void neon_fiber_overflow_recover(void) {
+    static const char m[] = "neon: fiber stack overflow\n";
+    ssize_t r = write(2, m, sizeof(m) - 1);
+    (void)r;
+    neon_fiber_on_trap(); // switch to the scheduler; never returns
+    __builtin_unreachable();
+}
+
+static void neon_fiber_segv(int sig, siginfo_t* info, void* ucv) {
+    neon_fiber* self = t_current;
+    if (self != NULL && !self->is_root && t_recovery != NULL) {
+        uintptr_t fault = (uintptr_t)info->si_addr;
+        uintptr_t guard_hi = (uintptr_t)self->stack_bottom;   // usable low end
+        uintptr_t guard_lo = guard_hi - neon_fiber_page();    // the PROT_NONE guard page
+        if (fault >= guard_lo && fault < guard_hi) {
+            // A fiber overflowed. Redirect the interrupted context to run recovery on the
+            // healthy recovery stack; sigreturn does the rest. rsp ≡ 8 (mod 16) at entry.
+            ucontext_t* uc = (ucontext_t*)ucv;
+            uintptr_t rtop = ((uintptr_t)t_recovery + NEON_FIBER_RECOVERY_SIZE) & ~(uintptr_t)15u;
+            uc->uc_mcontext.gregs[REG_RSP] = (greg_t)(rtop - 8u);
+            uc->uc_mcontext.gregs[REG_RIP] = (greg_t)(uintptr_t)&neon_fiber_overflow_recover;
+            return;
+        }
+    }
+    // Not a fiber overflow: restore the default disposition and return, so the faulting
+    // instruction re-executes into it (a genuine crash still cores, unchanged).
+    struct sigaction dfl;
+    memset(&dfl, 0, sizeof(dfl));
+    dfl.sa_handler = SIG_DFL;
+    sigemptyset(&dfl.sa_mask);
+    sigaction(sig, &dfl, NULL);
+}
+
+// Idempotent per-thread setup for overflow isolation: a sigaltstack to catch the SEGV on (the
+// fiber stack is exhausted), a healthy recovery stack, and — once per process — the handler.
+static void neon_fiber_thread_init(void) {
+    if (t_sig_ready) {
+        return;
+    }
+    t_sig_ready = true;
+    t_altstack = malloc(NEON_FIBER_ALT_SIZE);
+    t_recovery = malloc(NEON_FIBER_RECOVERY_SIZE);
+    if (t_altstack == NULL || t_recovery == NULL) {
+        neon_trap("out of memory");
+    }
+    stack_t ss;
+    ss.ss_sp = t_altstack;
+    ss.ss_size = NEON_FIBER_ALT_SIZE;
+    ss.ss_flags = 0;
+    sigaltstack(&ss, NULL);
+    if (!g_segv_installed) {
+        g_segv_installed = 1;
+        struct sigaction sa;
+        memset(&sa, 0, sizeof(sa));
+        sa.sa_sigaction = neon_fiber_segv;
+        sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+        sigemptyset(&sa.sa_mask);
+        sigaction(SIGSEGV, &sa, NULL);
+        sigaction(SIGBUS, &sa, NULL); // a guard-page hit can surface as SIGBUS on some kernels
+    }
+}
+#else
+static void neon_fiber_thread_init(void) {}
+#endif
+
 neon_fiber* neon_fiber_new(neon_fiber_fn fn, void* arg, size_t stack_size) {
+    neon_fiber_thread_init(); // set up overflow isolation for this thread (idempotent, no-op under ASan)
+
     if (stack_size < NEON_FIBER_MIN_STACK) {
         stack_size = NEON_FIBER_MIN_STACK;
     }
-    stack_size = (stack_size + 15u) & ~(size_t)15u;
 
-    void* stack = malloc(stack_size); // malloc is 16-byte aligned on x86-64 SysV
-    if (stack == NULL) {
+    // Allocate the stack with a PROT_NONE guard page at the low (growth) end where it exists;
+    // `base` is the whole allocation, `usable_lo`..`usable_lo+usable` the writable stack.
+    void* base;
+    char* usable_lo;
+    size_t usable;
+    size_t map_len = 0;
+#if defined(NEON_FIBER_GUARDED)
+    size_t page = neon_fiber_page();
+    usable = (stack_size + page - 1) & ~(page - 1);
+    map_len = usable + page; // one guard page below the usable region
+    base = mmap(NULL, map_len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (base == MAP_FAILED) {
         neon_trap("out of memory");
     }
+    if (mprotect(base, page, PROT_NONE) != 0) {
+        neon_trap("mprotect failed");
+    }
+    usable_lo = (char*)base + page;
+#else
+    usable = (stack_size + 15u) & ~(size_t)15u;
+    base = malloc(usable);
+    if (base == NULL) {
+        neon_trap("out of memory");
+    }
+    usable_lo = (char*)base;
+#endif
+
     neon_fiber* f = calloc(1, sizeof(neon_fiber));
     if (f == NULL) {
         neon_trap("out of memory");
     }
     f->fn = fn;
     f->arg = arg;
-    f->stack = stack;
-    f->stack_bottom = stack;
-    f->stack_size = stack_size;
+    f->stack = base;
+    f->map_len = map_len;
+    f->stack_bottom = usable_lo;
+    f->stack_size = usable;
     f->arena = neon_arena_create(); // the fiber's private heap; neon_alloc routes here while it runs
 
     // Prime the initial frame to mirror what neon_ctx_swap saves, so its first restore + ret
@@ -148,7 +292,7 @@ neon_fiber* neon_fiber_new(neon_fiber_fn fn, void* arg, size_t stack_size) {
     // bootstrap sees it (ABI: rsp ≡ 8 mod 16 at a function's entry); `sp` is where the gadget
     // begins restoring, 0x48 below `land` (16-byte FP slot + six saved registers + return
     // address). See the layout comment in fiber_swap_x86_64_sysv.S.
-    uintptr_t top = ((uintptr_t)stack + stack_size) & ~(uintptr_t)15u;
+    uintptr_t top = ((uintptr_t)usable_lo + usable) & ~(uintptr_t)15u;
     uintptr_t land = top - 8u;
     uintptr_t sp = land - 0x48u;
     unsigned char* frame = (unsigned char*)sp;
@@ -194,6 +338,10 @@ void neon_fiber_free(neon_fiber* f) {
     // (resource cleanups, shared-value decrements) before the bulk-free is the teardown WALK,
     // slice 4.
     neon_arena_drop(f->arena);
+#if defined(NEON_FIBER_GUARDED)
+    munmap(f->stack, f->map_len);
+#else
     free(f->stack);
+#endif
     free(f);
 }
