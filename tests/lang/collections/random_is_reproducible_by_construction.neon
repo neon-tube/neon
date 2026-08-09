@@ -1,0 +1,48 @@
+// `std::random` threads the generator as a value, and this file pins the payoff: the
+// EXACT sequence seed 42 names, forever. If these goldens ever change, the generator
+// changed algorithms — xoshiro256++ seeded by splitmix64 — and that is a breaking
+// change wearing a diff, not a refactor.
+
+use std::io;
+use std::list;
+use std::random;
+
+fn main() {
+    let rng = random::new(42);
+    let (a, rng) = random::next(rng);
+    io::println("#{a}");
+
+    // Half-open, like everything: six sides is 1..7.
+    let (b, rng) = random::int(rng, 1, 7);
+    io::println("#{b}");
+
+    let (c, rng) = random::float(rng);
+    io::println("#{c >= 0.0 and c < 1.0}");
+
+    let (p, rng) = try! random::pick(rng, ["x", "y", "z"]);
+    io::println(p);
+
+    // A shuffle is a permutation, and THIS permutation, deterministically.
+    let (sh, rng) = random::shuffle(rng, 0..10);
+    io::println("#{list::sort(sh) == 0..10}");
+    io::println("#{sh}");
+
+    // The same seed is the same sequence — the value threading means nothing between
+    // the two calls can perturb it.
+    let again = random::new(42);
+    let (a2, _unused) = random::next(again);
+    io::println("#{a == a2}");
+
+    // Two generators forked from one state diverge from their next calls but the
+    // original is untouched: state is a value, holding one is holding that point in
+    // the sequence.
+    let held = random::new(7);
+    let (x1, _r1) = random::next(held);
+    let (x2, _r2) = random::next(held);
+    io::println("#{x1 == x2}");
+
+    // Picking from nothing is an error, not a trap: data being empty is ordinary.
+    let none: List[i64] = [];
+    let picked = try? random::pick(rng, none);
+    io::println("#{picked is null}");
+}

@@ -1,0 +1,19 @@
+// Two clocks and a pause. No `Instant` and no `Duration`: without methods or operator
+// overloading those types are ceremony around an integer, and the protection that
+// matters — never measuring with the wall clock — lives in the NAMES here instead.
+
+/// Nanoseconds from an arbitrary origin. Differences mean something; the value itself
+/// means nothing, and it never goes backwards. This is the measuring clock:
+///
+///     let began = time::monotonic();
+///     work();
+///     let took_ms = (time::monotonic() - began) / 1000000;
+@native("neon_time_monotonic") fn monotonic() -> i64
+
+/// Milliseconds since 1970-01-01T00:00:00Z — the calendar. It can jump either direction
+/// when the machine's clock is set, which is why it is not the measuring clock.
+@native("neon_time_unix_millis") fn unix_millis() -> i64
+
+/// Block for at least `millis`. At least: the OS wakes the process no sooner, and
+/// somewhat later under load. `millis <= 0` returns at once.
+@native("neon_time_sleep") fn sleep(millis: i64)

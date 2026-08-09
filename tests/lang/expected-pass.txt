@@ -49,6 +49,7 @@ basics/shadowing.neon
 basics/shadowing_changes_type.neon
 basics/str_literals.neon
 basics/test_blocks_do_not_run.neon
+basics/time_has_two_clocks.neon
 basics/unknown_name_suggestions.neon
 basics/unknown_name_typo_in_used_module.neon
 basics/unknown_type_suggestion.neon
@@ -108,6 +109,7 @@ collections/nested_write_depth3.neon
 collections/nested_write_in_place.neon
 collections/partial_record_write_across_distinct_slots.neon
 collections/partial_record_write_keeps_stale_fields.neon
+collections/random_is_reproducible_by_construction.neon
 collections/range_is_a_list_everywhere_else.neon
 collections/stdlib_breadth.neon
 collections/stdlib_breadth_lists_and_math.neon

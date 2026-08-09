@@ -34,6 +34,9 @@ typedef int64_t neon_ssize;
 
 #ifdef _WIN32
 
+// Before <stdlib.h>: `rand_s` (the CRT's door to the OS CSPRNG) is only declared with it.
+#define _CRT_RAND_S
+
 #include <fcntl.h>
 #include <io.h>
 #include <limits.h>
@@ -267,9 +270,44 @@ NEON_NORETURN static inline void neon_plat_exit_now(int code) {
     _exit(code);
 }
 
+// QueryPerformanceCounter: the monotonic clock Windows actually promises. Scaled to
+// nanoseconds through the queried frequency, both cached — they never change.
+static inline int64_t neon_plat_monotonic_ns(void) {
+    static LARGE_INTEGER freq;
+    if (freq.QuadPart == 0) {
+        QueryPerformanceFrequency(&freq);
+    }
+    LARGE_INTEGER t;
+    QueryPerformanceCounter(&t);
+    return (int64_t)((double)t.QuadPart * (1000000000.0 / (double)freq.QuadPart));
+}
+
+static inline int64_t neon_plat_unix_millis(void) {
+    // FILETIME epoch is 1601; the offset to 1970 in 100ns units is a constant.
+    FILETIME ft;
+    GetSystemTimeAsFileTime(&ft);
+    uint64_t t = ((uint64_t)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+    return (int64_t)((t - 116444736000000000ULL) / 10000ULL);
+}
+
+static inline void neon_plat_sleep_ms(int64_t ms) {
+    if (ms > 0) {
+        Sleep((DWORD)ms);
+    }
+}
+
+// `rand_s` reaches the OS CSPRNG through the CRT without pulling in bcrypt.
+static inline int64_t neon_plat_entropy(void) {
+    unsigned int hi = 0, lo = 0;
+    rand_s(&hi);
+    rand_s(&lo);
+    return (int64_t)(((uint64_t)hi << 32) | lo);
+}
+
 #else
 
 #include <sys/uio.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <fcntl.h>
@@ -335,6 +373,40 @@ static inline void neon_plat_stdio_binary(void) {
 
 NEON_NORETURN static inline void neon_plat_exit_now(int code) {
     _exit(code);
+}
+
+static inline int64_t neon_plat_monotonic_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000000 + (int64_t)ts.tv_nsec;
+}
+
+static inline int64_t neon_plat_unix_millis(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return (int64_t)ts.tv_sec * 1000 + (int64_t)ts.tv_nsec / 1000000;
+}
+
+static inline void neon_plat_sleep_ms(int64_t ms) {
+    if (ms <= 0) {
+        return;
+    }
+    struct timespec ts = {(time_t)(ms / 1000), (long)(ms % 1000) * 1000000};
+    // EINTR resumes with the remainder, so a signal does not shorten the sleep.
+    while (nanosleep(&ts, &ts) != 0 && errno == EINTR) {
+    }
+}
+
+// `getentropy` over reading /dev/urandom: no descriptor to manage, and it is in every
+// libc this runtime meets (glibc 2.25+, musl, the BSDs, macOS).
+static inline int64_t neon_plat_entropy(void) {
+    uint64_t v = 0;
+    if (getentropy(&v, sizeof v) != 0) {
+        // The one fallback that needs no unavailable machinery: the clock. Weak, and
+        // says so — a failed getentropy on a supported platform is already strange.
+        v = (uint64_t)neon_plat_monotonic_ns() ^ ((uint64_t)neon_plat_unix_millis() << 17);
+    }
+    return (int64_t)v;
 }
 
 #endif

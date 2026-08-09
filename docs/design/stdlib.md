@@ -187,6 +187,8 @@ Module headers are the reference. The shape:
     std::math            PI, E, sqrt, pow, floor, ceil, round, abs, is_nan, is_infinite,
                          ln, log10, exp, sin, cos, tan, atan2, min, max, clamp,
                          abs_int, clamp_int, to_f64, to_int
+    std::random          Rng, new, from_entropy, next, int, float, pick, shuffle
+    std::time            monotonic, unix_millis, sleep
     std::cmp             max, min, max_by, min_by
     std::fmt             pad, pad_left, pad_left_with, fixed
     std::json            Json, ToJson, FromJson, encode, decode, JsonError

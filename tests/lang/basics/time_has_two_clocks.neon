@@ -1,0 +1,24 @@
+// `std::time`, by its properties — the values are the machine's, but the contracts are
+// not: monotonic never decreases, sleep advances it by at least the asked-for time, and
+// the calendar clock knows it is after 2020.
+
+use std::io;
+use std::time;
+
+fn main() {
+    let m1 = time::monotonic();
+    let m2 = time::monotonic();
+    io::println("#{m2 >= m1}");
+
+    let began = time::monotonic();
+    time::sleep(5);
+    let took = time::monotonic() - began;
+    io::println("#{took >= 5000000}");
+
+    io::println("#{time::unix_millis() > 1600000000000}");
+
+    // A non-positive sleep returns at once rather than being an error.
+    time::sleep(0);
+    time::sleep(-3);
+    io::println("ok");
+}

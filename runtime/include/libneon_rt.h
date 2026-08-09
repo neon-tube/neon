@@ -21,8 +21,10 @@
 #include "neon/math.h"
 #include "neon/os.h"
 #include "neon/portability.h"
+#include "neon/random.h"
 #include "neon/resource.h"
 #include "neon/string.h"
+#include "neon/time.h"
 #include "neon/trap.h"
 
 #endif

@@ -1,0 +1,93 @@
+// Randomness as a value. An `Rng` is the generator's state — xoshiro256++, four words —
+// and every function takes one and hands back the successor beside its answer:
+//
+//     let rng = random::new(42);
+//     let (roll, rng) = random::int(rng, 1, 7);
+//
+// The rebind is the language's ordinary gait (`out = push(out, x)` is the same shape),
+// and a linearly-threaded Rng is uniquely owned, so the "new" state is an in-place
+// update. What the threading buys is that randomness is REPRODUCIBLE BY CONSTRUCTION:
+// the sequence is a function of the seed and the calls, not of whatever else the program
+// did between them — no library can perturb your rolls, and a test can hold the exact
+// generator its subject saw. A seeded generator is a pure computation; the only effect
+// in the whole domain is asking the OS for entropy, and that is the one impure function
+// here.
+//
+// `opaque` so the words stay this module's business: reachable state would make "the
+// sequence the algorithm defines" a promise anyone could quietly break.
+
+use std::list;
+
+opaque record Rng { s0: i64, s1: i64, s2: i64, s3: i64 }
+
+internal mod raw {
+    /// splitmix64 over the seed, per xoshiro's authors: it cannot yield the all-zero
+    /// state the generator must never sit in.
+    @pure @native("neon_rng_seed") fn seed(n: i64) -> (i64, i64, i64, i64)
+    @pure @native("neon_rng_next") fn next(s0: i64, s1: i64, s2: i64, s3: i64) -> (i64, i64, i64, i64, i64)
+    /// Lemire rejection, so no modulo bias; traps when `n <= 0`.
+    @pure @native("neon_rng_bounded") fn bounded(s0: i64, s1: i64, s2: i64, s3: i64, n: i64) -> (i64, i64, i64, i64, i64)
+    @pure @native("neon_rng_float") fn float_bits(s0: i64, s1: i64, s2: i64, s3: i64) -> (f64, i64, i64, i64, i64)
+    @native("neon_os_entropy") fn entropy() -> i64
+}
+
+/// The generator `seed` names. Same seed, same sequence, forever — that is the contract,
+/// and benchmarks and tests are built on it.
+fn new(seed: i64) -> Rng {
+    let (s0, s1, s2, s3) = raw::seed(seed);
+    Rng { s0: s0, s1: s1, s2: s2, s3: s3 }
+}
+
+/// A generator seeded from the OS. The module's ONE effectful function: everything
+/// downstream of the `Rng` it returns is pure.
+fn from_entropy() -> Rng {
+    new(raw::entropy())
+}
+
+/// The raw 64 bits, any value an `i64` can hold.
+fn next(r: Rng) -> (i64, Rng) {
+    let (v, s0, s1, s2, s3) = raw::next(r.s0, r.s1, r.s2, r.s3);
+    (v, Rng { s0: s0, s1: s1, s2: s2, s3: s3 })
+}
+
+/// Uniform in the half-open `[lo, hi)`, like `range` and `slice` and everything else.
+/// An empty range traps — an element of nothing is a mistake, as dividing by zero is.
+fn int(r: Rng, lo: i64, hi: i64) -> (i64, Rng) {
+    let (v, s0, s1, s2, s3) = raw::bounded(r.s0, r.s1, r.s2, r.s3, hi - lo);
+    (lo + v, Rng { s0: s0, s1: s1, s2: s2, s3: s3 })
+}
+
+/// Uniform in `[0, 1)`: the top 53 bits over 2^53, so every representable step is
+/// equally likely.
+fn float(r: Rng) -> (f64, Rng) {
+    let (v, s0, s1, s2, s3) = raw::float_bits(r.s0, r.s1, r.s2, r.s3);
+    (v, Rng { s0: s0, s1: s1, s2: s2, s3: s3 })
+}
+
+/// One element, uniformly. Throws on the empty list rather than trapping: a list is
+/// data, and data being empty is the caller's ordinary world, not a broken program.
+fn pick[T](r: Rng, xs: List[T]) throws IndexError -> (T, Rng) {
+    if list::is_empty(xs) {
+        throw IndexError { message: "pick from an empty list" };
+    }
+    let (i, r2) = int(r, 0, list::len(xs));
+    (xs[i], r2)
+}
+
+/// A uniform permutation — Fisher–Yates, walking from the end. `try!` on the swaps is
+/// exact, not optimistic: both indices are bounded by the loop, so a throw is
+/// unreachable and deserves the panic it would get.
+fn shuffle[T](r: Rng, xs: List[T]) -> (List[T], Rng) {
+    let out = xs;
+    let rng = r;
+    let i = list::len(out) - 1;
+    while i > 0 {
+        let (j, r2) = int(rng, 0, i + 1);
+        rng = r2;
+        let a = out[i];
+        out = try! list::set(out, i, out[j]);
+        out = try! list::set(out, j, a);
+        i = i - 1;
+    };
+    (out, rng)
+}
