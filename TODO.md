@@ -264,6 +264,19 @@ In order:
    repr and can call the concrete drop directly (keeping the `rc == 0` test), letting
    small drops inline. A few percent, and it removes the same indirect-call barriers
    the brainfuck work just paid to remove elsewhere.
+
+   **Built and REJECTED, 2026-08-09.** `neon_release_drop(h, ned0)` — a `static inline`
+   release taking the drop by name so the constant propagates and the call goes direct —
+   works and is correct (compiles, runs, oracle-clean), and it is 5-6% *slower* on
+   binary-trees (0.82s vs 0.78s baseline, runs=15, C steady at 0.68s). The premise was
+   backwards for this bench: the Node drop is RECURSIVE (it releases two child Nodes), so
+   devirtualising turns it into a directly self-recursive function that gcc partially
+   inlines into itself, bloating the drop — while the indirect `h->drop` was a tight,
+   well-predicted recursion boundary. The profile's "8% in drop" was low-branch-miss time
+   that a direct call cannot recover. It would help a NON-recursive small drop (scalar/
+   string fields), but no benchmark has one: n-body is flat records in a list, and
+   word-frequency's drop cost is string `cfree` (a `Str`, not a boxed record, which this
+   never touched). Do not re-propose from the drop's profile share.
 3. **Header diet.** The layout today is rc at +0, flags at +8, drop pointer at +16 — a
    24-byte header on a 16-byte payload, so a Node is 40 bytes to C's 16. Pack rc+flags
    and turn the drop pointer into a type index and the header halves; every heap object
