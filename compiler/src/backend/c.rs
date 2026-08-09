@@ -29,7 +29,7 @@ use std::fmt::Write;
 
 /// Emit the whole program as C source.
 pub fn emit(program: &Program) -> String {
-    emit_with(program, None)
+    emit_with(program, Entry::Main)
 }
 
 /// Emit a test binary: the same translation unit, but the entry point dispatches to one
@@ -46,10 +46,24 @@ pub fn emit(program: &Program) -> String {
 /// not a harness selector pretending to be one. `getenv` reaches the same information
 /// without stealing from that namespace.
 pub fn emit_tests(program: &Program, tests: &[crate::ir::lower::TestEntry]) -> String {
-    emit_with(program, Some(tests))
+    emit_with(program, Entry::Tests(tests))
 }
 
-fn emit_with(program: &Program, tests: Option<&[crate::ir::lower::TestEntry]>) -> String {
+/// As `emit_tests`, for `bench` blocks: the entry point runs ONE bench, chosen by
+/// `NEON_BENCH`, through the adaptive timing loop `emit_bench_entry` explains.
+pub fn emit_benches(program: &Program, benches: &[crate::ir::lower::TestEntry]) -> String {
+    emit_with(program, Entry::Benches(benches))
+}
+
+/// Which entry point the emitted C ends with.
+enum Entry<'a> {
+    /// `int main` calling the program's own `main`, when it has one.
+    Main,
+    Tests(&'a [crate::ir::lower::TestEntry]),
+    Benches(&'a [crate::ir::lower::TestEntry]),
+}
+
+fn emit_with(program: &Program, entry: Entry) -> String {
     let types = TypeTable::build(program);
     let mut out = String::new();
     // <math.h> for `fmod`, float `%`'s spelling; `-lm` is already on the link line for
@@ -89,10 +103,11 @@ fn emit_with(program: &Program, tests: Option<&[crate::ir::lower::TestEntry]>) -
     emit_list_convs(&mut out, &types);
     out.push_str(&body);
 
-    match tests {
-        Some(tests) => emit_test_entry(&mut out, tests),
+    match entry {
+        Entry::Tests(tests) => emit_test_entry(&mut out, tests),
+        Entry::Benches(benches) => emit_bench_entry(&mut out, benches),
         // The C entry point, if this program has a `main`.
-        None => {
+        Entry::Main => {
             if program.funcs.iter().any(|f| f.name == "main") {
                 out.push_str(
                     "int main(int argc, char** argv) {\n    neon_rt_init(argc, argv);\n    nl_main();\n    return 0;\n}\n",
@@ -109,6 +124,52 @@ fn emit_with(program: &Program, tests: Option<&[crate::ir::lower::TestEntry]>) -
 /// assertion never reaches either — `neon_panic` exits the process itself — which is
 /// exactly the split the runner reads: a clean 0 is a pass, anything else is a failure with
 /// the panic's message on stderr.
+/// The bench binary's entry point: run the one block `NEON_BENCH` names through an
+/// adaptive timing loop, and print nanoseconds-per-iteration to stdout as a float.
+///
+/// The loop is Go's shape: one untimed call to warm caches (and to fail fast if the
+/// body traps), then batches that double until a batch takes at least 200ms — long
+/// enough that clock granularity and loop overhead vanish into the noise, short enough
+/// that a whole suite stays interactive. The body is reached through a FUNCTION
+/// POINTER on purpose: the C compiler cannot see through it to hoist or delete the
+/// repeated work, which is the classic way a benchmark measures nothing.
+///
+/// One process per bench, like tests: a bench that traps kills only itself, and each
+/// starts from a cold runtime rather than inheriting the previous one's heap.
+fn emit_bench_entry(out: &mut String, benches: &[crate::ir::lower::TestEntry]) {
+    out.push_str("#include <stdlib.h>\n#include <stdio.h>\n\n");
+    out.push_str("static void neon_bench_run(void (*body)(void)) {\n");
+    out.push_str("    body();\n");
+    out.push_str("    int64_t k = 1;\n");
+    out.push_str("    for (;;) {\n");
+    out.push_str("        int64_t began = neon_time_monotonic();\n");
+    out.push_str("        for (int64_t i = 0; i < k; i++) {\n            body();\n        }\n");
+    out.push_str("        int64_t took = neon_time_monotonic() - began;\n");
+    out.push_str("        if (took >= 200000000 || k >= (1LL << 40)) {\n");
+    out.push_str("            printf(\"%.1f\\n\", (double)took / (double)k);\n");
+    out.push_str("            return;\n        }\n");
+    out.push_str("        k += k;\n    }\n}\n\n");
+    out.push_str("int main(int argc, char** argv) {\n");
+    out.push_str("    const char *which = getenv(\"NEON_BENCH\");\n");
+    out.push_str("    if (which == NULL) {\n");
+    out.push_str(
+        "        fputs(\"neon: this is a bench binary; set NEON_BENCH to a bench index\\n\", stderr);\n",
+    );
+    out.push_str("        return 2;\n    }\n");
+    out.push_str("    neon_rt_init(argc, argv);\n");
+    out.push_str("    switch (strtol(which, NULL, 10)) {\n");
+    for (i, b) in benches.iter().enumerate() {
+        let _ = writeln!(
+            out,
+            "    case {i}: neon_bench_run({}); return 0;",
+            mangle(&b.symbol)
+        );
+    }
+    out.push_str("    default: break;\n    }\n");
+    out.push_str("    fputs(\"neon: no such bench\\n\", stderr);\n");
+    out.push_str("    return 2;\n}\n");
+}
+
 fn emit_test_entry(out: &mut String, tests: &[crate::ir::lower::TestEntry]) {
     // `getenv`/`strtol` and `fputs`; the runtime header does not promise either.
     out.push_str("#include <stdlib.h>\n#include <stdio.h>\n\n");

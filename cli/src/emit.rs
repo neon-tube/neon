@@ -69,6 +69,26 @@ pub fn to_test_executable(
     link(&c::emit_tests(&program, tests), out, cfg)
 }
 
+/// As `to_test_executable`, for `bench` blocks: the entry point times one block, chosen
+/// by `NEON_BENCH`, and prints ns/iteration. Same ordinary build configuration — a bench
+/// against gentler codegen measures the wrong compiler.
+pub fn to_bench_executable(
+    checked: &Checked,
+    benches: &[neon_compiler::ir::lower::TestEntry],
+    out: &Path,
+    cfg: &BuildConfig,
+) -> Result<()> {
+    let libs: Vec<(Vec<String>, &_)> = checked.libs.iter().map(|(p, m)| (p.clone(), m)).collect();
+    let program = ir::compile_benches(
+        &checked.env,
+        &checked.result,
+        &checked.module,
+        &libs,
+        Some(&checked.source),
+    );
+    link(&c::emit_benches(&program, benches), out, cfg)
+}
+
 /// Write the emitted C beside `out` and hand it to the configured C compiler along with the
 /// runtime archive.
 fn link(c_source: &str, out: &Path, cfg: &BuildConfig) -> Result<()> {

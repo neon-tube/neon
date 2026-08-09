@@ -512,7 +512,7 @@ pub fn lower_module<'a>(
     module: &'a ast::Module,
     libs: &[(Vec<String>, &'a ast::Module)],
 ) -> Program {
-    lower_module_with(env, result, module, libs, false, None)
+    lower_module_with(env, result, module, libs, None, None)
 }
 
 /// One `test "name" { .. }` block, in the order `lower_module_with` emits them.
@@ -542,25 +542,46 @@ pub fn test_entries_with(
     module: &ast::Module,
     libs: &[(Vec<String>, &ast::Module)],
 ) -> Vec<TestEntry> {
-    fn walk(decls: &[Decl], out: &mut Vec<TestEntry>) {
+    block_entries(module, libs, ast::TestKind::Test)
+}
+
+/// `test_entries_with` for `bench` blocks: same walk, same index-is-symbol contract,
+/// under the `__neon_bench_` prefix so a binary carrying both could never cross them.
+pub fn bench_entries_with(
+    module: &ast::Module,
+    libs: &[(Vec<String>, &ast::Module)],
+) -> Vec<TestEntry> {
+    block_entries(module, libs, ast::TestKind::Bench)
+}
+
+fn block_entries(
+    module: &ast::Module,
+    libs: &[(Vec<String>, &ast::Module)],
+    kind: ast::TestKind,
+) -> Vec<TestEntry> {
+    fn walk(decls: &[Decl], kind: ast::TestKind, prefix: &str, out: &mut Vec<TestEntry>) {
         for d in decls {
             match &d.kind {
-                DeclKind::TestBlock(t) if t.kind == ast::TestKind::Test => {
-                    let symbol = format!("__neon_test_{}", out.len());
+                DeclKind::TestBlock(t) if t.kind == kind => {
+                    let symbol = format!("{prefix}{}", out.len());
                     out.push(TestEntry {
                         name: t.name.clone(),
                         symbol,
                     });
                 }
-                DeclKind::Mod(m) => walk(&m.decls, out),
+                DeclKind::Mod(m) => walk(&m.decls, kind, prefix, out),
                 _ => {}
             }
         }
     }
+    let prefix = match kind {
+        ast::TestKind::Test => "__neon_test_",
+        ast::TestKind::Bench => "__neon_bench_",
+    };
     let mut out = Vec::new();
-    walk(&module.decls, &mut out);
+    walk(&module.decls, kind, prefix, &mut out);
     for (_, m) in libs {
-        walk(&m.decls, &mut out);
+        walk(&m.decls, kind, prefix, &mut out);
     }
     out
 }
@@ -575,7 +596,7 @@ pub fn lower_module_with<'a>(
     result: &TypecheckResult,
     module: &'a ast::Module,
     libs: &[(Vec<String>, &'a ast::Module)],
-    tests: bool,
+    blocks: Option<ast::TestKind>,
     source: Option<&SourceMap>,
 ) -> Program {
     let mut funcs = Vec::new();
@@ -613,13 +634,13 @@ pub fn lower_module_with<'a>(
     // `test` blocks, in test mode only. Each is a nullary unit function; the entry point
     // the backend emits is the only caller. Root first, then libs, in the same order
     // `test_entries_with` numbers them — index N here IS `__neon_test_N` there.
-    if tests {
+    if let Some(kind) = blocks {
         let mut blocks: Vec<(Vec<String>, &'a ast::TestBlock)> = Vec::new();
-        collect_test_blocks(&[], &module.decls, &mut blocks);
+        collect_test_blocks(&[], &module.decls, kind, &mut blocks);
         for (path, m) in libs {
-            collect_test_blocks(path, &m.decls, &mut blocks);
+            collect_test_blocks(path, &m.decls, kind, &mut blocks);
         }
-        for (entry, (m, t)) in test_entries_with(module, libs).into_iter().zip(blocks) {
+        for (entry, (m, t)) in block_entries(module, libs, kind).into_iter().zip(blocks) {
             let (func, l, i) = lower_test_block(env, result, source, &m, t, entry.symbol);
             lowered.insert(func.name.clone());
             funcs.push(func);
@@ -1201,17 +1222,16 @@ fn lower_fn(
 fn collect_test_blocks<'a>(
     module: &[String],
     decls: &'a [Decl],
+    kind: ast::TestKind,
     out: &mut Vec<(Vec<String>, &'a ast::TestBlock)>,
 ) {
     for d in decls {
         match &d.kind {
-            DeclKind::TestBlock(t) if t.kind == ast::TestKind::Test => {
-                out.push((module.to_vec(), t))
-            }
+            DeclKind::TestBlock(t) if t.kind == kind => out.push((module.to_vec(), t)),
             DeclKind::Mod(m) => {
                 let mut inner = module.to_vec();
                 inner.push(m.name.clone());
-                collect_test_blocks(&inner, &m.decls, out);
+                collect_test_blocks(&inner, &m.decls, kind, out);
             }
             _ => {}
         }

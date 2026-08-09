@@ -828,7 +828,13 @@ falling off the end of the argument means nothing threw, which panics with the
 argument's source text. An argument that *cannot* throw is a compile error: that
 assertion could never pass, and a test that fails on every run is a mistake worth
 catching before the first run.
-`bench` blocks are parsed and stripped, and nothing runs them.
+`bench` blocks run under `neon bench`, on `neon test`'s machinery — each block a nullary
+function, one process per block, `NEON_BENCH` selecting — with the entry point replaced
+by a timing loop: warm up once, double the batch until it runs at least 200ms, report
+ns/iteration. The body is reached through a function pointer so the C compiler cannot
+delete the repeated work; a body whose own result is dead is its own responsibility (use
+the result — an `assert` on it costs one compare and keeps the measurement honest). In
+every other build, `bench` blocks are stripped exactly as `test` blocks are.
 
 ---
 

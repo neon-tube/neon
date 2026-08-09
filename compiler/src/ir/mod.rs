@@ -51,7 +51,7 @@ pub fn compile(
     stage: Stage,
     source: Option<&lower::SourceMap>,
 ) -> Program {
-    compile_with(env, result, module, libs, stage, false, source)
+    compile_with(env, result, module, libs, stage, None, source)
 }
 
 /// `compile`, for `neon test`: `test` blocks are lowered as functions instead of stripped.
@@ -59,6 +59,27 @@ pub fn compile(
 /// Everything after lowering is the same pipeline. A test body is ordinary code and gets
 /// the same optimiser and the same refcount placement as any function — running tests
 /// against a program built by a second, gentler pipeline would test the wrong compiler.
+/// `compile`, for `neon bench`: `bench` blocks are lowered as functions instead of
+/// stripped, on exactly `compile_tests`' terms — a bench measures the same codegen a
+/// real program gets, or it measures the wrong compiler.
+pub fn compile_benches(
+    env: &Env,
+    result: &TypecheckResult,
+    module: &Module,
+    libs: &[(Vec<String>, &Module)],
+    source: Option<&lower::SourceMap>,
+) -> Program {
+    compile_with(
+        env,
+        result,
+        module,
+        libs,
+        Stage::Final,
+        Some(crate::ast::TestKind::Bench),
+        source,
+    )
+}
+
 pub fn compile_tests(
     env: &Env,
     result: &TypecheckResult,
@@ -66,7 +87,15 @@ pub fn compile_tests(
     libs: &[(Vec<String>, &Module)],
     source: Option<&lower::SourceMap>,
 ) -> Program {
-    compile_with(env, result, module, libs, Stage::Final, true, source)
+    compile_with(
+        env,
+        result,
+        module,
+        libs,
+        Stage::Final,
+        Some(crate::ast::TestKind::Test),
+        source,
+    )
 }
 
 fn compile_with(
@@ -75,10 +104,10 @@ fn compile_with(
     module: &Module,
     libs: &[(Vec<String>, &Module)],
     stage: Stage,
-    tests: bool,
+    blocks: Option<crate::ast::TestKind>,
     source: Option<&lower::SourceMap>,
 ) -> Program {
-    let mut program = lower::lower_module_with(env, result, module, libs, tests, source);
+    let mut program = lower::lower_module_with(env, result, module, libs, blocks, source);
     if stage == Stage::Lowered {
         return program;
     }

@@ -194,6 +194,17 @@ enum Command {
         #[arg(last = true)]
         args: Vec<OsString>,
     },
+    /// Time `bench` blocks: warm up, run batches until stable, report ns per iteration.
+    Bench {
+        /// A `.neon` file; absent means the current project — the entry plus every
+        /// module under `src/`.
+        file: Option<OsString>,
+        /// Run only the benches whose name contains this substring.
+        #[arg(long)]
+        filter: Option<String>,
+        #[command(flatten)]
+        build: BuildOpts,
+    },
     /// Run `test` blocks, one per line of output, and exit non-zero if any failed.
     Test {
         /// A `.neon` file; absent means the current project — the entry plus every
@@ -294,6 +305,11 @@ fn main() -> Result<()> {
             }
             cmd::test::run(file.as_ref(), filter, build.into())
         }
+        Command::Bench {
+            file,
+            filter,
+            build,
+        } => cmd::bench::run(file.as_ref(), filter, build.into()),
         Command::Doc { target } => cmd::doc::run(target.as_ref()),
         Command::Sysroot { stdlib } => cmd::sysroot::run(stdlib),
         Command::Doctor => cmd::doctor::run(),
