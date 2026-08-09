@@ -120,15 +120,14 @@ pools and multiprocess), and it reaches parallelism specifically WITHOUT putting
 threads on one heap — see the last section. A fiber never migrates OS threads, which also
 kills the staleness class of bug described under "current fiber" below.
 
-## Finding the current fiber: from `rsp`, not from a thread-local
+## Finding the current fiber: a fast thread-local, or the RSP trick made total
 
 A blocking native — `fs::read`, `process::wait`, `io::read_line` — has to know whether it
-is running on a fiber (park on would-block) or not (block normally). The naive answer is a
-thread-local `current_fiber`, and it is both slower than it needs to be (if done with
-`pthread_getspecific`) and carries a staleness hazard (a cached value across a migration).
-
-The better answer reuses the slab's own trick: **derive the current fiber from the stack
-pointer.** Give each fiber a size-aligned stack and place its control block at the base.
+is running on a fiber (park on would-block) or not (block normally). The fear is that
+"thread-local" means the slow `pthread_getspecific` (a function call); it does not have to.
+A `_Thread_local` under initial-exec is a single instruction, and one tempting alternative
+avoids even that — derive the fiber from the stack pointer, since each fiber has a
+size-aligned stack with its control block at the base:
 
 ```c
 static inline neon_fiber* neon_current_fiber(void) {
@@ -137,16 +136,29 @@ static inline neon_fiber* neon_current_fiber(void) {
 }
 ```
 
-No thread-local. The current fiber is a *pure function of `rsp`*, and `rsp` is current by
-definition — the swap already changed which stack we are on, so there is nothing to update
-on a switch and nothing to get stale. The scheduler's own OS stack is not size-aligned this
-way, so the mask lands on a sentinel: "not on a fiber, block normally," the null case for
-free and with no branch to maintain.
+The current fiber is a *pure function of `rsp`* — the swap already changed which stack we
+are on, so there is nothing to update on a switch and nothing to get stale.
 
-The string attached: this needs **fixed-size fiber stacks** (the mask needs a constant
-size). That is almost certainly the right first answer anyway — see stacks, below — but it
-is a real commitment, and it is the reason the stack decision and the current-fiber
-decision are one decision.
+**But this is only sound if every thread that runs a native is on a fiber-shaped stack.**
+The seductive "the mask lands on a sentinel for a non-fiber thread" is FALSE: a file-offload
+pool worker runs on an ordinary pthread stack, and `rsp & ~(SIZE-1)` there reads arbitrary
+stack bytes as a `neon_fiber*` — non-NULL garbage, a use-after-free, not a clean null. The
+trick has to be made total, two ways:
+
+- **(a) Keep RSP-derivation, make every native-running thread fiber-shaped.** Create pool
+  workers with `pthread_attr_setstack` over a size-aligned mmap region whose base holds a
+  NULL fiber pointer. Then the masked read is always a real fiber or a genuine NULL.
+  Preserves the no-thread-local property, at the cost of a global invariant: *no thread
+  anywhere may run a native on a stack it did not set up this way*.
+- **(b) Use `_Thread_local neon_fiber* current_fiber`**, written inside the swap gadget,
+  NULL in a pool worker. Under the initial-exec model this is a single segment-relative
+  load (**not** `pthread_getspecific`), and with no OS-thread migration (one scheduler,
+  M:1) it never goes stale — so the RSP trick's only advantage is gone.
+
+**Recommendation: (b).** The elegance of deriving from `rsp` is not worth a memory-safety
+footgun that fires the instant a thread is set up wrong. Either way, this still needs
+**fixed-size fiber stacks** (for the guard-page overflow story below), so that commitment
+stands regardless.
 
 ## Transparent blocking: the native decides, the signature does not
 
@@ -293,7 +305,6 @@ surface is small.
 
 ```neon
 // std::fiber
-fn spawn(body: () -> null) -> Fiber          // start a fiber; it runs the closure
 fn yield()                                   // cooperatively step aside
 
 opaque record Channel[T] { .. }
@@ -313,6 +324,28 @@ Two questions this surface leaves open, both flagged for the argument:
   On one scheduler with one heap, that is safe (still one thread), but it is the seam where
   a future multi-scheduler design would need the capture MOVED, not shared — see below.
 
+### Joining a fiber: `Task[T]`, which is a channel wearing a name
+
+`spawn` is not a bare fire-and-forget primitive, because "run this and give me the answer"
+is what callers actually want, and it is a *thin library over a one-shot channel* — no new
+runtime:
+
+```neon
+opaque record Task[T] { .. }                 // a fiber plus the one-shot channel of its result
+fn spawn[T](body: () -> T) -> Task[T]         // wraps body to send its return, then runs it
+fn await[T](t: Task[T]) -> T                  // recv the result; parks the caller until it lands
+```
+
+`await` parks the *caller*, costs no OS thread, and the result crosses the fiber boundary on
+the same move-on-`ir::unique` path as any send. This is Loom's model (a virtual thread is
+joinable; `Future.get()` parks) reached through Neon's channels. **Structured concurrency**
+— a `scope` combinator that owns a set of tasks, awaits them all at block exit, and
+surfaces the first error — is buildable on top of this for the *join and error* parts, at
+library level. What it cannot buy at library level is cancellation; see the next section.
+
+A leftover fiber when `main`'s fiber returns is killed with the process, as in Go: `main`
+returning ends the program, running fibers or not.
+
 ### The send that costs nothing
 
 A channel send hands a value from one fiber to another. On a single-scheduler heap, that is
@@ -325,6 +358,44 @@ zero copy, zero refcount traffic, the sender's obligation transferred across the
 The uniqueness pass we already own is the enabling analysis for cheap message passing. That
 is the sign the model fits the language: the machinery is already here, built for another
 reason, and it turns out to be what this needs.
+
+## Cancellation is cooperative only — and here is why hard-kill is a different runtime
+
+Joining a fiber is cheap; *killing* one is where the dragon lives, and it has a precise
+cause. To kill a parked fiber you must stop it, unwind its stack, and **run every drop it
+owes** so the refcounted values it holds are released in order. Neon has no async unwind —
+`throws` is checked and explicit, never injected — so there is no mechanism to release a
+fiber's live values from the outside at an arbitrary park point.
+
+The reason Erlang can kill a process and Neon cannot kill a fiber is one fact:
+
+> **Erlang kills a process by freeing its whole heap** — one `free`, no per-object drops,
+> because the heap is the process's own. **Neon fibers share the scheduler's heap**, so a
+> killed fiber's objects cannot be bulk-freed (they may be referenced elsewhere); each must
+> go through `neon_release`, which is the unwind Neon does not have.
+
+So **hard fiber-kill is equivalent to per-fiber heaps** — the thing that makes cancellation
+cheap is the same thing that makes it a different runtime, and it is the "per-fiber heap"
+alternative already pinned below. They are one decision, taken once, for both cancellation
+and cross-scheduler migration.
+
+The sane path, and it is Go's exactly:
+
+- **Cooperative cancellation.** A fiber carries a cancellation token — a channel it
+  `select`s on, or a flag it checks — notices it is cancelled, and **returns normally**,
+  running its own drops through the ordinary return path. Nothing is injected; nothing
+  happens to a fiber that is not written in its own code. Consistent with the rest of the
+  language.
+- **True `kill(fiber)` stays deferred, bundled with per-fiber heaps.** Not built piecemeal.
+
+## Deadlock is a panic
+
+If every fiber on a scheduler is parked and there is nothing that can ever wake one — the
+run queue is empty, no IO op is in flight, no timer is pending — then the program is
+deadlocked, and no amount of waiting changes that. The scheduler detects exactly this
+condition (runnable == 0 && in-flight == 0 && timers == 0) and **panics** with a clear
+message, as Go does for "all goroutines are asleep." A hang that the runtime can prove will
+never end is a bug to report, not a state to sit in.
 
 ## What this design deliberately is NOT
 
