@@ -492,3 +492,80 @@ fn group_by[T, K](xs: List[T], key: (T) -> K) -> Map[K, List[T]] {
     };
     out
 }
+
+/// The index of the first element `pred` accepts, or `null`. `find`'s by-predicate
+/// sibling: `find` matches by value (`==`), this by an arbitrary test.
+fn position[T](xs: List[T], pred: (T) -> bool) -> i64 | null {
+    let at: i64 | null = null;
+    let i = 0;
+    for x in xs {
+        if pred(x) and at is null {
+            at = i;
+        };
+        i = i + 1;
+    };
+    at
+}
+
+/// How many elements `pred` accepts.
+fn count[T](xs: List[T], pred: (T) -> bool) -> i64 {
+    let n = 0;
+    for x in xs {
+        if pred(x) {
+            n = n + 1;
+        };
+    };
+    n
+}
+
+/// The accepted elements and the rejected ones, each keeping their order: `(kept,
+/// dropped)`. One pass, where `filter` twice is two — and it says at the call site that
+/// the two halves partition the whole.
+fn partition[T](xs: List[T], pred: (T) -> bool) -> (List[T], List[T]) {
+    let yes: List[T] = [];
+    let no: List[T] = [];
+    for x in xs {
+        if pred(x) {
+            yes = push(yes, x);
+        } else {
+            no = push(no, x);
+        };
+    };
+    (yes, no)
+}
+
+/// The distinct elements, in first-seen order. O(n) through a `Map` seen-set rather than
+/// the O(n^2) of `contains` per element; any structural value works, since map keys do.
+fn unique[T](xs: List[T]) -> List[T] {
+    let seen: Map[T, null] = map::new();
+    let out: List[T] = [];
+    for x in xs {
+        if !map::contains(seen, x) {
+            seen = map::set(seen, x, null);
+            out = push(out, x);
+        };
+    };
+    out
+}
+
+/// The index of `target` in a list that MUST be sorted ascending, or `null`. Undefined —
+/// not wrong, just unspecified — on an unsorted list, exactly as C's `bsearch` is: the
+/// precondition is the caller's to keep, and `sort` is how. O(log n), which is the whole
+/// reason to reach for it over `find`.
+fn binary_search[T](xs: List[T], target: T) -> i64 | null where T: Ord {
+    let lo = 0;
+    let hi = len(xs);
+    let found: i64 | null = null;
+    while lo < hi and found is null {
+        let mid = lo + (hi - lo) / 2;
+        let v = xs[mid];
+        if v == target {
+            found = mid;
+        } else if v < target {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        };
+    };
+    found
+}

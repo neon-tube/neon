@@ -1,0 +1,132 @@
+// Bytes as text and back: hex and base64.
+//
+// The unit is the `str` as a byte string, the same as everywhere else in `std::string` --
+// a `str` holds arbitrary bytes, and slicing or indexing it is byte-oriented. So `encode`
+// takes the raw bytes and returns printable ASCII; `decode` takes that text and returns
+// the raw bytes, throwing `DecodeError` on anything malformed. Neither interprets UTF-8:
+// hex of a PNG is as meaningful as hex of a sentence.
+//
+// Written in Neon over `string::byte_at`/`char_at`, not as natives: it is a byte loop with
+// a lookup table, the runtime has no witness to add, and keeping it here means the error
+// type and the table live where they can be read.
+
+use std::string;
+use std::list;
+
+record DecodeError { message: str }
+impl Display for DecodeError { fn to_string(v: DecodeError) -> str { v.message } }
+impl Error for DecodeError { fn message(v: DecodeError) -> str { v.message } }
+
+internal mod raw {
+    /// A byte 0..=255 as its two lowercase hex digits.
+    @pure @native("neon_byte_to_hex") fn byte_to_hex(b: i64) -> str
+    /// The value 0..=15 of a hex digit byte, or -1 if it is not one.
+    @pure @native("neon_hex_digit") fn hex_digit(b: i64) -> i64
+    /// One byte 0..=255 built into a one-byte `str`.
+    @pure @native("neon_byte_to_str") fn byte_to_str(b: i64) -> str
+}
+
+/// The bytes as lowercase hex, two characters per byte: `hex_encode("Ab")` is `"4162"`.
+fn hex_encode(bytes: str) -> str {
+    let out: List[str] = [];
+    let n = string::byte_len(bytes);
+    let i = 0;
+    while i < n {
+        out = list::push(out, raw::byte_to_hex(try! string::byte_at(bytes, i)));
+        i = i + 1;
+    };
+    string::join(out, "")
+}
+
+/// Hex back to bytes. Throws on an odd length or a non-hex character -- the two ways hex
+/// can be malformed. Upper and lower case both decode.
+fn hex_decode(text: str) throws DecodeError -> str {
+    let n = string::byte_len(text);
+    if n % 2 != 0 {
+        throw DecodeError { message: "hex has an odd number of digits" };
+    };
+    let out: List[str] = [];
+    let i = 0;
+    while i < n {
+        let hi = raw::hex_digit(try! string::byte_at(text, i));
+        let lo = raw::hex_digit(try! string::byte_at(text, i + 1));
+        if hi < 0 or lo < 0 {
+            throw DecodeError { message: "hex has a non-hex character" };
+        };
+        out = list::push(out, raw::byte_to_str(hi * 16 + lo));
+        i = i + 2;
+    };
+    string::join(out, "")
+}
+
+internal mod b64 {
+    /// The base64 character for a 6-bit value 0..=63 (standard alphabet, `+` and `/`).
+    @pure @native("neon_base64_char") fn char_of(v: i64) -> str
+    /// The 6-bit value of a base64 character byte, -1 if not in the alphabet, -2 for `=`.
+    @pure @native("neon_base64_value") fn value_of(b: i64) -> i64
+}
+
+/// The bytes as standard base64 with `=` padding: `base64_encode("Man")` is `"TWFu"`.
+fn base64_encode(bytes: str) -> str {
+    let out: List[str] = [];
+    let n = string::byte_len(bytes);
+    let i = 0;
+    while i < n {
+        let b0 = try! string::byte_at(bytes, i);
+        // The trailing group may be one or two bytes; the missing bytes read as 0 and the
+        // output is padded with `=` to mark how many were real.
+        let has1 = i + 1 < n;
+        let has2 = i + 2 < n;
+        let b1 = if has1 { try! string::byte_at(bytes, i + 1) } else { 0 };
+        let b2 = if has2 { try! string::byte_at(bytes, i + 2) } else { 0 };
+        out = list::push(out, b64::char_of(b0 / 4));
+        out = list::push(out, b64::char_of(b0 % 4 * 16 + b1 / 16));
+        out = list::push(out, if has1 { b64::char_of(b1 % 16 * 4 + b2 / 64) } else { "=" });
+        out = list::push(out, if has2 { b64::char_of(b2 % 64) } else { "=" });
+        i = i + 3;
+    };
+    string::join(out, "")
+}
+
+/// Base64 back to bytes. Throws on a length that is not a multiple of four, a character
+/// outside the alphabet, or padding in the wrong place. Standard alphabet only.
+fn base64_decode(text: str) throws DecodeError -> str {
+    let n = string::byte_len(text);
+    if n % 4 != 0 {
+        throw DecodeError { message: "base64 length is not a multiple of four" };
+    };
+    let out: List[str] = [];
+    let i = 0;
+    while i < n {
+        let v0 = b64::value_of(try! string::byte_at(text, i));
+        let v1 = b64::value_of(try! string::byte_at(text, i + 1));
+        let v2 = b64::value_of(try! string::byte_at(text, i + 2));
+        let v3 = b64::value_of(try! string::byte_at(text, i + 3));
+        // The first two characters are always real; `=` is legal only in the last two.
+        if v0 < 0 or v1 < 0 {
+            throw DecodeError { message: "base64 has a non-alphabet character" };
+        };
+        out = list::push(out, raw::byte_to_str(v0 * 4 + v1 / 16));
+        if v2 == -2 {
+            // `xx==`: one byte, and the fourth must also be padding.
+            if v3 != -2 or i + 4 != n {
+                throw DecodeError { message: "base64 padding is misplaced" };
+            };
+        } else if v2 < 0 {
+            throw DecodeError { message: "base64 has a non-alphabet character" };
+        } else {
+            out = list::push(out, raw::byte_to_str(v1 % 16 * 16 + v2 / 4));
+            if v3 == -2 {
+                if i + 4 != n {
+                    throw DecodeError { message: "base64 padding is misplaced" };
+                };
+            } else if v3 < 0 {
+                throw DecodeError { message: "base64 has a non-alphabet character" };
+            } else {
+                out = list::push(out, raw::byte_to_str(v2 % 4 * 64 + v3));
+            };
+        };
+        i = i + 4;
+    };
+    string::join(out, "")
+}

@@ -166,18 +166,20 @@ Module headers are the reference. The shape:
     std::string          byte_len, concat, slice, char_at, byte_at, to_int, to_float,
                          join, find, contains, starts_with, ends_with, to_upper,
                          to_lower, repeat, is_empty, split, lines, chars, trim,
-                         trim_start, trim_end, strip_prefix, strip_suffix, replace,
+                         trim_start, trim_end, strip_prefix, strip_suffix, split_once, replace,
                          ParseError
     std::list
                          Mappable (map/filter/fold), new, new_with_capacity, len, get, set,
                          push, concat, sort, sort_by, merge, is_empty, first, last,
                          contains, find, reverse, slice, sum, any, all, zip, take, drop,
-                         flatten, min, max, enumerate, chunks, windows, group_by
+                         flatten, min, max, enumerate, chunks, windows, group_by,
+                         position, count, partition, unique, binary_search
     std::map
                          new, len, get, get_or, set, update, contains, remove, keys,
-                         values, entries, is_empty, KeyError
+                         values, entries, merge, from_entries, map_values, is_empty, KeyError
     std::set             Set, new, from_list, add, remove, contains, len, is_empty,
                          to_list, union, intersect, difference
+    std::encoding        hex_encode, hex_decode, base64_encode, base64_decode, DecodeError
     std::process         Output, Stream, Pipe, Child, ProcessError, run, run_with,
                          spawn, spawn_with, wait, kill, pid, stdin, stdout, stderr,
                          read_all, read_some, write, close

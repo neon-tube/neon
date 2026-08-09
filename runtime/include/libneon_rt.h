@@ -13,6 +13,7 @@
 #include "neon/any.h"
 #include "neon/arith.h"
 #include "neon/core.h"
+#include "neon/encoding.h"
 #include "neon/file.h"
 #include "neon/io.h"
 #include "neon/lifecycle.h"

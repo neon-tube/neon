@@ -105,3 +105,38 @@ fn entries[K, V](m: Map[K, V]) -> List[(K, V)] {
     };
     out
 }
+
+/// The two maps combined; on a key in both, `b`'s value wins. Right-biased because
+/// `merge(defaults, overrides)` is the case that occurs — the second argument is the one
+/// with the last word.
+fn merge[K, V](a: Map[K, V], b: Map[K, V]) -> Map[K, V] {
+    let out = a;
+    for e in entries(b) {
+        let (k, v) = e;
+        out = set(out, k, v);
+    };
+    out
+}
+
+/// A map from `(key, value)` pairs: `entries`' inverse. A key appearing twice keeps the
+/// last pair, matching `set`.
+fn from_entries[K, V](pairs: List[(K, V)]) -> Map[K, V] {
+    let out: Map[K, V] = new();
+    for p in pairs {
+        let (k, v) = p;
+        out = set(out, k, v);
+    };
+    out
+}
+
+/// Every value replaced by `f` of it, the keys untouched. `list::map` for the value side
+/// of a map -- the keys are not a functor argument (see the Mappable note in
+/// docs/design/stdlib.md), so this is the only shape that fits.
+fn map_values[K, V, W](m: Map[K, V], f: (V) -> W) -> Map[K, W] {
+    let out: Map[K, W] = new();
+    for e in entries(m) {
+        let (k, v) = e;
+        out = set(out, k, f(v));
+    };
+    out
+}

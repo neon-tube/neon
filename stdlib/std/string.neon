@@ -232,3 +232,16 @@ fn chars(s: str) -> List[str] {
     };
     out
 }
+
+/// Split at the FIRST `sep` only: `("key=a=b", "=")` is `("key", "a=b")`. `null` when
+/// `sep` is absent, which is what tells apart "no separator" from "an empty tail" — the
+/// one-liner behind parsing `key=value`, a header, a `path:line`. An empty `sep` finds
+/// itself at 0 and yields `("", s)`, matching `find`.
+fn split_once(s: str, sep: str) -> (str, str) | null {
+    let at = find(s, sep);
+    if at is i64 {
+        (raw::slice_unchecked(s, 0, at), raw::slice_unchecked(s, at + byte_len(sep), byte_len(s)))
+    } else {
+        null
+    }
+}

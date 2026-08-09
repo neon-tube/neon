@@ -19,6 +19,7 @@ set(NEON_RT_SOURCES
     src/io.c
     src/list.c
     src/any.c
+    src/encoding.c
     src/map.c
     src/os.c
     src/process.c
