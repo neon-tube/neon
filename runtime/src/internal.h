@@ -33,6 +33,17 @@
 #endif
 extern _Thread_local NEON_TLS_IE neon_arena* neon_current_arena;
 
+// The trap→fiber bridge. While a fiber runs, the scheduler arms this per-thread hook; a trap
+// (bounds, arithmetic, uncaught error) then calls it INSTEAD of ending the process — the hook
+// switches control back to the scheduler, killing just that fiber (docs/design/fibers.md's
+// crash isolation). It is NORETURN in effect (it switches away and never comes back). NULL on
+// the root context and in every non-fiber program, where a trap stays fatal exactly as
+// before. Defined in trap.c (always compiled) so a fiber-less build still links; only the
+// fiber runtime ever sets it. NOT a stack swap via setjmp/longjmp — a cross-stack longjmp
+// trips glibc's __longjmp_chk and side-steps the ASan fiber annotations — but the same
+// neon_ctx_swap the normal fiber exit uses, so it is portable and ASan-clean.
+extern _Thread_local void (*neon_fiber_trap_handler)(void);
+
 // The drop for a heap string: the bytes live right after the header, so freeing the
 // header frees both.
 static inline void neon_str_drop(void* p) {

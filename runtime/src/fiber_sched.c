@@ -11,6 +11,7 @@
 #include "libneon_rt.h"
 
 #include "fiber_internal.h"
+#include "internal.h" // neon_fiber_trap_handler
 
 #include <stddef.h>
 
@@ -62,10 +63,17 @@ void neon_fiber_runtime(neon_fiber_fn body, void* arg) {
     neon_fiber* f;
     while ((f = neon_sched_dequeue()) != NULL) {
         f->state = NEON_FIBER_RUNNING;
+        // Arm the trap→fiber bridge while a fiber runs (it, or any fiber it nests into, may
+        // trap), and disarm the moment we are back on the root context so that a trap in the
+        // scheduler's own code (an allocation OOM here) stays fatal rather than trying to
+        // "kill a fiber" that is really the root. A crashed fiber comes back through the same
+        // resume return as a finished one, flagged crashed.
+        neon_fiber_trap_handler = neon_fiber_on_trap;
         neon_fiber_resume(f);
+        neon_fiber_trap_handler = NULL;
         if (neon_fiber_finished(f)) {
             f->state = NEON_FIBER_DONE;
-            neon_fiber_free(f);
+            neon_fiber_free(f); // frees a crashed fiber's abandoned stack and its arena too
         } else {
             neon_sched_enqueue(f);
         }

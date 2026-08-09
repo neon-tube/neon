@@ -107,6 +107,21 @@ static void neon_fiber_bootstrap(void) {
     __builtin_unreachable();
 }
 
+void neon_fiber_on_trap(void) {
+    // A trap fired somewhere in this fiber's call stack. We are still on that stack, but its
+    // frames are being abandoned wholesale — C has no destructors to run, and the arena
+    // objects those frames referenced are reclaimed by neon_fiber_free's bulk-drop. Mark the
+    // fiber crashed-and-finished and switch back to the scheduler exactly as a normal exit
+    // would, reusing the ASan-annotated swap (exiting=true discards this fiber's fake stack).
+    // This is why crash isolation needs no setjmp/longjmp: killing a fiber IS a context
+    // switch, and we already have a correct one.
+    neon_fiber* self = t_current;
+    self->crashed = true;
+    self->finished = true;
+    neon_fiber_switch(self, self->link, true);
+    __builtin_unreachable();
+}
+
 neon_fiber* neon_fiber_new(neon_fiber_fn fn, void* arg, size_t stack_size) {
     if (stack_size < NEON_FIBER_MIN_STACK) {
         stack_size = NEON_FIBER_MIN_STACK;

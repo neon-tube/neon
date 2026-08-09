@@ -33,9 +33,15 @@ struct neon_fiber {
     void* arg;
     neon_fiber* link;         // resume-link: control returns here on yield or finish
     bool finished;
+    bool crashed;             // finished via a trap (crash isolation), not a normal return
     bool is_root;             // the thread's original context, adopted rather than allocated
     neon_fiber* q_next;       // intrusive run-queue link, owned by src/fiber_sched.c
     int state;                // one of the NEON_FIBER_* above, owned by src/fiber_sched.c
 };
+
+// Called via the trap→fiber bridge (neon_fiber_trap_handler) when the running fiber traps:
+// mark it crashed and switch back to its resume-link, abandoning this stack. Reuses the
+// ASan-annotated context swap the normal exit uses — no setjmp/longjmp. NORETURN.
+void neon_fiber_on_trap(void);
 
 #endif
