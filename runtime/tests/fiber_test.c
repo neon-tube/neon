@@ -181,9 +181,10 @@ TEST(create_run_free_churn_stays_clean) {
 }
 
 TEST(a_never_resumed_fiber_frees_clean) {
-    // Created, never run: neon_fiber_free must release the stack and struct (LSan is the
-    // oracle). This is the drop-before-first-resume corner.
+    // Created, never run: neon_fiber_free must release the arena, stack, and struct (LSan is
+    // the oracle). This is the drop-before-first-resume corner.
     neon_fiber* f = neon_fiber_new(set_ran, NULL, 0);
     neon_fiber_free(f);
     EXPECT(true);
 }
+

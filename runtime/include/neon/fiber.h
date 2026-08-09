@@ -50,9 +50,31 @@ void neon_fiber_yield(void);
 // Whether `f` has run its body to completion. A finished fiber must not be resumed.
 bool neon_fiber_finished(const neon_fiber* f);
 
-// Free a finished (or never-resumed) fiber and its stack. Freeing one that is suspended
-// mid-body leaks whatever that body still owns — releasing those is the teardown walk's job
-// (slice 4), not this primitive's.
+// Free a finished (or never-resumed) fiber, its arena, and its stack. The arena is
+// bulk-dropped: anything the body allocated and left live is reclaimed in one pass. That is
+// complete for objects with no outgoing references; releasing outgoing references (resource
+// cleanups, shared-value decrements) before the bulk-free is the teardown walk (slice 4).
 void neon_fiber_free(neon_fiber* f);
+
+// ---- the scheduler (src/fiber_sched.c) ----
+//
+// A cooperative, single-thread run queue over the primitive above — the M=1 first milestone
+// of the design's M:N target (the queue is behind this interface so it can become a
+// work-stealing deque later without the callers changing).
+
+// Run `body(arg)` as the first fiber on a fresh scheduler, pumping its run queue until every
+// fiber — the first and everything it transitively spawns — has finished, then tear the
+// scheduler down. This is the lazy `fiber::runtime(...)` entry: nothing exists until it is
+// called, and it returns when the whole fiber tree is done. Call it from a non-fiber (root)
+// context; nesting it inside a running fiber traps.
+void neon_fiber_runtime(neon_fiber_fn body, void* arg);
+
+// From within a running fiber: create a fiber running `fn(arg)` and enqueue it to run later
+// under the same scheduler. Traps if there is no scheduler (i.e. called off-fiber).
+void neon_fiber_spawn(neon_fiber_fn fn, void* arg);
+
+// From within a running fiber: yield cooperatively. The scheduler runs the other ready
+// fibers, then this one again. The one safepoint this slice has; preemption is slice 6.
+void neon_fiber_sched_yield(void);
 
 #endif

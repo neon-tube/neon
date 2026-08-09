@@ -1,8 +1,17 @@
 #include "libneon_rt.h"
 
+#include "internal.h"
 #include "platform.h"
 
 #include <stdlib.h>
+
+// The current fiber's arena (declared in internal.h). Defined here, in the always-compiled
+// lifecycle unit, so every build links it even where the fiber sources are absent; it stays
+// NULL until the scheduler sets it, and NULL means "use the global slab" below. Not defined
+// under NEON_CBMC — the models take the plain-malloc path and never build the fiber code.
+#ifndef NEON_CBMC
+_Thread_local NEON_TLS_IE neon_arena* neon_current_arena = NULL;
+#endif
 
 // ---- lifecycle ----
 
@@ -129,6 +138,15 @@ static void* neon_slab_refill(size_t cls) {
 }
 
 NEON_NOINLINE void* neon_alloc(size_t bytes, void (*drop)(void*)) {
+    // Inside a fiber, allocation comes from that fiber's own arena (isolation: the object
+    // lives, and will be freed, in exactly one arena — see docs/design/fibers.md). Off-fiber
+    // — the root context, and every program with no fibers at all — this is NULL and the
+    // slab path below runs unchanged, one predictable branch the cost.
+    neon_arena* arena = neon_current_arena;
+    if (arena != NULL) {
+        return neon_arena_alloc(arena, bytes, drop);
+    }
+
     size_t total = sizeof(neon_header) + bytes;
     neon_header* h;
     if (total > NEON_SLAB_MAX) {
@@ -155,6 +173,14 @@ NEON_NOINLINE void* neon_alloc(size_t bytes, void (*drop)(void*)) {
 
 NEON_NOINLINE void neon_free(void* p) {
     neon_header* h = (neon_header*)p;
+    // An arena block goes back to the arena it came from. Under isolation that arena is the
+    // current one: a fiber only ever frees its own objects, and its objects live in its own
+    // (current) arena, so `neon_current_arena` is the owner. Objects that outlive their fiber
+    // or cross to another (shared/big values) are a different, flagged path — slice 5.
+    if (h->flags & NEON_ALLOC_ARENA) {
+        neon_arena_free(neon_current_arena, p);
+        return;
+    }
     if (h->flags & NEON_ALLOC_BIG) {
         free(h);
         return;

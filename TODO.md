@@ -313,6 +313,17 @@ In order:
    models pass `-DNEON_CBMC` (runtime/models/CMakeLists.txt) and `neon_alloc` takes the
    plain-malloc path under it — the slab's chunk-carving loop is unbounded for CBMC, and
    the models verify the contract, not the allocator internals.
+
+   Held the line under fibers, 2026-08-09. Fiber slice 3 (docs/design/fibers.md) makes
+   `neon_alloc`/`neon_free` route to the current fiber's arena, which adds one TLS read +
+   a NULL-branch to every allocation — measured +6.2% median on binary-trees with the
+   default general-dynamic TLS model, the `__tls_get_addr` call being the whole cost.
+   `initial-exec` (`tls_model` attribute on `neon_current_arena`, sound because the runtime
+   is always statically linked into the program, never dlopen'd) turns it into a single
+   `%fs`-relative load: +1.4% median, inside the run-to-run noise. Off-fiber the branch is
+   a predicted not-taken, so every non-fiber program keeps the slab path unchanged. The
+   design's register-pinned arena would drop even the load; it is the follow-up when a
+   fiber-heavy profile says the load is the wall, not before.
 4. **The recursion itself: nothing.** make/check compile to the same shape and cost as
    C's. `ir::unique` has no purchase — nothing is a loop-carried list.
 

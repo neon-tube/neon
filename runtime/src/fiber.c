@@ -13,7 +13,8 @@
 
 #include "libneon_rt.h"
 
-#include "neon/fiber.h"
+#include "fiber_internal.h"
+#include "internal.h" // neon_current_arena
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -48,18 +49,7 @@ void __sanitizer_finish_switch_fiber(void* fake_stack_save, const void** bottom_
 // stack is generous on purpose; a caller asking for less gets this.
 #define NEON_FIBER_MIN_STACK (64u * 1024u)
 
-struct neon_fiber {
-    void* sp;                 // suspended stack pointer — valid exactly while not running
-    void* stack;              // the heap stack allocation; NULL for the adopted root fiber
-    const void* stack_bottom; // low address of the usable stack, for the ASan annotations
-    size_t stack_size;
-    void* fake_stack;         // ASan fake-stack save slot while this fiber is switched-away
-    neon_fiber_fn fn;
-    void* arg;
-    neon_fiber* link;         // resume-link: control returns here on yield or finish
-    bool finished;
-    bool is_root;             // the thread's original context, adopted rather than allocated
-};
+// struct neon_fiber lives in fiber_internal.h, shared with the scheduler.
 
 // "Who is running" and "who we just left" are per-OS-thread — the design's current-fiber,
 // which slice 3 pins to a register. `t_prev` lets a fresh fiber's bootstrap capture the
@@ -90,6 +80,7 @@ static void neon_fiber_switch(neon_fiber* cur, neon_fiber* next, bool exiting) {
                                    next->stack_size);
 #endif
     t_current = next;
+    neon_current_arena = next->arena; // route neon_alloc/free to the fiber we're entering
     neon_ctx_swap(&cur->sp, next->sp);
     // Resumed as `cur`. (Never reached when `exiting`.)
 #if NEON_ASAN
@@ -135,6 +126,7 @@ neon_fiber* neon_fiber_new(neon_fiber_fn fn, void* arg, size_t stack_size) {
     f->stack = stack;
     f->stack_bottom = stack;
     f->stack_size = stack_size;
+    f->arena = neon_arena_create(); // the fiber's private heap; neon_alloc routes here while it runs
 
     // Prime the initial frame to mirror what neon_ctx_swap saves, so its first restore + ret
     // lands in the bootstrap. `top` is the 16-aligned stack top; `land` is rsp as the
@@ -181,6 +173,12 @@ void neon_fiber_free(neon_fiber* f) {
     if (f == NULL || f->is_root) {
         return; // the root fiber lives with the thread and was never allocated here
     }
+    // Bulk-free the fiber's whole heap. Anything the body allocated and left live is released
+    // here in one pass — the design's arena-drop-is-bulk-young-free. For objects with no
+    // outgoing references (this slice's case) that is complete; releasing outgoing references
+    // (resource cleanups, shared-value decrements) before the bulk-free is the teardown WALK,
+    // slice 4.
+    neon_arena_drop(f->arena);
     free(f->stack);
     free(f);
 }

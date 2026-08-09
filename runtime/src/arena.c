@@ -105,7 +105,7 @@ void* neon_arena_alloc(neon_arena* a, size_t bytes, void (*drop)(void*)) {
         a->bigs = node;
         a->footprint += whole;
         h = (neon_header*)(node + 1);
-        h->flags = NEON_ALLOC_BIG;
+        h->flags = NEON_ALLOC_ARENA | NEON_ALLOC_BIG;
     } else {
         size_t cls = neon_arena_class_of(total);
         size_t bsz = neon_arena_class_size(cls);
@@ -125,7 +125,7 @@ void* neon_arena_alloc(neon_arena* a, size_t bytes, void (*drop)(void*)) {
             a->bump += bsz;
         }
         h = (neon_header*)blk;
-        h->flags = (uint32_t)((cls + 1) << NEON_ALLOC_CLASS_SHIFT);
+        h->flags = NEON_ALLOC_ARENA | (uint32_t)((cls + 1) << NEON_ALLOC_CLASS_SHIFT);
     }
 
     h->rc = 1;

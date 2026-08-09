@@ -54,6 +54,13 @@ typedef struct neon_header {
 #define NEON_ALLOC_CLASS_MASK 0xff00u
 #define NEON_ALLOC_BIG 0x10000u
 
+// Bit 17 marks an object allocated from a per-fiber arena rather than the global slab (see
+// docs/design/fibers.md and neon/arena.h). `neon_alloc` sets it when a fiber's arena is
+// current; `neon_free` reads it to route the free back to that arena instead of the slab.
+// The class bits (8..15) and BIG (16) keep their meaning alongside it — an arena still uses
+// the same size-class scheme — so an arena block carries ARENA plus either a class or BIG.
+#define NEON_ALLOC_ARENA 0x20000u
+
 // A string is a view: a data pointer and length (the pair libc wants), plus the
 // refcounted allocation it points into. A literal has owner == NULL: static, never freed.
 typedef struct {

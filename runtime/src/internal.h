@@ -10,8 +10,28 @@
 // the archive that the ABI does not promise; keeping them inline preserves the exported
 // symbol set exactly while letting more than one translation unit use them.
 
+#include "neon/arena.h"
 #include "neon/core.h"
 #include "neon/lifecycle.h"
+
+// The current fiber's arena, or NULL on the root / non-fiber context. `neon_alloc` and
+// `neon_free` route through it (see src/lifecycle.c and docs/design/fibers.md); the fiber
+// scheduler sets it on every context switch. Defined in lifecycle.c — which is always
+// compiled — so a build without the fiber sources (non-x86-64, or Windows) still links with
+// it permanently NULL, and only the fiber code ever stores a non-NULL value.
+//
+// initial-exec TLS model, not the default general-dynamic: this pointer is read on the
+// hottest path there is (once per neon_alloc), and general-dynamic pays a __tls_get_addr
+// call every time — ~7% on binary-trees, measured. initial-exec is a single %fs-relative
+// load and is sound because the runtime is always statically linked into the program
+// executable, never dlopen'd, so its TLS block exists at process start. (The design's
+// register-pinned arena would drop even this load; initial-exec is the cheap 90%.)
+#if defined(__GNUC__) && !defined(NEON_CBMC)
+#  define NEON_TLS_IE __attribute__((tls_model("initial-exec")))
+#else
+#  define NEON_TLS_IE
+#endif
+extern _Thread_local NEON_TLS_IE neon_arena* neon_current_arena;
 
 // The drop for a heap string: the bytes live right after the header, so freeing the
 // header frees both.
