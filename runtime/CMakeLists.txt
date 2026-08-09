@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.15)
-project(neon_rt C)
+# ASM for the fiber swap gadget (`src/fiber_swap_*.S`); the C compiler driver assembles it.
+project(neon_rt C ASM)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -27,6 +28,14 @@ set(NEON_RT_SOURCES
     src/random.c
     src/time.c
 )
+
+# Fibers (docs/design/fibers.md). The swap gadget is per-ABI assembly; x86-64 System V is the
+# only ABI wired so far, so on anything else the fiber sources are simply left out and the
+# runtime builds without them. Win64 is a different ABI even on x86-64, hence NOT WIN32.
+if(NOT WIN32 AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+    list(APPEND NEON_RT_SOURCES src/fiber.c src/fiber_swap_x86_64_sysv.S)
+    set(NEON_RT_HAS_FIBERS ON)
+endif()
 
 # The runtime ships as prebuilt archives, one per build shape the CLI can ask for, so a
 # Neon build links a `.a` instead of recompiling the whole runtime every time (and a
@@ -266,6 +275,10 @@ if(NEON_RT_TESTS)
         tests/random_test.c
         tests/process_test.c
     )
+    # The fiber tests only build where the swap gadget does.
+    if(NEON_RT_HAS_FIBERS)
+        target_sources(neon_rt_tests PRIVATE tests/fiber_test.c)
+    endif()
     # The rich assertion and TEST macros use GNU C (__auto_type, constructors, _Generic).
     set_target_properties(neon_rt_tests PROPERTIES C_STANDARD 11 C_EXTENSIONS ON)
     target_include_directories(neon_rt_tests PRIVATE include src ${tinyunit_SOURCE_DIR})
