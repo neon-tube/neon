@@ -3,6 +3,7 @@
 #include "internal.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 
 // ---- str ----
 
@@ -244,6 +245,51 @@ int64_t neon_str_parse_int(neon_str s) {
     }
     neon_str_release(s);
     return (int64_t)((uint64_t)v * (uint64_t)sign);
+}
+
+// The float twins of `is_int`/`parse_int`, same split for the same reason: the check and
+// the parse are two natives so the Neon wrapper owns the error. Both delegate to
+// `strtod`, which is what defines "a float" here — decimal or scientific notation, `inf`
+// and `nan` spellings included — with two adjustments: the whole string must be
+// consumed, and leading whitespace (which `strtod` skips) is rejected, matching
+// `to_int`'s "no trimming for you". A `neon_str` is not NUL-terminated, so the bytes are
+// copied to a bounded buffer first; anything longer than the buffer is not a number
+// anyone wrote by hand, and reads as unparseable rather than truncating.
+#define NEON_FLOAT_MAX 64
+
+static bool str_to_double(neon_str* s, double* out) {
+    size_t len = neon_str_len(s);
+    const char* d = neon_str_data(s);
+    if (len == 0 || len >= NEON_FLOAT_MAX) {
+        return false;
+    }
+    if (d[0] == ' ' || d[0] == '\t' || d[0] == '\n' || d[0] == '\r') {
+        return false;
+    }
+    char buf[NEON_FLOAT_MAX];
+    memcpy(buf, d, len);
+    buf[len] = '\0';
+    char* end = NULL;
+    double v = strtod(buf, &end);
+    if (end != buf + len) {
+        return false;
+    }
+    *out = v;
+    return true;
+}
+
+bool neon_str_is_float(neon_str s) {
+    double v;
+    bool ok = str_to_double(&s, &v);
+    neon_str_release(s);
+    return ok;
+}
+
+double neon_str_parse_float(neon_str s) {
+    double v = 0.0;
+    (void)str_to_double(&s, &v);
+    neon_str_release(s);
+    return v;
 }
 
 // ---- to-string natives ----

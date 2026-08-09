@@ -42,6 +42,8 @@ int64_t neon_str_byte_at_unchecked(neon_str s, int64_t i); // 0..=255, never neg
 int64_t neon_str_index_of(neon_str s, neon_str needle); // -1 when absent
 bool neon_str_is_int(neon_str s);
 int64_t neon_str_parse_int(neon_str s);
+bool neon_str_is_float(neon_str s);      // strtod's grammar, whole string, no trimming
+double neon_str_parse_float(neon_str s);
 
 neon_str neon_str_join(neon_list* parts, neon_str sep); // consumes both; List[str] -> str
 

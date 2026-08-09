@@ -1,0 +1,100 @@
+// A set is a map that forgot its values. That is the implementation, verbatim — every
+// entry's value is `null` — and it buys everything a from-scratch set would have to
+// re-earn: structural hashing of any key type, in-place update when uniquely owned,
+// order-independent equality. What the wrapper adds is the READING: `contains(seen, x)`
+// asks membership, where the map spelling asks a lookup question with a value nobody
+// ever meant.
+//
+// Unordered, exactly as `Map` is: `to_list` walks the table, so its order is a function
+// of the hash and can change when an `add` grows the table. Sort it if you need an order.
+//
+// `opaque` so the backing map stays this module's business: a caller who could reach
+// `s.m` could put a non-null value in it, and then two "equal" sets could differ.
+
+use std::list;
+use std::map;
+use std::string;
+
+opaque record Set[T] { m: Map[T, null] }
+
+/// Renders sorted, like `Map`'s impl and for the same reason: an unordered walk is not a
+/// function of the value, and a rendering that varies run to run is not a rendering.
+impl[T] Display for Set[T] where T: Display, T: Ord {
+    fn to_string(s: Set[T]) -> str {
+        let parts: List[str] = [];
+        for v in list::sort(to_list(s)) {
+            parts = list::push(parts, to_string(v));
+        };
+        let inner = string::join(parts, ", ");
+        "{#{inner}}"
+    }
+}
+
+fn new[T]() -> Set[T] {
+    Set { m: map::new[T, null]() }
+}
+
+fn from_list[T](xs: List[T]) -> Set[T] {
+    let s: Set[T] = new();
+    for x in xs {
+        s = add(s, x);
+    };
+    s
+}
+
+fn add[T](s: Set[T], v: T) -> Set[T] {
+    Set { m: map::set(s.m, v, null) }
+}
+
+/// Removing an absent member is not an error: it says "not in the result", which is
+/// already true — the same contract as `map::remove`.
+fn remove[T](s: Set[T], v: T) -> Set[T] {
+    Set { m: map::remove(s.m, v) }
+}
+
+fn contains[T](s: Set[T], v: T) -> bool {
+    map::contains(s.m, v)
+}
+
+fn len[T](s: Set[T]) -> i64 {
+    map::len(s.m)
+}
+
+fn is_empty[T](s: Set[T]) -> bool {
+    len(s) == 0
+}
+
+/// The members, in table order — unspecified and unstable, like `map::keys`.
+fn to_list[T](s: Set[T]) -> List[T] {
+    map::keys(s.m)
+}
+
+fn union[T](a: Set[T], b: Set[T]) -> Set[T] {
+    let out = a;
+    for v in to_list(b) {
+        out = add(out, v);
+    };
+    out
+}
+
+fn intersect[T](a: Set[T], b: Set[T]) -> Set[T] {
+    let out: Set[T] = new();
+    for v in to_list(a) {
+        if contains(b, v) {
+            out = add(out, v);
+        };
+    };
+    out
+}
+
+/// The members of `a` that are not in `b`. Not symmetric, and the argument order reads
+/// as the subtraction it is.
+fn difference[T](a: Set[T], b: Set[T]) -> Set[T] {
+    let out: Set[T] = new();
+    for v in to_list(a) {
+        if !contains(b, v) {
+            out = add(out, v);
+        };
+    };
+    out
+}

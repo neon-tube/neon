@@ -90,3 +90,18 @@ fn get_or[K, V](m: Map[K, V], k: K, fallback: V) -> V {
 /// wrong is a miscompile; getting it *silently un-applied* is a 2x cliff with no diagnostic.
 /// So the fast shape is one you ask for.
 @pure @native("neon_map_update") fn update[K, V](m: Map[K, V], k: K, fallback: V, f: (V) -> V) -> Map[K, V]
+
+/// The entries as `(key, value)` pairs, in table order — the shape `for` destructures.
+/// `keys(m)[i]` and `values(m)[i]` already agree on which entry is which; this is that
+/// agreement made into one list.
+fn entries[K, V](m: Map[K, V]) -> List[(K, V)] {
+    let out: List[(K, V)] = std::list::new_with_capacity(len(m));
+    let ks = keys(m);
+    let vs = values(m);
+    let i = 0;
+    while i < std::list::len(ks) {
+        out = std::list::push(out, (ks[i], vs[i]));
+        i = i + 1;
+    };
+    out
+}

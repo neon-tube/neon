@@ -10,6 +10,7 @@
 // rather than in the prelude so that THIS module owns it: opacity is decided by the
 // declaring module's subtree, and the prelude's path is the root, which every program
 // shares. See docs/design/opacity.md.
+use std::map;
 use std::string;
 
 opaque record List[T] {}
@@ -419,4 +420,75 @@ fn max[T](xs: List[T]) -> T | null where T: Ord {
         };
     };
     best
+}
+
+/// Each element with its index: `[(0, xs[0]), (1, xs[1]), ..]`. The named form of
+/// `zip(range(0, len(xs)), xs)`, minus the list of indices that zip would build.
+fn enumerate[T](xs: List[T]) -> List[(i64, T)] {
+    let out: List[(i64, T)] = new_with_capacity(len(xs));
+    let i = 0;
+    for x in xs {
+        out = push(out, (i, x));
+        i = i + 1;
+    };
+    out
+}
+
+/// Runs of `n` consecutive elements: `chunks([1,2,3,4,5], 2)` is `[[1,2],[3,4],[5]]`.
+/// The last chunk is short when the length does not divide; `n <= 0` is the empty list,
+/// matching `repeat` — the natural reading of "chunks of nothing", and not a trap for a
+/// computed size that came out zero.
+fn chunks[T](xs: List[T], n: i64) -> List[List[T]] {
+    if n <= 0 {
+        []
+    } else {
+        let out: List[List[T]] = [];
+        let cur: List[T] = [];
+        for x in xs {
+            cur = push(cur, x);
+            if len(cur) == n {
+                out = push(out, cur);
+                cur = [];
+            };
+        };
+        if !is_empty(cur) {
+            out = push(out, cur);
+        };
+        out
+    }
+}
+
+/// Every window of `n` consecutive elements: `windows([1,2,3,4], 2)` is
+/// `[[1,2],[2,3],[3,4]]`. All windows are full — a list shorter than `n` has none —
+/// and `n <= 0` is the empty list, as for `chunks`.
+fn windows[T](xs: List[T], n: i64) -> List[List[T]] {
+    if n <= 0 {
+        []
+    } else {
+        let out: List[List[T]] = [];
+        let i = 0;
+        while i + n <= len(xs) {
+            let w: List[T] = new_with_capacity(n);
+            for j in i..i + n {
+                w = push(w, xs[j]);
+            };
+            out = push(out, w);
+            i = i + 1;
+        };
+        out
+    }
+}
+
+/// The elements bucketed by what `key` says about each, keeping their order within a
+/// bucket: `group_by(["ant", "bee", "ape"], first_letter)` is `{"a": ["ant", "ape"],
+/// "b": ["bee"]}`. The buckets come back as a `Map`, so anything a map key can be — any
+/// structural value — can classify.
+fn group_by[T, K](xs: List[T], key: (T) -> K) -> Map[K, List[T]] {
+    let out: Map[K, List[T]] = map::new();
+    for x in xs {
+        let k = key(x);
+        let bucket = map::get_or(out, k, []);
+        out = map::set(out, k, push(bucket, x));
+    };
+    out
 }

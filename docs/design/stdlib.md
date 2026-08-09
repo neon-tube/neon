@@ -161,31 +161,39 @@ Module headers are the reference. The shape:
 
     prelude              Ordering, range, List, Map, marker Ord, Display, Error,
                          IndexError, Display impls for the primitives
-    std::io              println, print, eprintln
-    std::string          byte_len, concat, slice, char_at, to_int, join, find, contains,
-                         starts_with, ends_with, to_upper, to_lower, repeat, is_empty,
-                         split, lines, trim, trim_start, trim_end, strip_suffix, replace,
+    std::io              println, print, eprintln, read_line, read_all, IoError
+    std::os              args, env, exit
+    std::string          byte_len, concat, slice, char_at, byte_at, to_int, to_float,
+                         join, find, contains, starts_with, ends_with, to_upper,
+                         to_lower, repeat, is_empty, split, lines, chars, trim,
+                         trim_start, trim_end, strip_prefix, strip_suffix, replace,
                          ParseError
     std::list
                          Mappable (map/filter/fold), new, new_with_capacity, len, get, set,
                          push, concat, sort, sort_by, merge, is_empty, first, last,
-                         contains, find, reverse, slice, sum
+                         contains, find, reverse, slice, sum, any, all, zip, take, drop,
+                         flatten, min, max, enumerate, chunks, windows, group_by
     std::map
-                         new, len, get, get_or, set, contains, remove, keys, values,
-                         is_empty, KeyError
+                         new, len, get, get_or, set, update, contains, remove, keys,
+                         values, entries, is_empty, KeyError
+    std::set             Set, new, from_list, add, remove, contains, len, is_empty,
+                         to_list, union, intersect, difference
     std::fs              File, Bytes, IoList, open, create, open_append, close,
                          fd_of, read_all, write_all, flatten, exists, remove,
                          read, read_bytes, read_lines, write, append
     std::path            is_absolute, is_relative, components, join, parent, file_name,
                          stem, extension, with_extension, normalize, starts_with
     std::resource        Resource, ReleasedError, new, get, release, take, is_live, using
-    std::math            sqrt, pow, floor, ceil, round, abs, is_nan, is_infinite,
-                         abs_int, to_f64, to_int
+    std::math            PI, E, sqrt, pow, floor, ceil, round, abs, is_nan, is_infinite,
+                         ln, log10, exp, sin, cos, tan, atan2, min, max, clamp,
+                         abs_int, clamp_int, to_f64, to_int
     std::cmp             max, min, max_by, min_by
     std::fmt             pad, pad_left, pad_left_with, fixed
+    std::json            Json, ToJson, FromJson, encode, decode, JsonError
 
-There is **no `std::exit`**, contrary to earlier drafts of this file. Abnormal termination
-is `neon_trap`, which `_exit`s 101 on stderr (`docs/decisions.md`).
+Deliberate exit is `os::exit(code)`, typed `never`; abnormal termination is `neon_trap`,
+which `_exit`s 101 on stderr (`docs/decisions.md`). Earlier drafts of this file said
+there was no exit at all — that was before `std::os` existed.
 
 Every collection operation returns a new collection: these are values, which is what made
 covariance sound. The copy is not always paid for — a uniquely owned list or map (`rc == 1`)

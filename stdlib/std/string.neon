@@ -194,3 +194,41 @@ fn replace(s: str, from: str, to: str) -> str {
         concat(out, rest)
     }
 }
+
+/// The float twin of `to_int`, by `strtod`'s grammar: decimal or scientific notation,
+/// the whole string, no leading whitespace — `to_float(" 1.5")` throws rather than
+/// trimming for you, exactly as `to_int` does.
+fn to_float(s: str) throws ParseError -> f64 {
+    if !raw2::is_float(s) {
+        throw ParseError { message: "not a number" };
+    }
+    raw2::parse_float(s)
+}
+
+internal mod raw2 {
+    @pure @native("neon_str_is_float") fn is_float(s: str) -> bool
+    @pure @native("neon_str_parse_float") fn parse_float(s: str) -> f64
+}
+
+/// The characters, as one `str` per UTF-8 sequence: `chars("héllo")` has five elements
+/// where `byte_len` counts six. The one character-oriented reader in a byte-oriented
+/// module, for when the unit of work really is the character — everything else here
+/// stays honest about bytes.
+///
+/// A byte that begins no valid sequence comes back as its own one-byte `str`, un-judged:
+/// this splits, it does not validate, and garbage in is garbage out one byte at a time.
+fn chars(s: str) -> List[str] {
+    let out: List[str] = [];
+    let n = byte_len(s);
+    let i = 0;
+    while i < n {
+        let b = raw::byte_at_unchecked(s, i);
+        let take = if b < 128 {
+            1
+        } else if b >= 240 { 4 } else if b >= 224 { 3 } else if b >= 192 { 2 } else { 1 };
+        let stop = if i + take > n { n } else { i + take };
+        out = std::list::push(out, raw::slice_unchecked(s, i, stop));
+        i = stop;
+    };
+    out
+}

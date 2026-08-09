@@ -111,6 +111,7 @@ collections/partial_record_write_keeps_stale_fields.neon
 collections/range_is_a_list_everywhere_else.neon
 collections/stdlib_breadth.neon
 collections/stdlib_breadth_lists_and_math.neon
+collections/stdlib_breadth_sets_and_slices.neon
 control/for_break_continue.neon
 control/for_empty_list.neon
 control/for_list.neon
