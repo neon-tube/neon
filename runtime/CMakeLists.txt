@@ -10,6 +10,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 # files share and is not installed.
 set(NEON_RT_SOURCES
     src/lifecycle.c
+    src/arena.c
     src/trap.c
     src/arith.c
     src/string.c
@@ -250,6 +251,7 @@ if(NEON_RT_TESTS)
         tests/init.c
         tests/arith_test.c
         tests/lifecycle_test.c
+        tests/arena_test.c
         tests/string_test.c
         tests/list_test.c
         tests/map_test.c

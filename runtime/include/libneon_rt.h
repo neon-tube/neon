@@ -11,6 +11,7 @@
 // only works when you reorder this list, the header is missing an include.
 
 #include "neon/any.h"
+#include "neon/arena.h"
 #include "neon/arith.h"
 #include "neon/core.h"
 #include "neon/encoding.h"

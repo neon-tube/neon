@@ -1,0 +1,6 @@
+# The arena allocator and the trap its out-of-memory paths reach. Unlike the slab
+# (see the note in models/CMakeLists.txt), the arena is bounded by construction --
+# grow is a single `if`, the only loops are over the allocation count the harness
+# controls -- so CBMC verifies the REAL bump + free-list code, not a malloc stand-in.
+src/arena.c
+src/trap.c
