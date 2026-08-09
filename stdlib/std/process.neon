@@ -1,0 +1,241 @@
+// Child processes: capture with `run`, stream with `spawn`.
+//
+// The split is a deadlock story, and it is the reason both tiers exist. `run` pipes all
+// three streams and PUMPS them in the native with poll -- stdin fed, stdout and stderr
+// drained, whichever is ready -- so no pipe can fill while another waits, and capture
+// simply cannot deadlock. Manual `spawn` with more than one piped stream, read
+// sequentially from this single-threaded side, CAN: a child that fills stderr while you
+// block reading stdout stalls both of you, forever. When you want the output, use `run`;
+// `spawn` is for streaming, long-lived children, and plumbing.
+//
+// A pipe end is its own type, not a `File`: their futures diverge (a file will grow
+// seek and metadata; a pipe grows partial reads and someday poll), and this module
+// depends only on `std::io`'s error type -- never on `std::fs`. Under the ABI both are
+// descriptors and share the same natives.
+//
+// Exit codes are VALUES: `grep` finding nothing exits 1, and that is data, not failure.
+// `ProcessError` means the machinery failed -- no such program, a dead pipe, a wait
+// that had nothing to wait for. A child killed by a signal reports 128 + the signal
+// (SIGKILL is 137), the shell convention every CI already reads.
+//
+// Dropping a `Child` without `wait` DETACHES it: the pipes close (each is a Resource),
+// the child runs on, and its exit record lingers until this process ends. Call `wait`.
+// Everything crossing from the child is bytes and arrives through the same lossy UTF-8
+// boundary as `os::args` -- see std/os.neon.
+
+use std::io::IoError;
+use std::list;
+use std::map;
+use std::resource;
+use std::string;
+
+record ProcessError { message: str }
+impl Display for ProcessError { fn to_string(v: ProcessError) -> str { v.message } }
+impl Error for ProcessError { fn message(v: ProcessError) -> str { v.message } }
+
+/// A finished child, whole: what it said, and how it ended.
+record Output { code: i64, stdout: str, stderr: str }
+
+/// How one of a child's standard streams is set up: share this process's (`:inherit`),
+/// connect a pipe this side holds (`:piped`), or point it at nothing (`:null`).
+type Stream = :inherit | :piped | :null
+
+/// One end of a pipe to a child. A `Resource` guards the descriptor, so it closes when
+/// the last reference drops and use-after-close is an error rather than a stranger's
+/// descriptor.
+opaque record Pipe { r: resource::Resource[i64, IoError] }
+
+/// A running (or exited, un-waited) child process.
+opaque record Child { pid: i64, in_p: Pipe | null, out_p: Pipe | null, err_p: Pipe | null }
+
+internal mod raw {
+    @native("neon_proc_spawn") fn spawn(program: str, args: List[str], envs: List[str], cwd: str, im: i64, om: i64, em: i64) -> (i64, i64, i64, i64)
+    @native("neon_proc_run") fn run(program: str, args: List[str], envs: List[str], cwd: str, input: str) -> (i64, str, str)
+    @native("neon_proc_wait") fn wait(pid: i64) -> i64
+    @native("neon_proc_kill") fn kill(pid: i64) -> i64
+    @native("neon_proc_read_some") fn read_some(fd: i64, max: i64) -> (str, i64)
+    @native("neon_io_read_all") fn read_all(fd: i64) -> (str, i64)
+    @native("neon_io_writev") fn writev(fd: i64, parts: List[str]) -> i64
+    @native("neon_io_close") fn close(fd: i64) -> i64
+    @native("neon_io_strerror") fn strerror(code: i64) -> str
+
+    fn fail(code: i64, what: str) throws ProcessError -> null {
+        throw ProcessError { message: "#{what}: #{strerror(code)}" };
+    }
+
+    fn io_fail(code: i64, what: str) throws IoError -> null {
+        throw IoError { message: "#{what}: #{strerror(code)}" };
+    }
+
+    /// The cleanup a pipe end carries, exactly `fs::raw::guard`'s shape: closing is the
+    /// resource's job, so a forgotten close -- or one skipped by a throw -- happens
+    /// anyway.
+    fn guard(fd: i64) -> Pipe {
+        Pipe { r: resource::new(fd, (d: i64) => {
+            let code = raw::close(d);
+            if code < 0 {
+                try io_fail(code, "cannot close pipe");
+            }
+            null
+        }) }
+    }
+
+    fn stream_mode(s: Stream | null) -> i64 {
+        let m = s orelse :inherit;
+        if m == :piped { 1 } else if m == :null { 2 } else { 0 }
+    }
+
+    /// The env map as "KEY=VALUE" strings, the shape the native merges over the
+    /// inherited environment.
+    fn env_list(env: Map[str, str] | null) -> List[str] {
+        let out: List[str] = [];
+        if env is Map[str, str] {
+            for e in map::entries(env) {
+                let (k, v) = e;
+                out = list::push(out, "#{k}=#{v}");
+            };
+        };
+        out
+    }
+
+    fn pipe_fd(p: Pipe) throws IoError -> i64 {
+        if !resource::is_live(p.r) {
+            throw IoError { message: "this pipe is already closed" };
+        }
+        // Live, so `get` cannot throw its ReleasedError; `try!` states that the check
+        // above already ruled out the only failure.
+        try! resource::get(p.r)
+    }
+}
+
+/// Run to completion, capturing everything: stdout, stderr and the exit code, with
+/// stdin already at end-of-input. The pumped, cannot-deadlock way to ask a child a
+/// question. Inherits this process's environment and directory; `run_with` takes the
+/// knobs.
+fn run(program: str, args: List[str]) throws ProcessError -> Output {
+    try run_with(program, args, {})
+}
+
+/// `run`, with the knobs: `input` becomes the child's whole stdin, `env` EXTENDS the
+/// inherited environment (an override wins over an inherited variable of the same
+/// name), `cwd` is where the child starts.
+fn run_with(program: str, args: List[str], opts: {
+    input: str | null,
+    cwd: str | null,
+    env: Map[str, str] | null,
+}) throws ProcessError -> Output {
+    let (code, out, err) = raw::run(program, args, raw::env_list(opts.env),
+        opts.cwd orelse "", opts.input orelse "");
+    if code < 0 {
+        try raw::fail(code, "cannot run `#{program}`");
+    };
+    Output { code: code, stdout: out, stderr: err }
+}
+
+/// Start a child that shares this process's streams, environment and directory.
+/// `spawn_with` takes the knobs; `wait` collects the exit code.
+fn spawn(program: str, args: List[str]) throws ProcessError -> Child {
+    try spawn_with(program, args, {})
+}
+
+/// `spawn`, with the knobs. A `:piped` stream's near end comes back on the `Child` --
+/// see `stdin`/`stdout`/`stderr` -- and closing the child's stdin is how you tell it
+/// the input is over: graceful shutdown is `close(stdin)`, then `wait`.
+fn spawn_with(program: str, args: List[str], opts: {
+    stdin: Stream | null,
+    stdout: Stream | null,
+    stderr: Stream | null,
+    cwd: str | null,
+    env: Map[str, str] | null,
+}) throws ProcessError -> Child {
+    let (pid, in_fd, out_fd, err_fd) = raw::spawn(program, args, raw::env_list(opts.env),
+        opts.cwd orelse "",
+        raw::stream_mode(opts.stdin), raw::stream_mode(opts.stdout), raw::stream_mode(opts.stderr));
+    if pid < 0 {
+        try raw::fail(pid, "cannot spawn `#{program}`");
+    };
+    Child {
+        pid: pid,
+        in_p: if in_fd >= 0 { raw::guard(in_fd) } else { null },
+        out_p: if out_fd >= 0 { raw::guard(out_fd) } else { null },
+        err_p: if err_fd >= 0 { raw::guard(err_fd) } else { null },
+    }
+}
+
+fn pid(c: Child) -> i64 {
+    c.pid
+}
+
+/// The write end of the child's stdin, present exactly when it was spawned `:piped`.
+fn stdin(c: Child) -> Pipe | null {
+    c.in_p
+}
+
+fn stdout(c: Child) -> Pipe | null {
+    c.out_p
+}
+
+fn stderr(c: Child) -> Pipe | null {
+    c.err_p
+}
+
+/// Block until the child exits and return its code -- 128 + the signal for a signal
+/// death. Waiting twice for the same child is an error: the first wait consumed the
+/// exit record.
+fn wait(c: Child) throws ProcessError -> i64 {
+    let code = raw::wait(c.pid);
+    if code < 0 {
+        try raw::fail(code, "cannot wait for pid #{c.pid}");
+    };
+    code
+}
+
+/// End the child NOW -- SIGKILL, no handler, no negotiation. `wait` afterwards reaps it
+/// and reports 137. For a graceful end, close its stdin and `wait` instead.
+fn kill(c: Child) throws ProcessError -> null {
+    let code = raw::kill(c.pid);
+    if code < 0 {
+        try raw::fail(code, "cannot kill pid #{c.pid}");
+    };
+    null
+}
+
+/// Everything the child writes to this stream, to its end -- which arrives when the
+/// child closes it, usually by exiting. Blocks until then.
+fn read_all(p: Pipe) throws IoError -> str {
+    let fd = try raw::pipe_fd(p);
+    let (text, code) = raw::read_all(fd);
+    if code < 0 {
+        try raw::io_fail(code, "cannot read pipe");
+    };
+    text
+}
+
+/// Up to `max` bytes, as soon as ANY are ready; `""` means the stream ended. The
+/// streaming read. A chunk boundary can split a multi-byte character, and the lossy
+/// conversion then replaces the halves -- chunked reading is byte-oriented, and a
+/// caller assembling text should accumulate first.
+fn read_some(p: Pipe, max: i64) throws IoError -> str {
+    let fd = try raw::pipe_fd(p);
+    let (text, code) = raw::read_some(fd, max);
+    if code < 0 {
+        try raw::io_fail(code, "cannot read pipe");
+    };
+    text
+}
+
+/// Write the whole of `data` to the child's stdin.
+fn write(p: Pipe, data: str) throws IoError -> null {
+    let fd = try raw::pipe_fd(p);
+    let code = raw::writev(fd, [data]);
+    if code < 0 {
+        try raw::io_fail(code, "cannot write pipe");
+    };
+    null
+}
+
+/// Close this end now, rather than when the last reference drops. Closing a child's
+/// stdin is the portable "no more input"; closing twice is an error, as for a `File`.
+fn close(p: Pipe) throws IoError -> null {
+    try! resource::release(p.r)
+}

@@ -127,6 +127,12 @@ static neon_str neon_str_from_os(const char* p, size_t n, bool immortal) {
     return r;
 }
 
+// The boundary converter, exported: any subsystem receiving OS bytes (process output,
+// most prominently) funnels them through the same lossy door argv and env use.
+neon_str neon_os_lossy(const char* bytes, size_t len) {
+    return neon_str_from_os(bytes, len, false);
+}
+
 neon_str neon_os_arg(int64_t i) {
     if (i < 0 || i >= (int64_t)neon_os_argc_v) {
         neon_trap_oob(i, (size_t)neon_os_argc_v);

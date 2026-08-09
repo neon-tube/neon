@@ -296,6 +296,9 @@ static inline void neon_plat_sleep_ms(int64_t ms) {
     }
 }
 
+static inline void neon_plat_ignore_sigpipe(void) {
+}
+
 // `rand_s` reaches the OS CSPRNG through the CRT without pulling in bcrypt.
 static inline int64_t neon_plat_entropy(void) {
     unsigned int hi = 0, lo = 0;
@@ -306,6 +309,7 @@ static inline int64_t neon_plat_entropy(void) {
 
 #else
 
+#include <signal.h>
 #include <sys/uio.h>
 #include <time.h>
 #include <unistd.h>
@@ -373,6 +377,10 @@ static inline void neon_plat_stdio_binary(void) {
 
 NEON_NORETURN static inline void neon_plat_exit_now(int code) {
     _exit(code);
+}
+
+static inline void neon_plat_ignore_sigpipe(void) {
+    signal(SIGPIPE, SIG_IGN);
 }
 
 static inline int64_t neon_plat_monotonic_ns(void) {

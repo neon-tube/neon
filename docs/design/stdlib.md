@@ -178,6 +178,9 @@ Module headers are the reference. The shape:
                          values, entries, is_empty, KeyError
     std::set             Set, new, from_list, add, remove, contains, len, is_empty,
                          to_list, union, intersect, difference
+    std::process         Output, Stream, Pipe, Child, ProcessError, run, run_with,
+                         spawn, spawn_with, wait, kill, pid, stdin, stdout, stderr,
+                         read_all, read_some, write, close
     std::fs              File, Bytes, IoList, open, create, open_append, close,
                          fd_of, read_all, write_all, flatten, exists, remove,
                          read, read_bytes, read_lines, write, append

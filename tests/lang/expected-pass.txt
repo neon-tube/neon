@@ -109,6 +109,7 @@ collections/nested_write_depth3.neon
 collections/nested_write_in_place.neon
 collections/partial_record_write_across_distinct_slots.neon
 collections/partial_record_write_keeps_stale_fields.neon
+collections/process_captures_and_streams.neon
 collections/random_is_reproducible_by_construction.neon
 collections/range_is_a_list_everywhere_else.neon
 collections/stdlib_breadth.neon

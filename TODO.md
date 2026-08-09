@@ -413,6 +413,19 @@ one named above.
 
 ## Later — not now
 
+### 18. `std::process` on Windows
+
+The POSIX side is built (`runtime/src/process.c`): fork/exec with a CLOEXEC errno-report
+pipe, a poll-pumped `run` that cannot deadlock, wait returning 128+signal, SIGKILL. The
+Windows natives are honest `-ENOSYS` stubs — same refusal `std::fs`'s directory natives
+started with. Real implementation is `CreateProcessW` + anonymous pipes + a threaded
+pump (Windows has no `poll` over pipe handles, so the deadlock-free capture wants one
+thread per stream, joined at the end — threads inside the runtime are fine, they never
+cross the ABI mid-pump), `WaitForSingleObject` + `GetExitCodeProcess` for wait,
+`TerminateProcess` for kill. The env/cwd plumbing is `CreateProcessW`'s `lpEnvironment`
+(a NUL-separated block, UTF-16) and `lpCurrentDirectory`. Behind `@cfg` the same way the
+fs Win32 half was, buildable-and-runnable via the mingw + Wine path.
+
 ### 17. `@cfg`'s keys are the HOST, not the target
 
 `Config::for_host` seeds `@cfg` from the machine the compiler is running on, and `--cfg KEY`

@@ -21,6 +21,7 @@ set(NEON_RT_SOURCES
     src/any.c
     src/map.c
     src/os.c
+    src/process.c
     src/random.c
     src/time.c
 )
@@ -260,6 +261,7 @@ if(NEON_RT_TESTS)
         tests/core_test.c
         tests/os_test.c
         tests/random_test.c
+        tests/process_test.c
     )
     # The rich assertion and TEST macros use GNU C (__auto_type, constructors, _Generic).
     set_target_properties(neon_rt_tests PROPERTIES C_STANDARD 11 C_EXTENSIONS ON)

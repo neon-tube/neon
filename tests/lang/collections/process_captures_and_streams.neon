@@ -1,0 +1,55 @@
+// `std::process`, on utilities every POSIX box has. No `@cfg`: the platform difference is
+// the runtime's — POSIX spawns, Windows' natives answer -ENOSYS today — and this file is a
+// POSIX-run spec the same way `std::fs`'s directory tests are.
+//
+// What is pinned: capture with output and an exit CODE (a value, not a failure), stdin fed
+// through, environment extension, a working directory, a spawn that fails, and a streamed
+// round-trip through a piped child. Nothing here depends on timing or on machine state.
+
+use std::io;
+use std::process;
+use std::string;
+use std::map;
+
+fn main() {
+    // Capture: stdout, and the exit code as an ordinary value.
+    let hello = try! process::run("echo", ["hello", "world"]);
+    io::println("#{string::trim_end(hello.stdout)} #{hello.code}");
+
+    // A non-zero exit is data, not an error: `false` exits 1, and `run` returns it.
+    let f = try! process::run("false", []);
+    io::println("#{f.code}");
+
+    // stdin fed all the way through, output captured back.
+    let up = try! process::run_with("tr", ["a-z", "A-Z"],
+        { input: "shout", cwd: null, env: null });
+    io::println(string::trim_end(up.stdout));
+
+    // The environment extends the inherited one; the child sees the override.
+    let env = try! process::run_with("sh", ["-c", "echo $NEON_SPEC_VAR"],
+        { input: null, cwd: null, env: map::new() |> map::set("NEON_SPEC_VAR", "here") });
+    io::println(string::trim_end(env.stdout));
+
+    // The working directory is the child's, not ours.
+    let dir = try! process::run_with("pwd", [],
+        { input: null, cwd: "/", env: null });
+    io::println(string::trim_end(dir.stdout));
+
+    // A program that does not exist is a `ProcessError`, softened to null here.
+    let missing = try? process::run("neon_no_such_program_42", []);
+    io::println("#{missing is null}");
+
+    // Streaming: write to a piped child's stdin, close it, read its stdout back.
+    let cat = try! process::spawn_with("cat", [],
+        { stdin: :piped, stdout: :piped, stderr: :inherit, cwd: null, env: null });
+    let si = process::stdin(cat);
+    let so = process::stdout(cat);
+    if si is process::Pipe {
+        if so is process::Pipe {
+            try! process::write(si, "streamed");
+            try! process::close(si);
+            io::println(try! process::read_all(so));
+        };
+    };
+    io::println("#{try! process::wait(cat)}");
+}

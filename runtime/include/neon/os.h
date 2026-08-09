@@ -26,6 +26,10 @@ neon_str neon_os_env_get(neon_str name); // consumes name; "" when unset — gua
 
 NEON_NORETURN void neon_os_exit(int64_t code);
 
+// The lossy UTF-8 boundary, for other subsystems receiving OS bytes: each invalid byte
+// becomes U+FFFD, and the result is always an owned copy.
+neon_str neon_os_lossy(const char* bytes, size_t len);
+
 neon_str neon_io_read_line_raw(void); // includes the trailing newline; "" only at EOF
 neon_str neon_io_read_all_stdin(void);
 
