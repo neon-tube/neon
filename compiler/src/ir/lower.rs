@@ -1749,7 +1749,15 @@ impl Lower<'_> {
             ExprKind::Index { base, index } => {
                 let b = self.lower_expr(base);
                 let i = self.lower_expr(index);
-                self.b.emit(Op::Index { base: b, index: i }, repr, ty)
+                self.b.emit(
+                    Op::Index {
+                        base: b,
+                        index: i,
+                        covered: None,
+                    },
+                    repr,
+                    ty,
+                )
             }
             ExprKind::Is { lhs, ty: spec } => {
                 let v = self.lower_expr(lhs);
@@ -4087,6 +4095,7 @@ impl Lower<'_> {
                 Op::Index {
                     base: list,
                     index: i_param,
+                    covered: None,
                 },
                 elem_repr,
                 ty,

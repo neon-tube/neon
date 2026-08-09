@@ -177,7 +177,14 @@ fn find(f: &Func) -> Vec<Site> {
             }
             // The record the unchanged fields came from must be *this* slot.
             let Some(src) = source else { continue };
-            let Some((src_block, src_at, Op::Index { base, index: idx })) = defs.get(&src) else {
+            let Some((
+                src_block,
+                src_at,
+                Op::Index {
+                    base, index: idx, ..
+                },
+            )) = defs.get(&src)
+            else {
                 continue;
             };
             if *base != list || *idx != index {
@@ -528,7 +535,7 @@ fn const_i64(f: &Func, v: Value) -> Option<i64> {
 ///
 /// The distinguisher is dominance: `block10` is a back edge because `block4` dominates it,
 /// while `block2` is not, because control reaches it without ever entering `block4`.
-fn loop_body(f: &Func, header: BlockId) -> HashSet<BlockId> {
+pub(super) fn loop_body(f: &Func, header: BlockId) -> HashSet<BlockId> {
     let dom = dominators(f);
     let preds = predecessors(f);
     let mut body: HashSet<BlockId> = std::iter::once(header).collect();
@@ -554,7 +561,7 @@ fn loop_body(f: &Func, header: BlockId) -> HashSet<BlockId> {
 /// Dominator sets, by the standard iterative fixpoint. The CFGs here are small, so the naive
 /// form is the right one: no dominator tree and no immediate-dominator bookkeeping to keep
 /// correct for the sake of an asymptotic nobody reaches.
-fn dominators(f: &Func) -> HashMap<BlockId, HashSet<BlockId>> {
+pub(super) fn dominators(f: &Func) -> HashMap<BlockId, HashSet<BlockId>> {
     let all: HashSet<BlockId> = f.blocks.iter().map(|b| b.id).collect();
     let preds = predecessors(f);
     let mut dom: HashMap<BlockId, HashSet<BlockId>> = f
@@ -595,7 +602,7 @@ fn dominators(f: &Func) -> HashMap<BlockId, HashSet<BlockId>> {
     dom
 }
 
-fn predecessors(f: &Func) -> HashMap<BlockId, Vec<BlockId>> {
+pub(super) fn predecessors(f: &Func) -> HashMap<BlockId, Vec<BlockId>> {
     let mut out: HashMap<BlockId, Vec<BlockId>> = HashMap::new();
     for b in &f.blocks {
         for t in targets(&b.term) {
@@ -607,14 +614,14 @@ fn predecessors(f: &Func) -> HashMap<BlockId, Vec<BlockId>> {
 
 /// Whether `v` is bound anywhere inside `body` -- as an instruction result or a block
 /// parameter. A value bound inside the loop takes a fresh value each iteration.
-fn defined_inside(f: &Func, body: &HashSet<BlockId>, v: Value) -> bool {
+pub(super) fn defined_inside(f: &Func, body: &HashSet<BlockId>, v: Value) -> bool {
     f.blocks
         .iter()
         .filter(|b| body.contains(&b.id))
         .any(|b| b.params.contains(&v) || b.insts.iter().any(|i| i.result == Some(v)))
 }
 
-fn targets(t: &Term) -> Vec<&super::ssa::Target> {
+pub(super) fn targets(t: &Term) -> Vec<&super::ssa::Target> {
     match t {
         Term::Jump(tg) => vec![tg],
         Term::Branch { then, els, .. } => vec![then, els],

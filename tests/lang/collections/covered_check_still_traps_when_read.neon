@@ -1,0 +1,21 @@
+//@ exit: 101
+// The other side of covered_check_keeps_skipped_paths_alive: the second list is shorter
+// AND actually read past its end. The preheader test is false, so the access keeps its
+// full check and traps with the same index and length it always reported.
+
+use std::io;
+use std::list;
+
+fn main() {
+    let kinds = [1, 1, 1];
+    let args = [10, 20];
+    let i = 0;
+    let n = list::len(kinds);
+    let total = 0;
+    while i < n {
+        let k = kinds[i];
+        total = total + args[i];
+        i = i + 1;
+    };
+    io::println("#{total}");
+}

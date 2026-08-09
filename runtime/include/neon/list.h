@@ -66,6 +66,20 @@ static inline void* neon_list_at_scalar(neon_list* l, int64_t i, size_t sz) {
     }
     return l->data + (size_t)i * sz;
 }
+
+// `neon_list_at_scalar` whose check a dominating check on ANOTHER list already covers
+// whenever `covered` is true. The compiler emits this when the same index has just been
+// checked against a list this one is at least as long as; `covered` tests exactly that
+// length fact, once, before the loop. LOOP-INVARIANT BY CONSTRUCTION: that is what lets
+// the C compiler unswitch the loop and carry no check at all in the covered copy. When
+// `covered` is false this is byte-for-byte the checked access above — the rewrite can
+// tighten where a program traps, never widen.
+static inline void* neon_list_at_scalar_covered(neon_list* l, int64_t i, size_t sz, bool covered) {
+    if (!covered && (i < 0 || (size_t)i >= l->len)) {
+        neon_trap_oob(i, l->len);
+    }
+    return l->data + (size_t)i * sz;
+}
 neon_list* neon_list_concat(neon_list* a, neon_list* b);    // consumes both
 int neon_list_cmp(const neon_list* a, const neon_list* b);  // borrows both; -1/0/1
 bool neon_list_eq(const neon_list* a, const neon_list* b);  // borrows both

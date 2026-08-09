@@ -307,7 +307,11 @@ fn emit_inst(out: &mut String, types: &TypeTable, f: &Func, inst: &crate::ir::ss
                 op_rhs(types, f, inst.result, &inst.op)
             );
         }
-        Op::Index { base, index } => emit_index(out, types, f, inst.result, *base, *index),
+        Op::Index {
+            base,
+            index,
+            covered,
+        } => emit_index(out, types, f, inst.result, *base, *index, *covered),
         Op::Native { symbol, args } if is_list_builder(symbol) => {
             emit_list_builder(out, types, f, inst.result, symbol, args)
         }
@@ -430,6 +434,7 @@ fn emit_index(
     result: Option<Value>,
     base: Value,
     index: Value,
+    covered: Option<Value>,
 ) {
     let Some(r) = result else { return };
     let elem = f.value_repr(r).clone();
@@ -449,13 +454,29 @@ fn emit_index(
         // even fully inlined, and the hot loop of a list walk paid an `imul` per read for
         // it. The element's C type is the one being cast to on this very line, so the
         // literal cannot disagree with the layout.
-        let _ = writeln!(
-            out,
-            "{} = *({ety}*)neon_list_at_scalar({}, {}, sizeof({ety}));",
-            var(r),
-            var(base),
-            var(index)
-        );
+        match covered {
+            // `ir::cover` proved the check redundant whenever this loop-invariant bool
+            // is true; gcc unswitches the loop on it and the fast copy carries no check.
+            Some(c) => {
+                let _ = writeln!(
+                    out,
+                    "{} = *({ety}*)neon_list_at_scalar_covered({}, {}, sizeof({ety}), {});",
+                    var(r),
+                    var(base),
+                    var(index),
+                    var(c)
+                );
+            }
+            None => {
+                let _ = writeln!(
+                    out,
+                    "{} = *({ety}*)neon_list_at_scalar({}, {}, sizeof({ety}));",
+                    var(r),
+                    var(base),
+                    var(index)
+                );
+            }
+        }
     }
     let mut parts = Vec::new();
     rc_parts(types, "neon_retain", &elem, &var(r), &mut parts);

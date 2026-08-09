@@ -1,0 +1,25 @@
+// Two lists indexed by the same subscript in one loop: `ir::cover` merges their bounds
+// checks CONDITIONALLY — the second list's check is elided only under a preheader test
+// `len(second) >= len(first)`. Here that test is FALSE (args is shorter than kinds), and
+// the branch skips `args[i]` exactly where it would be out of range — so this program
+// must run to completion, as it always did. A pass that widened the first check to
+// cover both lists unconditionally would trap it.
+
+use std::io;
+use std::list;
+
+fn main() {
+    let kinds = [1, 2, 1, 2, 9];
+    let args = [10, 20];
+    let i = 0;
+    let n = list::len(kinds);
+    let total = 0;
+    while i < n {
+        let k = kinds[i];
+        if k == 1 and i < 2 {
+            total = total + args[i];
+        };
+        i = i + 1;
+    };
+    io::println("#{total}");
+}

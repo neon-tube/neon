@@ -4,6 +4,7 @@
 //! Everything here consumes what the checker already worked out (`TypecheckResult`)
 //! and re-derives nothing.
 
+pub mod cover;
 pub mod effects;
 pub mod lower;
 pub mod opt;
@@ -94,6 +95,10 @@ fn compile_with(
     // narrows, and before refcounting for the same reason `unique` runs before it: the
     // per-field stores must be the writes refcount placement sees.
     partial::apply(&mut program);
+    // After every pass that reshapes list accesses (`unique`'s in-place rewrite,
+    // `partial`'s stores), so the accesses it marks are the ones codegen will emit;
+    // before refcounting, like every structural pass.
+    cover::apply(&mut program);
     refcount::insert(&mut program);
     program
 }

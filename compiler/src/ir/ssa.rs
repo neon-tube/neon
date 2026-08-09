@@ -219,6 +219,13 @@ pub enum Op {
     Index {
         base: Value,
         index: Value,
+        /// A bool value proving this access needs no bounds check when true — set by
+        /// `ir::cover` when a DOMINATING same-index check on another list covers this
+        /// one, provided `len(this) >= len(that)`, which is what the value tests (once,
+        /// in the loop preheader). `None` is the ordinary fully-checked access; when
+        /// the value is false at run time the access checks exactly as `None` does, so
+        /// the rewrite can never widen where a program traps.
+        covered: Option<Value>,
     },
 
     /// Retain / release, inserted by the refcount pass.

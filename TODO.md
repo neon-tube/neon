@@ -193,12 +193,27 @@ so gcc had already CSE'd it against the dominating read's check. A plain
 redundant-check-elimination pass therefore buys ~zero. Do not build one expecting a win.
 
 **The whole available 11% is one case: `args[i]`.** It needs a cross-list fact gcc cannot
-get — `len(args) >= len(kinds)` — so the dominating check on `kinds[i]` covers it. Two
-routes: loop versioning (test once on entry, two loop bodies, doubles the loop's code), or
-hoist `m = min(len(kinds), len(args))` before the loop and check `i >= m` once to cover
-both accesses. The `min` is preferred: both lengths are loop-invariant so it is free per
-iteration, and it is observationally identical because no side effect sits between the two
-reads, so trapping at the first rather than the second is unobservable.
+get — `len(args) >= len(kinds)` — so the dominating check on `kinds[i]` covers it.
+
+**Status: built as `ir::cover`, 2026-08-09, capturing about half.** The `min`-hoist this
+section used to prescribe was UNSOUND and is off the table: its identity claim held only
+if the second read post-dominates the first, and it does not — `:open` on a zero cell
+skips `args[i]`, so widening the first check would trap programs that run today. What
+landed instead is conditional coverage: the preheader computes
+`covered = len(args) >= len(kinds)` once, and the covered access checks
+`!covered && oob` — true elides a check that provably cannot fire, false is
+byte-for-byte the old access, so trapping behaviour is unchanged by construction
+(pinned by `collections/covered_check_*`). Measured same-day, same machine:
+1.28× → 1.22× (0.3084s → 0.2976s, C at 0.242s). It also fires on `list::zip`.
+
+The remaining ~6% to the hand-measured 1.15× ceiling is the per-iteration
+`!covered` test: gcc will not unswitch a loop this size (`max-unswitch-insns` is 50),
+so the branch — predicted but present — survives. Getting the rest means the pass
+versioning the loop itself: clone the body with the covered accesses checkless, branch
+once in the preheader. That is real machinery — values defined in the loop and used
+after it need join-block parameters (this IR passes merges on edges, so cloning forces
+SSA reconstruction at every exit) — and it doubles the loop's code. Worth it only if
+brainfuck-shaped dispatch loops matter more than they do today.
 
 **What does *not* apply here:** the textbook rule "an index that is a loop induction
 variable bounded by the guard needs no check". `i = args[i]` (main.neon:150,154) makes `i`

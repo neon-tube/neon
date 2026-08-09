@@ -521,9 +521,14 @@ fn operand_uses(
         Op::MakeRecord { fields, .. } => consuming.extend(fields.iter().map(|(_, v)| *v)),
         // Borrows: they read but do not take ownership.
         Op::Field { base, .. } | Op::Elem { base, .. } => borrowing.push(*base),
-        Op::Index { base, index } => {
+        Op::Index {
+            base,
+            index,
+            covered,
+        } => {
             borrowing.push(*base);
             borrowing.push(*index);
+            borrowing.extend(covered.iter().copied());
         }
         // An erasing cast is the one `Cast` that takes ownership: `neon_box_new` copies
         // the payload into a box whose drop releases it, so the reference moves in.

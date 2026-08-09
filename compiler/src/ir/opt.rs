@@ -265,9 +265,16 @@ fn op_operands(op: &Op, f: &mut impl FnMut(&Value)) {
         Op::MakeClosure { captures, .. } => captures.iter().for_each(f),
         Op::MakeRecord { fields, .. } => fields.iter().for_each(|(_, v)| f(v)),
         Op::Field { base, .. } | Op::Elem { base, .. } => f(base),
-        Op::Index { base, index } => {
+        Op::Index {
+            base,
+            index,
+            covered,
+        } => {
             f(base);
             f(index);
+            if let Some(c) = covered {
+                f(c);
+            }
         }
         Op::Cast(v)
         | Op::IsNull(v)
@@ -496,9 +503,16 @@ fn rewrite_op(op: &mut Op, m: &HashMap<Value, Value>) {
         Op::MakeClosure { captures, .. } => captures.iter_mut().for_each(sub),
         Op::MakeRecord { fields, .. } => fields.iter_mut().for_each(|(_, v)| sub(v)),
         Op::Field { base, .. } | Op::Elem { base, .. } => sub(base),
-        Op::Index { base, index } => {
+        Op::Index {
+            base,
+            index,
+            covered,
+        } => {
             sub(base);
             sub(index);
+            if let Some(c) = covered {
+                sub(c);
+            }
         }
         Op::Cast(v)
         | Op::IsNull(v)

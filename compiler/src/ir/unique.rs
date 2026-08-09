@@ -393,7 +393,15 @@ fn operands(op: &Op) -> Vec<Value> {
         }
         Op::MakeRecord { fields, .. } => fields.iter().map(|(_, v)| *v).collect(),
         Op::Field { base, .. } | Op::Elem { base, .. } => vec![*base],
-        Op::Index { base, index } => vec![*base, *index],
+        Op::Index {
+            base,
+            index,
+            covered,
+        } => {
+            let mut v = vec![*base, *index];
+            v.extend(covered.iter().copied());
+            v
+        }
         Op::Cast(v)
         | Op::IsErr(v)
         | Op::UnwrapOk(v)
@@ -724,7 +732,10 @@ fn inner_write<'a>(
     // The inner list is an `Index` read of `list` at the same index VALUE the outer
     // write stores back to — the same slot, definitionally, not coincidentally.
     let (rb, ri) = find_def(f, inner_list)?;
-    let Op::Index { base, index: ridx } = f.blocks[rb.0 as usize].insts[ri].op else {
+    let Op::Index {
+        base, index: ridx, ..
+    } = f.blocks[rb.0 as usize].insts[ri].op
+    else {
         return None;
     };
     if base != list || ridx != index {
@@ -1233,9 +1244,16 @@ fn map_operands(op: &mut Op, m: &HashMap<Value, Value>) {
         }
         Op::MakeRecord { fields, .. } => fields.iter_mut().for_each(|(_, v)| r(v)),
         Op::Field { base, .. } | Op::Elem { base, .. } => r(base),
-        Op::Index { base, index } => {
+        Op::Index {
+            base,
+            index,
+            covered,
+        } => {
             r(base);
             r(index);
+            if let Some(c) = covered {
+                r(c);
+            }
         }
         Op::Cast(v)
         | Op::IsErr(v)

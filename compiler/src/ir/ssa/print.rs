@@ -113,7 +113,19 @@ fn op(o: &Op) -> String {
         Op::IsNull(v) => format!("is_null {}", val(*v)),
         Op::IsVariant { value, variant, .. } => format!("is_variant {} {variant}", val(*value)),
         Op::MakeList(vs) => format!("list [{}]", vals(vs)),
-        Op::Index { base, index } => format!("index {}[{}]", val(*base), val(*index)),
+        Op::Index {
+            base,
+            index,
+            covered,
+        } => match covered {
+            Some(c) => format!(
+                "index {}[{}] covered_by {}",
+                val(*base),
+                val(*index),
+                val(*c)
+            ),
+            None => format!("index {}[{}]", val(*base), val(*index)),
+        },
         Op::Retain(v) => format!("retain {}", val(*v)),
         Op::Release(v) => format!("release {}", val(*v)),
     }
