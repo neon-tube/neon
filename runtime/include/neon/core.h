@@ -19,8 +19,18 @@
 
 // Every heap object begins with this. `drop` frees *this* object (releasing its own
 // counted fields first); a NULL owner / an immortal flag makes retain/release no-ops.
+//
+// `rc` is `uint32_t`, not `uint64_t`, and it is load-bearing for size: with `flags` it
+// fills the eight bytes before the (8-byte-aligned) `drop` pointer exactly, so the header
+// is 16 bytes rather than 24 — a third off every heap object, and a Node drops from a
+// 48-byte slab class to 32. Four billion references to ONE object is not a real number:
+// each reference is a pointer stored somewhere, so reaching 2^32 would take 32 GB of
+// pointers to a single node. The `drop` pointer is kept a real pointer, deliberately —
+// folding it into a type index would trade eight bytes for a table lookup on the release
+// path, which is a quarter of binary-trees' run, exactly the indirection the drop-
+// devirtualisation experiment showed does not pay.
 typedef struct neon_header {
-    uint64_t rc;
+    uint32_t rc;
     uint32_t flags;
     void (*drop)(void*);
 } neon_header;

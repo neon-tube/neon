@@ -295,12 +295,24 @@ In order:
    string fields), but no benchmark has one: n-body is flat records in a list, and
    word-frequency's drop cost is string `cfree` (a `Str`, not a boxed record, which this
    never touched). Do not re-propose from the drop's profile share.
-3. **Header diet.** The layout today is rc at +0, flags at +8, drop pointer at +16 — a
-   24-byte header on a 16-byte payload, so a Node is 40 bytes to C's 16. Pack rc+flags
-   and turn the drop pointer into a type index and the header halves; every heap object
-   in every program shrinks with it. ABI change across runtime, codegen and the
-   witnesses — a planned project with its own model updates, same tier as `neon_str`
-   SSO above.
+3. **Header diet. HALF DONE, 2026-08-09.** The header was rc(8) + flags(4) + pad(4) +
+   drop(8) = 24 bytes. `rc` is now `uint32_t`: with flags it fills the 8 bytes before the
+   drop pointer exactly, so the header is **16 bytes** and a Node dropped from a 48-byte
+   slab class to 32 — binary-trees 0.43× → 0.40×, no other bench affected. Four billion
+   references to one object is not a real number (each is a stored pointer: 32 GB to reach
+   2^32), and CBMC re-verifies the refcount contract at the narrower width.
+
+   The drop-pointer→type-index half is **deliberately NOT done**: it would trade the last
+   8 bytes (16 → 12, and alignment likely rounds a Node back to a 16-aligned class anyway)
+   for a `drop_table[type](h)` lookup on the release path, which is 26.7% of binary-trees
+   post-slab — the exact indirection the drop-devirtualisation experiment (item 2) proved
+   does not pay. The pointer stays a pointer until a profile says the size, not the
+   lookup, is the wall.
+
+   Model seam worth knowing: CBMC defines no `#ifdef`-able macro of its own, so the
+   models pass `-DNEON_CBMC` (runtime/models/CMakeLists.txt) and `neon_alloc` takes the
+   plain-malloc path under it — the slab's chunk-carving loop is unbounded for CBMC, and
+   the models verify the contract, not the allocator internals.
 4. **The recursion itself: nothing.** make/check compile to the same shape and cost as
    C's. `ir::unique` has no purchase — nothing is a loop-carried list.
 

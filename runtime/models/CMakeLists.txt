@@ -125,6 +125,13 @@ function(add_cbmc_model name)
         COMMAND ${CBMC_EXECUTABLE}
                 ${inputs}
                 -I ${RUNTIME_ROOT}/include
+                # `neon_alloc`/`neon_free` select their plain-malloc path under this, not the
+                # slab. CBMC verifies the refcount CONTRACT the slab preserves (a fresh
+                # header, drop-at-zero); a global-free-list allocator with a chunk-carving
+                # loop is the stateful, unbounded shape CBMC is worst at, and the slab's own
+                # integrity is proved instead by ASan/LSan over the whole corpus. CBMC
+                # defines no preprocessor macro of its own, so the seam is passed here.
+                -DNEON_CBMC
                 --unwind ${CBMC_UNWIND}
                 ${model_args}
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}

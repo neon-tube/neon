@@ -61,14 +61,14 @@ void neon_release(neon_header* h) {
 // list recycles within the process — so there is a destructor purely to keep LeakSanitizer
 // honest at exit.
 //
-// Under CBMC (`__CPROVER`) this collapses to plain `malloc`/`free`: the models verify the
+// Under CBMC (`NEON_CBMC`, passed by runtime/models/CMakeLists.txt) this collapses to plain `malloc`/`free`: the models verify the
 // refcount CONTRACT `neon_alloc` provides (a fresh header, rc 1) and the drop semantics,
 // which the slab does not change, and a global-free-list allocator is exactly the
 // stateful, unbounded-loop shape a model checker is worst at. The slab's own integrity —
 // right class, no overlap, no double-serve — is covered instead by ASan/LSan over the
 // whole corpus, which is the tool that actually catches a slab bug.
 
-#ifdef __CPROVER
+#ifdef NEON_CBMC
 
 void* neon_alloc(size_t bytes, void (*drop)(void*)) {
     neon_header* h = malloc(sizeof(neon_header) + bytes);
