@@ -262,16 +262,39 @@ or offload to the pool** — the sibling of "all blocking goes through the engin
 ## Build order (the `fibers` branch)
 
 Each slice lands green, tested, before the next — the repo's discipline applied to a big
-feature.
+feature. All six of the runtime slices below are BUILT and C-tested under ASan/UBSan/LSan on
+x86-64 Linux; what remains is codegen (the language surface) and the production breadth noted
+per slice.
 
-1. **Arena allocator** — bump + size-class free lists + drop, standalone, C-tested + CBMC.
-2. **Swap gadget** — vendored `fcontext`, a two-fiber cooperative swap, sanitizer
-   annotations.
-3. **Scheduler + `fiber::runtime` + register-pinned arena** — run queue, lifecycle, lazy
-   entry, `neon_alloc` routes to the current arena.
-4. **Trap isolation** — the teardown walk (release outgoing refs + bulk-free), `sigaltstack`
-   for overflow,
-   deadlock-panic.
-5. **Channels + `Task[T]`** — copy-on-send, move-only Resources, size-heuristic shared heap.
-6. **IO engine + file-offload pool + safepoints** — completion engine (io_uring/epoll first,
-   IOCP later), transparent blocking, timers, preemption.
+1. **Arena allocator** — bump + size-class free lists + drop, standalone. C-tested + a CBMC
+   model. **Done.**
+2. **Swap gadget** — our own ~15-instruction x86-64 SysV `neon_ctx_swap` (NOT vendored
+   boost.context — a cooperative switch is small and worth owning), a two-fiber cooperative
+   swap, mandatory ASan fiber annotations. **Done.** aarch64/Win64 stubs are the port.
+3. **Scheduler + `fiber::runtime` + current arena** — run queue behind an interface, lazy
+   entry, `neon_alloc` routes to the current fiber's arena. The arena pointer is a
+   `_Thread_local` with the `initial-exec` TLS model (measured: the routing costs ~1% on
+   binary-trees this way, ~6% with the default general-dynamic model). **Done.** The
+   register-pinned arena the design pictured is a later perf swap under this same seam.
+4. **Trap isolation** — arena walkability (`neon_arena_walk` + a freed-slot flag + per-chunk
+   high-water; C-tested + a CBMC model) and the teardown walk; crash isolation via the swap
+   gadget, NOT setjmp/longjmp (a crashing fiber switches back to the scheduler like a
+   finishing one — a cross-stack longjmp trips `__longjmp_chk` and side-steps the ASan
+   annotations); guard-page mmap'd stacks + a `sigaltstack` SIGSEGV handler that recovers via
+   a `ucontext` rewrite through `sigreturn`; deadlock-panic. **Done.** The walk's per-object
+   *release-outgoing* is codegen's to emit (the primitive is ready); overflow isolation and
+   deadlock are validated by standalone programs in `runtime/tests/manual/`.
+5. **Channels + `Task[T]`** — scheduler park/wake; unbounded buffered channels (send/recv/
+   close, waiter on the blocked fiber's own stack); `Task[T]`/await. **Done.** copy-on-send
+   (small values into the receiver's arena) and the size-heuristic shared heap for big values
+   are codegen + a shared-heap primitive — deferred until there is codegen to emit the copy.
+6. **IO seam + safepoints** — the scheduler seam a completion engine plugs into, proven end to
+   end over epoll (a fiber parks on a descriptor; the pump waits in the kernel only when idle
+   and wakes it on readiness); safepoint preemption (the flag + `neon_fiber_safepoint`, the
+   runtime half of compiler-inserted back-edge checks). **Done.** The production proactor
+   (io_uring, the file-offload pool, IOCP/kqueue) and the timer that drives preemption swap in
+   behind `neon_fiber_io_wait`/`neon_fiber_safepoint` without changing anything above them.
+
+**Not yet started: the language surface.** Everything above is the C runtime. `fiber::spawn`,
+`Channel`, `Task[T]`, `await`, and the send-site value copy are codegen + stdlib work — the
+next body of effort, on top of a runtime that is built and tested.

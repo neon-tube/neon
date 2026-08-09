@@ -89,4 +89,35 @@ void neon_fiber_park(void);
 // `f` was waiting on (a send, a Task completion). Single-thread M=1: no queue race.
 void neon_fiber_wake(neon_fiber* f);
 
+// ---- safepoint preemption (src/fiber_sched.c) ----
+//
+// Cooperative scheduling starves on a fiber that never yields. Codegen emits a call to
+// neon_fiber_safepoint at loop back-edges; it is a cheap flag check that yields only when
+// preemption has been requested (by a timer in the production build). Safe to call anywhere —
+// a no-op outside a fiber.
+void neon_fiber_safepoint(void);
+
+// Request that the current fiber yield at its next safepoint. The production trigger is a
+// timer signal; exposed so the mechanism is drivable without one.
+void neon_fiber_request_preempt(void);
+
+// ---- descriptor waits: the completion-IO seam (Linux, src/fiber_sched.c) ----
+//
+// The design's production IO is a proactor (io_uring/IOCP, kqueue/epoll-adapted, plus a
+// file-offload pool); what is wired here is the scheduler seam it plugs into, over epoll. A
+// fiber that would block on a descriptor parks, the scheduler runs everyone else and waits in
+// the kernel only when idle, and wakes the fiber on readiness.
+#if defined(__linux__)
+#include <stdint.h>
+#include <sys/types.h> // ssize_t
+
+// Park the current fiber until `fd` is ready for `events` (an epoll mask, e.g. EPOLLIN). One
+// waiter per fd. Must be called from within a fiber.
+void neon_fiber_io_wait(int fd, uint32_t events);
+
+// A fiber-yielding read: on EAGAIN it waits for `fd` (non-blocking) to become readable,
+// running other fibers meanwhile, and retries — transparent blocking, only the fiber waits.
+ssize_t neon_fiber_read(int fd, void* buf, size_t count);
+#endif
+
 #endif
