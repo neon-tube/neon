@@ -181,6 +181,14 @@ typedef struct {
     mbedtls_x509_crt own_cert; // server side; initialized-but-empty on a client
     mbedtls_pk_context own_key;
     int fd;
+    // Set for the duration of close_notify only. The send BIO must NOT park while it is
+    // set: a resource's cleanup runs on the teardown context (a crashed or dropped
+    // stream, walked by neon_fiber_free), where parking is a fatal trap and the readiness
+    // hook declines — so a wait there would become poll(-1) on the scheduler thread, and
+    // a peer that stopped reading with our buffer full would wedge that thread forever.
+    // close_notify is a courtesy alert; when it cannot go out without blocking, dropping
+    // it and closing the fd is the correct, non-blocking goodbye.
+    bool closing;
 } neon_tls_stream;
 
 // A server's credentials, held as PEM bytes (NUL-terminated, `len` including it, the form
@@ -287,7 +295,8 @@ static int neon_tls_nonblock(int fd) {
 // it without stopping its thread.
 
 static int neon_tls_bio_send(void* ctx, const unsigned char* buf, size_t len) {
-    int fd = ((neon_tls_stream*)ctx)->fd;
+    neon_tls_stream* s = (neon_tls_stream*)ctx;
+    int fd = s->fd;
     for (;;) {
         // MSG_NOSIGNAL for the same reason as net.c: a vanished peer must be a reportable
         // failure, not a SIGPIPE.
@@ -299,6 +308,11 @@ static int neon_tls_bio_send(void* ctx, const unsigned char* buf, size_t len) {
             continue;
         }
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            // During close_notify, never park (see `closing`): report the alert as
+            // undeliverable and let close proceed to shut the fd.
+            if (s->closing) {
+                return MBEDTLS_ERR_SSL_WANT_WRITE;
+            }
             if (neon_net_wait(fd, true) < 0) {
                 return MBEDTLS_ERR_NET_SEND_FAILED;
             }
@@ -647,8 +661,11 @@ int64_t neon_tls_write(int64_t h, neon_str data) {
 
 int64_t neon_tls_close(int64_t h) {
     neon_tls_stream* s = (neon_tls_stream*)(intptr_t)h;
-    // Best-effort goodbye: a peer that already vanished makes close_notify fail, and
-    // that is fine — the descriptor is closing either way.
+    // Best-effort goodbye that CANNOT block: `closing` makes the send BIO give up on
+    // EAGAIN rather than park, so a full send buffer (or a teardown-context close, where
+    // parking is fatal) drops the alert instead of wedging. A peer that already vanished
+    // makes close_notify fail too — fine, the descriptor is closing either way.
+    s->closing = true;
     mbedtls_ssl_close_notify(&s->ssl);
     neon_tls_stream_free(s);
     return 0;
