@@ -41,9 +41,12 @@ fiber-local ("pinned") resources are unshipped until a type needs one.
 
 ## In flight
 
-- **CBMC resource models**: an agent is reworking the five `resource-*` models for the
-  body/ref ABI and adding `a-transfer-leaves-exactly-one-owning-ref`, mutation-validated,
-  committing under `runtime/models/` only. If its commit is absent, check for a report.
+- **CBMC resource models**: LANDED (c944a70) — the five `resource-*` models reworked for
+  body/ref plus `a-transfer-leaves-exactly-one-owning-ref` (916 props), all mutation-
+  validated (42-run campaign; the gate, the demotion, the bracket condition, the claim and
+  the env-release move each caught by name). verify-all: 37/37. One tractability note
+  recorded in the model headers: the root sentinel does not constant-fold in symex, so
+  cross-context scenarios stand on fiber-object identities.
 - **llhttp**: MERGED (bcea3e0) — CMake FetchContent, pinned `release/v9.4.3` by sha256,
   gated behind NEON_RT_TESTS so `cargo build` never fetches; smoke test in the C suite.
 - **Toolchain redesign** (user-requested): a full build-graph map, ranked smells, and a
