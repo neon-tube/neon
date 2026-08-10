@@ -411,7 +411,11 @@ fn emit_inst(out: &mut String, types: &TypeTable, f: &Func, inst: &crate::ir::ss
             let got = coerce_expr(types, "_crv", &e, &res);
             let none = coerce_expr(types, "((neon_unit){0})", &Repr::Null, &res);
             let call = if symbol == "neon_channel_recv_timeout" {
-                format!("neon_channel_recv_timeout({}, &_crv, {})", var(args[0]), var(args[1]))
+                format!(
+                    "neon_channel_recv_timeout({}, &_crv, {})",
+                    var(args[0]),
+                    var(args[1])
+                )
             } else {
                 format!("neon_channel_recv({}, &_crv)", var(args[0]))
             };
@@ -1883,14 +1887,20 @@ fn copy_stmts(types: &TypeTable, repr: &Repr, src: &str, dst: &str, out: &mut Ve
         Repr::Runtime { c_type, .. } if c_type == "neon_task_ref" => {
             out.push(format!("neon_wcopy_task(&{src}, &{dst})"))
         }
-        Repr::Closure { .. } | Repr::Runtime { .. } => out.push(
-            "neon_wcopy_unsendable((const void*)0, (void*)0)".to_string(),
-        ),
+        Repr::Closure { .. } | Repr::Runtime { .. } => {
+            out.push("neon_wcopy_unsendable((const void*)0, (void*)0)".to_string())
+        }
         Repr::Union(variants) => {
             let mut arms = String::new();
             for (i, v) in variants.iter().enumerate() {
                 let mut sub = Vec::new();
-                copy_stmts(types, v, &format!("{src}.u._{i}"), &format!("{dst}.u._{i}"), &mut sub);
+                copy_stmts(
+                    types,
+                    v,
+                    &format!("{src}.u._{i}"),
+                    &format!("{dst}.u._{i}"),
+                    &mut sub,
+                );
                 if !sub.is_empty() {
                     let _ = write!(arms, "case {i}: {}; break; ", sub.join("; "));
                 }
@@ -1914,7 +1924,13 @@ fn copy_stmts(types: &TypeTable, repr: &Repr, src: &str, dst: &str, out: &mut Ve
         }
         Repr::Tuple(elems) => {
             for (i, e) in elems.iter().enumerate() {
-                copy_stmts(types, e, &format!("{src}._{i}"), &format!("{dst}._{i}"), out);
+                copy_stmts(
+                    types,
+                    e,
+                    &format!("{src}._{i}"),
+                    &format!("{dst}._{i}"),
+                    out,
+                );
             }
         }
         Repr::I64
@@ -2019,9 +2035,7 @@ fn emit_spawn_shims(out: &mut String, types: &TypeTable, program: &Program) {
                 match symbol.as_str() {
                     "neon_fiber_lang_spawn_with" => {
                         let t = match types.resolve(f.value_repr(args[0])) {
-                            Repr::Closure { params, .. } if params.len() == 1 => {
-                                params[0].clone()
-                            }
+                            Repr::Closure { params, .. } if params.len() == 1 => params[0].clone(),
                             r => ice(r, "spawn_with body is not a one-argument closure"),
                         };
                         args_seen.insert(spawn_shim_name(types, &t), t);
