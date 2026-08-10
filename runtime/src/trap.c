@@ -6,6 +6,7 @@
 
 #include "libneon_rt.h"
 
+#include "internal.h"
 #include "platform.h"
 
 #include <stdint.h>
@@ -168,6 +169,29 @@ static void neon_trace_report(int prefer_marked) {
 
 #define NEON_TRAP_CODE 101
 
+// The trap→fiber bridge (see internal.h). NULL until the fiber scheduler arms it; when armed,
+// each trap below hands control back to the scheduler instead of ending the process. Not
+// defined under NEON_CBMC — the trap models expect a trap to end the run (the _exit the
+// support header stubs as assume(0)), and the fiber sources are never built for a model.
+#ifndef NEON_CBMC
+_Thread_local void (*neon_fiber_trap_handler)(void) = NULL;
+#endif
+
+// A trap inside a fiber kills the fiber, not the process: if the bridge is armed, hand off
+// after reporting. The handler switches stacks back to the scheduler and never returns, so
+// the fatal exit below it is reached only off-fiber. Kept out of NEON_CBMC (the models have
+// no handler and must reach the stubbed _exit).
+#ifndef NEON_CBMC
+#define NEON_TRAP_MAYBE_FIBER()                                                               \
+    do {                                                                                     \
+        if (neon_fiber_trap_handler != NULL) {                                               \
+            neon_fiber_trap_handler();                                                       \
+        }                                                                                    \
+    } while (0)
+#else
+#define NEON_TRAP_MAYBE_FIBER() ((void)0)
+#endif
+
 NEON_NORETURN void neon_trap(const char* msg) {
     // Flush stdout first: exiting this way skips stdio teardown, and output the program
     // already produced before the fault (its golden up to this point) must still be seen.
@@ -175,6 +199,7 @@ NEON_NORETURN void neon_trap(const char* msg) {
     fprintf(stderr, "neon: %s\n", msg);
     neon_trace_report(0);
     fflush(stderr);
+    NEON_TRAP_MAYBE_FIBER(); // in a fiber: hand back to the scheduler, does not return
 #ifdef NEON_DEBUG
     abort();
 #else
@@ -193,6 +218,7 @@ NEON_NORETURN void neon_trap_oob(int64_t index, size_t len) {
             (long long)index, len);
     neon_trace_report(0);
     fflush(stderr);
+    NEON_TRAP_MAYBE_FIBER(); // in a fiber: hand back to the scheduler, does not return
 #ifdef NEON_DEBUG
     abort();
 #else
@@ -207,6 +233,7 @@ NEON_NORETURN void neon_panic(neon_str msg) {
     fprintf(stderr, "neon: uncaught error: %.*s\n", (int)neon_str_len(&msg), neon_str_data(&msg));
     neon_trace_report(1);
     fflush(stderr);
+    NEON_TRAP_MAYBE_FIBER(); // an uncaught error in a fiber kills the fiber, not the process
     neon_plat_exit_now(NEON_TRAP_CODE);
 }
 

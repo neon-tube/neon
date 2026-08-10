@@ -32,4 +32,26 @@ static inline void neon_str_release(neon_str s) {
     neon_release(s.owner);
 }
 
+
+// The witness `copy` for a value that cannot cross fibers (a closure, a resource): traps
+// with a message naming the limit. Never NULL in a witness for such a type — silence
+// would corrupt where loudness names the rule.
+void neon_wcopy_unsendable(const void* src, void* dst);
+
+// Route the AMBIENT allocation to the shared heap for the duration of a send copy: begin
+// returns the current fiber arena (may be NULL) and clears it, end restores it. Between
+// the two, every neon_alloc lands in the process slab, which any fiber may free into.
+void* neon_send_routing_begin(void);
+void neon_send_routing_end(void* saved);
+
+
+// Atomic retain/release for HANDLE objects (channels, tasks) — the only counts touched
+// concurrently across scheduler threads. Emitted by codegen at handle-repr sites and used
+// by the runtime's own handle code; the plain pair stays non-atomic for everything else.
+void neon_retain_shared(neon_header* h);
+void neon_release_shared(neon_header* h);
+
+// Route allocations to the slab WITH the SHARED flag (concurrent-rc objects: the handle
+// structs themselves). Staging copies use neon_send_routing_begin (plain slab) instead.
+void* neon_shared_routing_begin(void);
 #endif

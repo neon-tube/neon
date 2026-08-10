@@ -1,0 +1,20 @@
+// `std::sys` reports what the runtime actually IS, not what it prefers. The engine is a
+// kernel-and-build fact, so the golden pins only what is stable everywhere: fibers are
+// present on this build, and the engine reported inside a runtime matches the one reported
+// outside it. Which engine that is (`:io_uring` on a modern Linux, `:epoll` under an old
+// kernel, a restrictive seccomp policy, or NEON_IO=epoll) is deliberately NOT pinned — the
+// test suite runs both, and a golden naming one would fail on the other.
+
+use std::fiber;
+use std::io;
+use std::sys;
+
+fn main() {
+    io::println("has_fibers: #{sys::has_fibers()}");
+    let outside = sys::io_engine();
+    // A real engine, and the same one a running fiber sees.
+    io::println("engine is real: #{outside == :io_uring or outside == :epoll}");
+    fiber::runtime(() => {
+        io::println("engine agrees inside: #{sys::io_engine() == outside}");
+    });
+}

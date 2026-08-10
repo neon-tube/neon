@@ -73,6 +73,10 @@ neon_str neon_io_strerror(int64_t code) {
 
 // Everything left in the descriptor. `err` is the out-parameter: 0, or `-errno`. The data
 // and the status come back together rather than through hidden state.
+_Thread_local neon_ssize (*neon_fiber_blocking_read)(int fd, void* buf, size_t n) = NULL;
+_Thread_local neon_ssize (*neon_fiber_blocking_writev)(int fd, const neon_iovec* iov, int n) =
+    NULL;
+
 neon_str neon_io_read_all(int64_t fd, int64_t* err) {
     *err = 0;
     size_t cap = 4096, len = 0;
@@ -85,13 +89,21 @@ neon_str neon_io_read_all(int64_t fd, int64_t* err) {
             if (grown == NULL) neon_trap("out of memory");
             buf = grown;
         }
-        neon_ssize got = neon_plat_read((int)fd, buf + len, cap - len);
+        neon_ssize got = neon_fiber_blocking_read != NULL
+                             ? neon_fiber_blocking_read((int)fd, buf + len, cap - len)
+                             : neon_plat_read((int)fd, buf + len, cap - len);
         if (got < 0) {
             if (errno == EINTR) continue;
             *err = -(int64_t)errno;
             break;
         }
         if (got == 0) break;
+        // A read returns at most what was asked; restated here because the fiber hook's
+        // indirection hides that contract from the compiler (whose overflow analysis then
+        // saw an unbounded `len`), and a clamp is cheaper than trusting every future hook.
+        if ((size_t)got > cap - len) {
+            got = (neon_ssize)(cap - len);
+        }
         len += (size_t)got;
     }
     neon_str r = neon_str_new(buf, len);
@@ -131,7 +143,10 @@ int64_t neon_io_writev(int64_t fd, neon_list* parts) {
         i += batch;
         size_t done = 0, first = 0;
         while (done < total) {
-            neon_ssize got = neon_plat_writev((int)fd, vec + first, (int)(n - first));
+            neon_ssize got =
+                neon_fiber_blocking_writev != NULL
+                    ? neon_fiber_blocking_writev((int)fd, vec + first, (int)(n - first))
+                    : neon_plat_writev((int)fd, vec + first, (int)(n - first));
             if (got < 0) {
                 if (errno == EINTR) continue;
                 status = -(int64_t)errno;

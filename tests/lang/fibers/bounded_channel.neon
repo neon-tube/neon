@@ -1,0 +1,40 @@
+// Bounded channels and timed receives. Capacity 1 paces the producer: its second send
+// parks until the consumer drains (the interleaving below is the FIFO handoff, including
+// the rendezvous case where a parked receiver gets the value directly and the bound never
+// engages). recv_timeout on a channel nobody sends to comes back null after the deadline,
+// and is_closed distinguishes that timeout from a close.
+
+use std::channel;
+use std::fiber;
+use std::io;
+
+fn main() {
+    fiber::runtime(() => {
+        // Backpressure: capacity 1, so the producer's second send PARKS until the consumer
+        // drains — the prints interleave strictly instead of the producer running ahead.
+        let ch: channel::Channel[i64] = channel::bounded(1);
+        fiber::spawn(() => {
+            let i = 0;
+            while i < 3 {
+                channel::send(ch, i);
+                io::println("sent #{i}");
+                i = i + 1;
+            }
+            channel::close(ch);
+        });
+        fiber::spawn(() => {
+            let v = channel::recv(ch);
+            while v is i64 {
+                io::println("got #{v}");
+                v = channel::recv(ch);
+            }
+        });
+
+        // recv_timeout: nobody ever sends here, so this comes back null after ~20ms, and
+        // is_closed tells us it was a timeout, not a close.
+        let quiet: channel::Channel[i64] = channel::new();
+        let r = channel::recv_timeout(quiet, 20);
+        io::println("timed out: #{r is null and channel::is_closed(quiet) == false}");
+    });
+    io::println("done");
+}

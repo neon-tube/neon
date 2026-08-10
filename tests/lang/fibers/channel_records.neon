@@ -1,0 +1,49 @@
+// Structured messages and a reply channel: a record with heap fields (a str, a list, and a
+// MAP — the map's own entries deep-copied, tombstones and all skipped correctly) crosses
+// whole, and the worker answers on a SECOND channel that travelled inside the spawn
+// argument, a record holding both ends. A channel handle in a message is the same channel
+// on both sides, not a copy: the replies the worker sends come out of the very channel main
+// holds.
+
+use std::channel;
+use std::fiber;
+use std::io;
+use std::list;
+use std::map;
+
+record Job { id: i64, name: str, tags: List[str], env: Map[str, str] }
+record Ports { jobs: channel::Channel[Job], replies: channel::Channel[str] }
+
+fn worker(p: Ports) {
+    let v = channel::recv(p.jobs);
+    while v is Job {
+        let mode = map::get_or(v.env, "mode", "?");
+        channel::send(
+            p.replies,
+            "did #{v.name} (job #{v.id}, #{list::len(v.tags)} tags, mode #{mode})",
+        );
+        v = channel::recv(p.jobs);
+    }
+    channel::close(p.replies);
+}
+
+fn main() {
+    fiber::runtime(() => {
+        let jobs: channel::Channel[Job] = channel::new();
+        let replies: channel::Channel[str] = channel::new();
+        fiber::spawn_with(worker, Ports { jobs: jobs, replies: replies });
+        // A map that has seen a delete carries a tombstone; the deep copy must skip it and
+        // still carry the live entries — the ctrl-byte discipline, exercised.
+        let env = map::new() |> map::set("mode", "fast") |> map::set("junk", "x");
+        let env = map::remove(env, "junk");
+        channel::send(jobs, Job { id: 1, name: "build", tags: ["fast", "hot"], env: env });
+        channel::send(jobs, Job { id: 2, name: "deploy", tags: [], env: map::new() });
+        channel::close(jobs);
+        let r = channel::recv(replies);
+        while r is str {
+            io::println(r);
+            r = channel::recv(replies);
+        }
+    });
+    io::println("done");
+}

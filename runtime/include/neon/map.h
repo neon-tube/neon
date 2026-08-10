@@ -65,4 +65,9 @@ neon_map* neon_map_update(neon_map* m, const void* key, const void* fallback, ne
 neon_list* neon_map_keys(neon_map* m, const neon_witness* w);   // consumes m
 neon_list* neon_map_values(neon_map* m, const neon_witness* w); // consumes m
 
+
+// The witness `copy` for a map slot: rebuilt entry by entry, keys and values deep-copied.
+// Used by emitted witness tables.
+void neon_wcopy_map(const void* src, void* dst);
+
 #endif

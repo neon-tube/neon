@@ -1,0 +1,31 @@
+// The teardown walk, end to end: a fiber traps (bounds) while holding an armed Resource
+// that nothing released — the walk over its dying arena finds the resource live, forces
+// its drop, and the CLEANUP RUNS, before the arena is bulk-freed and the next fiber runs.
+// Crash isolation and crash cleanup composing: the process carries on, nothing leaks, and
+// the resource was honored. (The trap's own report goes to stderr; stdout is the golden.)
+
+use std::fiber;
+use std::io;
+use std::resource;
+
+fn doomed() {
+    let r = resource::new("conn-7", (name: str) => {
+        io::println("cleanup: closing #{name}");
+        null
+    });
+    let xs = [1, 2, 3];
+    io::println("#{xs[99]}");  // bounds trap: kills this fiber, cleanup still runs
+    io::println("unreachable #{resource::is_live(r)}");
+}
+
+fn survivor() {
+    io::println("survivor: still here");
+}
+
+fn main() {
+    fiber::runtime(() => {
+        fiber::spawn(doomed);
+        fiber::spawn(survivor);
+    });
+    io::println("done");
+}

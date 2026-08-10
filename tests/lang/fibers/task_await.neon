@@ -1,0 +1,29 @@
+// Task[T]/await: a fiber with a result. The parked-await path (await runs before the task
+// body has), the already-done path (yield lets the task finish first), and a str result
+// BUILT IN THE TASK'S OWN FIBER crossing back — only the deep copy to the shared heap makes
+// that sound after the task fiber and its arena are gone.
+
+use std::fiber;
+use std::io;
+use std::string;
+use std::task;
+
+fn compute_name() -> str {
+    string::concat("neon-", to_string(42))
+}
+
+fn square() -> i64 { 21 * 2 }
+
+fn main() {
+    fiber::runtime(() => {
+        let a = task::spawn(compute_name);
+        let b = task::spawn(square);
+        io::println("spawned both");
+        // Neither task has run yet (cooperative FIFO): this await PARKS, the tasks run,
+        // completion wakes it.
+        io::println(task::await(a));
+        // b finished while we were parked: this await returns at once.
+        io::println("#{task::await(b)}");
+    });
+    io::println("done");
+}

@@ -368,3 +368,18 @@ neon_str neon_str_join(neon_list* parts, neon_str sep) {
     neon_str_release(sep);
     return s;
 }
+
+// ---- the send copy (witness `copy`) ----
+//
+// Deep-relocate one `neon_str` slot: a literal (owner NULL, static bytes) is its own
+// independent copy; an owned string gets fresh bytes through `neon_str_new`, whose
+// allocation lands wherever the AMBIENT routing points — the shared heap, when this runs
+// under a channel send. See the `copy` member's contract in neon/core.h.
+void neon_wcopy_str(const void* src, void* dst) {
+    const neon_str* s = (const neon_str*)src;
+    if (s->owner == NULL) {
+        *(neon_str*)dst = *s;
+        return;
+    }
+    *(neon_str*)dst = neon_str_new(s->data, s->len);
+}

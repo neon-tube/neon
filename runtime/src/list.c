@@ -218,3 +218,25 @@ bool neon_list_eq(const neon_list* a, const neon_list* b) {
     }
     return true;
 }
+
+// ---- the send copy (witness `copy`) ----
+//
+// Deep-relocate one `neon_list*` slot: a fresh list (allocated by the AMBIENT routing —
+// the shared heap, under a channel send) with every element deep-copied through the
+// element witness's own `copy`, or memcpy'd where NULL says bytes are enough. The copy
+// owns its elements at rc 1; the source is untouched (the caller releases it separately).
+void neon_wcopy_list(const void* src, void* dst) {
+    neon_list* l = *(neon_list* const*)src;
+    size_t sz = l->w->size;
+    neon_list* c = neon_list_new_with_capacity(l->w, (int64_t)(l->len ? l->len : 1));
+    for (size_t i = 0; i < l->len; i++) {
+        void* slot = c->data + i * sz;
+        if (l->w->copy) {
+            l->w->copy(l->data + i * sz, slot);
+        } else {
+            memcpy(slot, l->data + i * sz, sz);
+        }
+    }
+    c->len = l->len;
+    *(neon_list**)dst = c;
+}

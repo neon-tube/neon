@@ -1,0 +1,40 @@
+use std::channel;
+use std::fiber;
+use std::io;
+use std::string;
+
+// A three-stage pipeline over two OS THREADS: source → transform → sink, each stage a
+// fiber, placement round-robined across the mesh so every hop crosses threads. The output
+// order is forced by the DATA (each stage consumes in channel order), so it is
+// deterministic no matter how the seats interleave.
+fn main() {
+    fiber::runtime_threads(2, () => {
+        let raw: channel::Channel[i64] = channel::new();
+        let cooked: channel::Channel[str] = channel::new();
+        fiber::spawn(() => {
+            let v = channel::recv(cooked);
+            while v is str {
+                io::println(v);
+                v = channel::recv(cooked);
+            }
+            io::println("sink: done");
+        });
+        fiber::spawn(() => {
+            let v = channel::recv(raw);
+            while v is i64 {
+                channel::send(cooked, string::concat("cooked-", to_string(v * v)));
+                v = channel::recv(raw);
+            }
+            channel::close(cooked);
+        });
+        fiber::spawn(() => {
+            let i = 1;
+            while i <= 5 {
+                channel::send(raw, i);
+                i = i + 1;
+            }
+            channel::close(raw);
+        });
+    });
+    io::println("done");
+}

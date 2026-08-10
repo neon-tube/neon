@@ -1,0 +1,32 @@
+// Capturing spawn: lambdas spawned from INSIDE a fiber may capture — the environment is
+// deep-copied to the shared heap at the spawn, each capture crossing by the sendability
+// rules. Here both fibers capture the same channel (the same channel on both sides — the
+// handle is a shared identity) and the producer also captures a string BUILT in the
+// spawning fiber's own heap, which only the copy makes safe to read after that fiber is
+// long gone.
+
+use std::channel;
+use std::fiber;
+use std::io;
+use std::string;
+
+fn main() {
+    fiber::runtime(() => {
+        let ch: channel::Channel[str] = channel::new();
+        let greeting = string::concat("hello from ", "a capture");
+        fiber::spawn(() => {
+            channel::send(ch, greeting);
+            channel::send(ch, "second");
+            channel::close(ch);
+        });
+        fiber::spawn(() => {
+            let v = channel::recv(ch);
+            while v is str {
+                io::println(v);
+                v = channel::recv(ch);
+            }
+            io::println("drained");
+        });
+    });
+    io::println("done");
+}

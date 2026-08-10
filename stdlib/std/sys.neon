@@ -1,0 +1,40 @@
+// What the running program can ask about the runtime underneath it. Both answers are facts
+// about this binary and this kernel, not settings — nothing here changes behaviour, it
+// reports it. Useful for a diagnostic banner, for a test that must know which path it is
+// exercising, and for a library deciding whether to offer a fiber-based API at all.
+//
+//     if sys::has_fibers() {
+//         io::println("io engine: #{sys::io_engine()}");
+//     }
+
+/// Whether this build has fibers. True on x86-64 SysV Unix, where the swap gadget and the
+/// scheduler are compiled in; false elsewhere, and there `std::fiber`'s functions are not
+/// available to call.
+@native("neon_sys_has_fibers") fn has_fibers() -> bool
+
+/// The engine a fiber runtime uses for non-blocking work.
+///
+///   `:io_uring`  a completion engine — the kernel performs the operation and the fiber
+///                wakes with its result; regular files need no worker threads
+///   `:epoll`     a readiness reactor plus a small file-offload thread pool, the fallback
+///                on kernels without io_uring, under a restrictive seccomp policy, or when
+///                `NEON_IO=epoll` is set
+///   `:none`      this build has no fibers
+type IoEngine = :io_uring | :epoll | :none
+
+/// So an engine drops straight into a diagnostic line: `"io: #{sys::io_engine()}"`.
+impl Display for IoEngine {
+    fn to_string(e: IoEngine) -> str {
+        if e == :io_uring {
+            "io_uring"
+        } else if e == :epoll {
+            "epoll"
+        } else {
+            "none"
+        }
+    }
+}
+
+/// Which engine this program gets. Called inside a running fiber it reports the engine that
+/// scheduler thread opened; called outside one, what a runtime would open if started now.
+@native("neon_sys_io_engine") fn io_engine() -> IoEngine

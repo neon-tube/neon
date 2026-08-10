@@ -278,3 +278,45 @@ neon_list* neon_map_keys(neon_map* m, const neon_witness* w) {
 neon_list* neon_map_values(neon_map* m, const neon_witness* w) {
     return neon_map_collect(m, w, false);
 }
+
+// ---- the send copy (witness `copy`) ----
+//
+// Deep-relocate one `neon_map*` slot: rebuild through the public constructor and
+// `neon_map_set`, deep-copying each key and value into temporaries that `set` then MOVES
+// in — so ownership transfers exactly once and nothing is double-released. Allocation
+// lands wherever the AMBIENT routing points (the shared heap, under a channel send).
+// Re-hashing every key is more work than cloning the slot arrays, but it needs no access
+// to this file's probe internals from the outside and a sent map is not a hot path.
+void neon_wcopy_map(const void* src, void* dst) {
+    neon_map* m = *(neon_map* const*)src;
+    neon_map* c = neon_map_new(m->kw, m->vw);
+    size_t ksz = m->kw->value->size;
+    size_t vsz = m->vw->size;
+    // Temporaries sized by the LARGEST element this could carry would need VLAs; keys and
+    // values are at most a few machine words in every repr, and 64 bytes holds any of
+    // them. The static assert keeps that claim honest if a repr ever outgrows it.
+    char kt[64];
+    char vt[64];
+    if (ksz > sizeof(kt) || vsz > sizeof(vt)) {
+        neon_trap("neon_wcopy_map: element too large");
+    }
+    for (size_t i = 0; i < m->cap; i++) {
+        if (m->ctrl[i] != NEON_MAP_FULL) {
+            continue;
+        }
+        const void* ks = m->keys + i * ksz;
+        const void* vs = m->vals + i * vsz;
+        if (m->kw->value->copy) {
+            m->kw->value->copy(ks, kt);
+        } else {
+            memcpy(kt, ks, ksz);
+        }
+        if (m->vw->copy) {
+            m->vw->copy(vs, vt);
+        } else {
+            memcpy(vt, vs, vsz);
+        }
+        c = neon_map_set(c, kt, vt); // moves the copies in
+    }
+    *(neon_map**)dst = c;
+}

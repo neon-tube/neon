@@ -1,0 +1,46 @@
+// The blocking world made fiber-transparent, end to end: one fiber spawns a child process,
+// reads its piped stdout (the read blocks a WORKER in the offload pool, not the scheduler)
+// and waits for its exit (parked on a pidfd in the scheduler's epoll) — while a sibling
+// ticker sleeps and prints throughout. The child sleeps 80ms and the ticker's three 20ms
+// ticks land FIRST, which is the overlap made visible; the margins are wide enough to hold
+// on any machine.
+
+use std::fiber;
+use std::fs;
+use std::io;
+use std::path;
+use std::process;
+use std::string;
+
+// A fiber that runs a child process: spawn, read its piped stdout (the read parks this
+// fiber via the offload pool), and wait for it (parked via pidfd). The sibling ticker runs
+// THROUGHOUT — its ticks land between this fiber's lines, which is the whole point.
+fn runner() {
+    let child = try! process::spawn_with(
+        "sh",
+        ["-c", "sleep 0.08; echo child-done"],
+        { stdin: :inherit, stdout: :piped, stderr: :inherit, cwd: null, env: null },
+    );
+    let out = process::stdout(child);
+    if out is process::Pipe {
+        io::println("child said: #{string::trim_end(try! process::read_all(out))}");
+    }
+    io::println("exit: #{try! process::wait(child)}");
+}
+
+fn ticker() {
+    let i = 0;
+    while i < 3 {
+        io::println("tick #{i}");
+        std::time::sleep(20);
+        i = i + 1;
+    }
+}
+
+fn main() {
+    fiber::runtime(() => {
+        fiber::spawn(runner);
+        fiber::spawn(ticker);
+    });
+    io::println("done");
+}

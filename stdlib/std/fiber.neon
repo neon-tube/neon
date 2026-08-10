@@ -1,0 +1,56 @@
+// Fibers: stackful, cooperatively-scheduled green threads (docs/design/fibers.md). A fiber
+// that blocks looks like an ordinary call — no `async`, no coloring — and each fiber has its
+// own isolated heap, so a crash in one kills that fiber and the rest carry on.
+//
+// The runtime is lazy: nothing exists until `fiber::runtime(body)` runs `body` as the first
+// fiber and returns when it and everything it transitively spawned have finished. `spawn`
+// enqueues another fiber under the running scheduler; `yield` hands the CPU to the next ready
+// fiber and returns when it comes back around.
+//
+//     fn worker() {
+//         io::println("working");
+//         fiber::yield();
+//         io::println("done");
+//     }
+//
+//     fn main() {
+//         fiber::runtime(() => {
+//             fiber::spawn(worker);
+//             fiber::spawn(worker);
+//         });
+//     }
+//
+// `spawn` takes any `() -> ()` — a named function or a lambda, capturing or not. Captured
+// values cross to the new fiber by DEEP COPY (each capture follows the sendability rules —
+// see std::channel; a captured resource traps with a message saying so), and a captured
+// channel is the same channel on both sides, which is how fibers usually meet.
+
+/// Run `body` as the first fiber and pump the scheduler until every fiber — `body` and
+/// everything it transitively spawned — has finished. Call it once, from outside; nesting a
+/// runtime inside a running fiber traps.
+@native("neon_fiber_lang_runtime") fn runtime(body: () -> ())
+
+/// As `runtime`, with `threads` OS threads scheduling the fibers (this thread is one of
+/// them). Fibers are pinned to a scheduler at spawn, values still cross only by channels
+/// and spawn arguments, and everything that holds on one thread holds on eight. `threads`
+/// of 1 or less is exactly `runtime`.
+@native("neon_fiber_lang_runtime_threads") fn runtime_threads(threads: i64, body: () -> ())
+
+/// Enqueue `body` to run as a new fiber under the running scheduler. Traps if no runtime is
+/// active. The new fiber runs when the scheduler next reaches it, not immediately.
+@native("neon_fiber_lang_spawn") fn spawn(body: () -> ())
+
+/// Yield cooperatively: the scheduler runs the other ready fibers, then this one again.
+/// Traps outside a fiber.
+@native("neon_fiber_sched_yield") fn yield()
+
+/// Spawn `body` with one argument, deep-copied so it may cross into the new fiber. The
+/// named-function form reads well when the worker is a standing function:
+///
+///     fiber::spawn_with(consumer, ch);              // hand a channel to a worker
+///     fiber::spawn_with((n: i64) => work(n), 42);
+///
+/// Anything sendable crosses (see std::channel's list); a closure or resource in the
+/// argument traps with a message saying so. (A capturing lambda works here too — its
+/// captures deep-copy exactly as `spawn`'s do.)
+@native("neon_fiber_lang_spawn_with") fn spawn_with[T](body: (T) -> (), arg: T)

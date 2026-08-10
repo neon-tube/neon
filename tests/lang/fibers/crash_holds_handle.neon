@@ -1,0 +1,27 @@
+// A fiber crashes holding a channel whose only reference is a LOCAL — nothing stores it,
+// nothing else knows it. This used to leak the channel and everything buffered in it: locals
+// die with the abandoned stack, and there are no stack maps to find them. A handle is now an
+// arena-resident cell owning the reference, so the teardown walk reclaims it by
+// construction. The golden pins the isolation (the survivor runs, the program exits 0); the
+// leak itself is pinned by the C suite under LeakSanitizer, and by building this file with
+// `neon build --sanitize address`.
+
+use std::channel;
+use std::fiber;
+use std::io;
+
+fn doomed() {
+    // The channel exists ONLY in this local. Nothing stores it, nothing else knows it.
+    let ch: channel::Channel[str] = channel::new();
+    channel::send(ch, "buffered value that must not leak");
+    let xs = [1];
+    io::println("#{xs[9]}");  // bounds trap: the fiber dies holding the channel
+}
+
+fn main() {
+    fiber::runtime(() => {
+        fiber::spawn(doomed);
+        fiber::spawn(() => { io::println("survivor ran"); });
+    });
+    io::println("done");
+}

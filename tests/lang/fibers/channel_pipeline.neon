@@ -1,0 +1,37 @@
+// The channel core end to end: a consumer that starts FIRST (so its first receive parks on
+// the empty channel and the send must wake it — the rendezvous path), a producer that
+// BUILDS its strings inside its own fiber and finishes before the consumer prints them
+// (only the deep copy to the shared heap makes that sound), and the close-drain loop
+// ending on `null`. Cooperative FIFO makes every line deterministic.
+
+use std::channel;
+use std::fiber;
+use std::io;
+use std::string;
+
+fn producer(ch: channel::Channel[str]) {
+    let i = 0;
+    while i < 3 {
+        channel::send(ch, string::concat("msg-", to_string(i)));
+        i = i + 1;
+    }
+    channel::close(ch);
+}
+
+fn consumer(ch: channel::Channel[str]) {
+    let v = channel::recv(ch);
+    while v is str {
+        io::println(v);
+        v = channel::recv(ch);
+    }
+    io::println("drained");
+}
+
+fn main() {
+    fiber::runtime(() => {
+        let ch: channel::Channel[str] = channel::new();
+        fiber::spawn_with(consumer, ch);  // parks first
+        fiber::spawn_with(producer, ch);  // wakes it, then buffers, then closes
+    });
+    io::println("done");
+}

@@ -54,6 +54,28 @@ typedef struct neon_header {
 #define NEON_ALLOC_CLASS_MASK 0xff00u
 #define NEON_ALLOC_BIG 0x10000u
 
+// Bit 17 marks an object allocated from a per-fiber arena rather than the global slab (see
+// docs/design/fibers.md and neon/arena.h). `neon_alloc` sets it when a fiber's arena is
+// current; `neon_free` reads it to route the free back to that arena instead of the slab.
+// The class bits (8..15) and BIG (16) keep their meaning alongside it — an arena still uses
+// the same size-class scheme — so an arena block carries ARENA plus either a class or BIG.
+#define NEON_ALLOC_ARENA 0x20000u
+
+// Bit 18 marks a freed arena slot. An arena is WALKABLE (docs/design/fibers.md's teardown
+// walk): to step slot-by-slot the walk reads each slot's class from `flags`, so a freed slot
+// must keep its class bits and merely flag itself dead rather than clobbering `flags` with a
+// free-list link. The link lives in the `drop` field instead (offset 8), which a freed slot
+// no longer needs. Set by `neon_arena_free`, cleared when the slot is reallocated, read by
+// `neon_arena_walk` to skip the dead.
+#define NEON_ALLOC_FREED 0x40000u
+
+// Bit 19 marks an object on the SHARED heap — allocated under the send routing, so it may
+// be referenced (and its count touched) from more than one scheduler thread under M:N.
+// Retain/release use atomic ops exactly for these, through the same guard branch the
+// immortal flag has always taken; everything else keeps the plain non-atomic count that
+// isolation makes safe.
+#define NEON_ALLOC_SHARED 0x80000u
+
 // A string is a view: a data pointer and length (the pair libc wants), plus the
 // refcounted allocation it points into. A literal has owner == NULL: static, never freed.
 typedef struct {
@@ -131,12 +153,21 @@ typedef void* neon_value;
 // has no structural order (a union -- ordering one would need an invented rank between its
 // arms); the checker rejects ordering such a list, so a non-NULL `cmp` is the caller's
 // precondition, not something to test at run time.
+// `copy` deep-relocates one element: read the value at `src`, build an independent copy of
+// it — fresh allocations for every heap part, made through `neon_alloc` so the AMBIENT
+// routing decides where they land — and write it to `dst`. NULL when a `memcpy` of `size`
+// bytes IS an independent copy (scalar-only elements). This is what lets a value cross
+// fibers: the send path routes allocation to the shared heap, runs `copy`, and the result
+// owes nothing to the sender's arena. A type that cannot cross (a closure, a resource)
+// gets a copy that traps, never NULL — silence would corrupt, loudness names the limit.
+// Trailing member on purpose: an initializer that stops at `cmp` leaves it NULL.
 typedef struct neon_witness {
     size_t size;
     void (*retain)(void* elem);
     void (*release)(void* elem);
     bool (*eq)(const void* a, const void* b);
     int (*cmp)(const void* a, const void* b);
+    void (*copy)(const void* src, void* dst);
 } neon_witness;
 
 // What a *hashed* container additionally needs of its key type. Layered rather than folded

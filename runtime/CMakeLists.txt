@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.15)
-project(neon_rt C)
+# ASM for the fiber swap gadget (`src/fiber_swap_*.S`); the C compiler driver assembles it.
+project(neon_rt C ASM)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -10,6 +11,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 # files share and is not installed.
 set(NEON_RT_SOURCES
     src/lifecycle.c
+    src/arena.c
     src/trap.c
     src/arith.c
     src/string.c
@@ -26,6 +28,21 @@ set(NEON_RT_SOURCES
     src/random.c
     src/time.c
 )
+
+# Fibers (docs/design/fibers.md). The swap gadget is per-ABI assembly; x86-64 System V is the
+# only ABI wired so far, so on anything else the fiber sources are simply left out and the
+# runtime builds without them. Win64 is a different ABI even on x86-64, hence NOT WIN32.
+if(NOT WIN32 AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+    list(APPEND NEON_RT_SOURCES
+        src/fiber.c src/fiber_sched.c src/fiber_chan.c src/fiber_lang.c src/fiber_offload.c
+        src/fiber_uring.c
+        src/fiber_swap_x86_64_sysv.S)
+    set(NEON_RT_HAS_FIBERS ON)
+    # `std::sys::has_fibers()` answers from this: the fiber sources are compiled here, so a
+    # program on this build may use them. Elsewhere the natives report false and the fiber
+    # entry points are not linked at all.
+    add_compile_definitions(NEON_RT_FIBERS=1)
+endif()
 
 # The runtime ships as prebuilt archives, one per build shape the CLI can ask for, so a
 # Neon build links a `.a` instead of recompiling the whole runtime every time (and a
@@ -250,6 +267,7 @@ if(NEON_RT_TESTS)
         tests/init.c
         tests/arith_test.c
         tests/lifecycle_test.c
+        tests/arena_test.c
         tests/string_test.c
         tests/list_test.c
         tests/map_test.c
@@ -264,13 +282,23 @@ if(NEON_RT_TESTS)
         tests/random_test.c
         tests/process_test.c
     )
+    # The fiber tests only build where the swap gadget does.
+    if(NEON_RT_HAS_FIBERS)
+        target_sources(neon_rt_tests PRIVATE
+            tests/fiber_test.c tests/fiber_sched_test.c tests/fiber_crash_test.c
+            tests/fiber_chan_test.c tests/fiber_io_test.c
+            tests/fiber_teardown_test.c)
+    endif()
     # The rich assertion and TEST macros use GNU C (__auto_type, constructors, _Generic).
     set_target_properties(neon_rt_tests PROPERTIES C_STANDARD 11 C_EXTENSIONS ON)
     target_include_directories(neon_rt_tests PRIVATE include src ${tinyunit_SOURCE_DIR})
     # `std::math` bottoms out in libm, a separate library on Linux. Not on Windows, where
     # the math functions are in the CRT and there is no `m` to find.
     if(NOT WIN32)
-        target_link_libraries(neon_rt_tests PRIVATE m)
+        # Threads for the file-offload pool's workers (folded into libc on modern glibc,
+        # still spelled out for older ones and for macOS).
+        find_package(Threads REQUIRED)
+        target_link_libraries(neon_rt_tests PRIVATE m Threads::Threads)
     endif()
 
     # Sanitizers on the whole test binary — the runtime sources and tinyunit compiled in with
