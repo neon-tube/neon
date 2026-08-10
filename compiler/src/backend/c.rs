@@ -381,6 +381,23 @@ fn emit_inst(out: &mut String, types: &TypeTable, f: &Func, inst: &crate::ir::ss
         // A receive fills a temporary of the channel's element type and reports whether a
         // value arrived; the Neon result is `T | null`, so the two outcomes are coerced
         // into it here — the runtime cannot build that union, only this emitter knows it.
+        // An await fills a temporary of the task's result type; unlike recv there is no
+        // null outcome — the call parks until the result exists.
+        Op::Native { symbol, args } if symbol == "neon_task_lang_await" => {
+            let Some(r) = inst.result else {
+                return;
+            };
+            let e = chan_elem(types, f, args[0]); // Task[T] is Runtime{args:[T]}, like Channel
+            let ec = types.c_type(&e);
+            let res = f.value_repr(r).clone();
+            let got = coerce_expr(types, "_tav", &e, &res);
+            let _ = writeln!(
+                out,
+                "{{ {ec} _tav; neon_task_lang_await({}, &_tav); {} = {got}; }}",
+                var(args[0]),
+                var(r),
+            );
+        }
         Op::Native { symbol, args } if symbol == "neon_channel_recv" => {
             let Some(r) = inst.result else {
                 return;
@@ -603,6 +620,9 @@ fn is_list_builder(symbol: &str) -> bool {
             | "neon_channel_new"
             | "neon_channel_send"
             | "neon_fiber_lang_spawn_with"
+            // A task's result crosses by witness + a per-repr shim, like a spawn argument
+            // in the other direction (await is statement-shaped, handled before this gate).
+            | "neon_task_lang_spawn"
     )
 }
 
@@ -620,6 +640,21 @@ fn chan_elem(types: &TypeTable, f: &Func, v: Value) -> Repr {
 /// type and so the only code that can pass it to the body closure by value.
 fn spawn_shim_name(types: &TypeTable, t: &Repr) -> String {
     format!("nspawn_{}", types.witness_ref(t).trim_start_matches('&'))
+}
+
+/// The per-repr `task::spawn` shim name: calls the zero-arg body and writes the result —
+/// whose C type only this emitted code knows — into the task's slot.
+fn task_shim_name(types: &TypeTable, t: &Repr) -> String {
+    format!("ntask_{}", types.witness_ref(t).trim_start_matches('&'))
+}
+
+/// The result repr of a task body: `() -> T`'s `T`, the canonical repr the shim, witness
+/// and slot are all keyed by.
+fn task_ret(types: &TypeTable, f: &Func, body: Value) -> Repr {
+    match types.resolve(f.value_repr(body)) {
+        Repr::Closure { params, ret, .. } if params.is_empty() => (**ret).clone(),
+        r => ice(r, "task::spawn body is not a zero-argument closure"),
+    }
 }
 
 /// The cleanup closure's shape: its payload parameter, what it throws, and what it
@@ -1070,6 +1105,17 @@ fn emit_list_builder(
         "neon_channel_new" => {
             let e = chan_elem(types, f, r);
             format!("neon_channel_new({})", types.witness_ref(&e))
+        }
+        // The task carries its RESULT's witness and per-repr call shim; both are keyed by
+        // the body closure's return repr, which only this emitter knows.
+        "neon_task_lang_spawn" => {
+            let t = task_ret(types, f, args[0]);
+            format!(
+                "neon_task_lang_spawn({}, {}, {})",
+                var(args[0]),
+                types.witness_ref(&t),
+                task_shim_name(types, &t)
+            )
         }
         "neon_list_new" => format!("neon_list_new({})", w()),
         "neon_list_new_with_capacity" => {
@@ -1885,29 +1931,35 @@ fn emit_boxed_copy_defs(out: &mut String, types: &TypeTable) {
 /// from its cell bytes and call the body closure with it BY VALUE — only this emitted code
 /// knows the C type that call needs. The map-updater pattern, for a spawn.
 fn emit_spawn_shims(out: &mut String, types: &TypeTable, program: &Program) {
-    let mut seen: std::collections::BTreeMap<String, Repr> = std::collections::BTreeMap::new();
+    let mut args_seen: std::collections::BTreeMap<String, Repr> = std::collections::BTreeMap::new();
+    let mut rets_seen: std::collections::BTreeMap<String, Repr> = std::collections::BTreeMap::new();
     for f in &program.funcs {
         for b in &f.blocks {
             for inst in &b.insts {
                 let Op::Native { symbol, args } = &inst.op else {
                     continue;
                 };
-                if symbol != "neon_fiber_lang_spawn_with" {
-                    continue;
+                match symbol.as_str() {
+                    "neon_fiber_lang_spawn_with" => {
+                        let t = match types.resolve(f.value_repr(args[0])) {
+                            Repr::Closure { params, .. } if params.len() == 1 => {
+                                params[0].clone()
+                            }
+                            r => ice(r, "spawn_with body is not a one-argument closure"),
+                        };
+                        args_seen.insert(spawn_shim_name(types, &t), t);
+                    }
+                    "neon_task_lang_spawn" => {
+                        let t = task_ret(types, f, args[0]);
+                        rets_seen.insert(task_shim_name(types, &t), t);
+                    }
+                    _ => {}
                 }
-                let t = match types.resolve(f.value_repr(args[0])) {
-                    Repr::Closure { params, .. } if params.len() == 1 => params[0].clone(),
-                    r => ice(r, "spawn_with body is not a one-argument closure"),
-                };
-                seen.insert(spawn_shim_name(types, &t), t);
             }
         }
     }
-    if seen.is_empty() {
-        return;
-    }
-    for (name, t) in seen {
-        let tc = types.c_type(&t);
+    for (name, t) in &args_seen {
+        let tc = types.c_type(t);
         let _ = writeln!(
             out,
             // `{tc} const*`, not `const {tc}*`: for a pointer element the prefix form
@@ -1916,7 +1968,17 @@ fn emit_spawn_shims(out: &mut String, types: &TypeTable, program: &Program) {
             "static void {name}(neon_closure f, const void* in) {{ {tc} v = *({tc} const*)in; ((void(*)(neon_header*, {tc}))f.fn)(f.env, v); }}",
         );
     }
-    out.push('\n');
+    // The task shim runs the other direction: call the zero-arg body, write its result out.
+    for (name, t) in &rets_seen {
+        let tc = types.c_type(t);
+        let _ = writeln!(
+            out,
+            "static void {name}(neon_closure f, void* out) {{ *({tc}*)out = (({tc}(*)(neon_header*))f.fn)(f.env); }}",
+        );
+    }
+    if !args_seen.is_empty() || !rets_seen.is_empty() {
+        out.push('\n');
+    }
 }
 
 fn emit_witnesses(out: &mut String, types: &TypeTable) {

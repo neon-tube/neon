@@ -69,7 +69,28 @@ void neon_channel_close(neon_channel* ch);
 // shared-heap identity). Used by emitted witness tables when a Channel crosses fibers.
 void neon_wcopy_channel(const void* src, void* dst);
 
-// ---- Task[T] / await ----
+// ---- the language task (`std::task`'s Task[T], src/fiber_chan.c) ----
+//
+// A fiber whose result crosses back: the body's value is deep-copied to the shared heap at
+// completion (the channel discipline), and `await` moves it out to the awaiter — one-shot.
+// The handle is shared-heap refcounted with the result slot inline.
+
+typedef struct neon_task_lang neon_task_lang;
+
+// The per-repr call shim, emitted by codegen: call the zero-arg body closure and write its
+// result (whose C type only codegen knows) to `out`.
+typedef void (*neon_task_shim)(neon_closure f, void* out);
+
+// Spawn `body` as a task fiber; the caller owns the returned handle. The body must be a
+// named function or capture-free lambda (the spawn rule).
+neon_task_lang* neon_task_lang_spawn(neon_closure body, const neon_witness* w,
+                                     neon_task_shim shim);
+
+// Block until the task completes and move its result into `out` (owned by the caller).
+// One-shot: a second await traps. Consumes the handle reference.
+void neon_task_lang_await(neon_task_lang* t, void* out);
+
+// ---- Task[T] / await (the C-level `void*` form the runtime tests drive) ----
 
 typedef struct neon_task neon_task;
 

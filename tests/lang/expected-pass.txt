@@ -166,6 +166,7 @@ fibers/channel_pipeline.neon
 fibers/channel_records.neon
 fibers/interleave_and_capture.neon
 fibers/spawn_and_yield.neon
+fibers/task_await.neon
 functions/declaration.neon
 functions/dot_call_rejected.neon
 functions/explicit_type_arguments.neon

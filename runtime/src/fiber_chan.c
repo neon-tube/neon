@@ -346,3 +346,115 @@ void neon_wcopy_channel(const void* src, void* dst) {
     neon_retain((neon_header*)ch);
     *(neon_channel**)dst = ch;
 }
+
+// ---- the language task (`std::task`'s Task[T]) ----
+//
+// A task is a fiber whose RESULT crosses back: the body runs in its own fiber (own arena),
+// and the value it returns is deep-copied to the shared heap before the awaiter sees it —
+// the same copy-on-send discipline as a channel, for the same reason. The handle is a
+// shared-heap refcounted struct with the result slot inline after it; `await` is one-shot
+// (the result moves out to the awaiter). A task body that traps never completes, and its
+// awaiter parks forever — which the scheduler then reports as a deadlock rather than
+// hanging: honest, if blunt, until structured failure propagation exists.
+
+typedef struct neon_task_lang {
+    neon_header header;
+    const neon_witness* w;
+    bool done;
+    bool taken;          // the result moved out to an awaiter; drop must not release it
+    neon_fiber* awaiter; // parked awaiter, woken at completion
+    // the result bytes follow, w->size of them
+} neon_task_lang;
+
+// The per-repr call shim, emitted by codegen: call the body closure (zero-arg, returning
+// the result type only it knows) and write the result to `out`.
+typedef void (*neon_task_shim)(neon_closure f, void* out);
+
+typedef struct {
+    neon_task_lang* task; // holds one reference for the body fiber's lifetime
+    neon_closure body;
+    neon_task_shim shim;
+} neon_task_cell;
+
+static void neon_task_lang_drop(void* p) {
+    neon_task_lang* t = (neon_task_lang*)p;
+    if (t->done && !t->taken && t->w->release) {
+        t->w->release((void*)(t + 1)); // a result nobody awaited — shared-heap, safe anywhere
+    }
+    neon_free(t);
+}
+
+static void neon_task_lang_body(void* arg) {
+    neon_task_cell* cell = (neon_task_cell*)arg;
+    neon_task_lang* t = cell->task;
+    neon_closure body = cell->body;
+    neon_task_shim shim = cell->shim;
+    free(cell);
+    // The body computes its result IN THIS FIBER'S ARENA; it is then deep-copied to the
+    // shared slot and the original released here, in this fiber's own context — exactly a
+    // channel send with the task's slot as the destination.
+    char* tmp = malloc(t->w->size);
+    if (tmp == NULL) {
+        neon_trap("out of memory");
+    }
+    shim(body, tmp);
+    neon_release(body.env);
+    void* saved = neon_send_routing_begin();
+    if (t->w->copy) {
+        t->w->copy(tmp, (void*)(t + 1));
+    } else {
+        memcpy((void*)(t + 1), tmp, t->w->size);
+    }
+    neon_send_routing_end(saved);
+    if (t->w->release) {
+        t->w->release(tmp);
+    }
+    free(tmp);
+    t->done = true; // publish strictly after the copy, as a channel send does
+    if (t->awaiter != NULL) {
+        neon_fiber* a = t->awaiter;
+        t->awaiter = NULL;
+        neon_fiber_wake(a);
+    }
+    neon_release((neon_header*)t); // the body's reference
+}
+
+neon_task_lang* neon_task_lang_spawn(neon_closure body, const neon_witness* w,
+                                     neon_task_shim shim) {
+    if (body.env != NULL && (body.env->flags & NEON_ALLOC_ARENA)) {
+        neon_trap(
+            "task::spawn: the body captures values from the spawning fiber, which cannot "
+            "cross fibers yet — pass a named function or a capture-free lambda");
+    }
+    void* saved = neon_send_routing_begin(); // the handle is shared, like a channel
+    neon_task_lang* t = (neon_task_lang*)neon_alloc(
+        sizeof(neon_task_lang) - sizeof(neon_header) + w->size, neon_task_lang_drop);
+    neon_send_routing_end(saved);
+    t->w = w;
+    t->done = false;
+    t->taken = false;
+    t->awaiter = NULL;
+    neon_task_cell* cell = malloc(sizeof(neon_task_cell));
+    if (cell == NULL) {
+        neon_trap("out of memory");
+    }
+    neon_retain((neon_header*)t); // the body fiber's reference
+    cell->task = t;
+    cell->body = body;
+    cell->shim = shim;
+    neon_fiber_spawn(neon_task_lang_body, cell);
+    return t;
+}
+
+void neon_task_lang_await(neon_task_lang* t, void* out) {
+    if (!t->done) {
+        t->awaiter = neon_fiber_current();
+        neon_fiber_park(); // woken by the body's completion
+    }
+    if (t->taken) {
+        neon_trap("task::await: a task's result can be awaited once");
+    }
+    memcpy(out, (const void*)(t + 1), t->w->size);
+    t->taken = true; // the result MOVED out; ownership is the awaiter's now
+    neon_release((neon_header*)t);
+}

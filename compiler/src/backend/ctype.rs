@@ -173,14 +173,27 @@ impl TypeTable {
                     let crate::ir::ssa::Op::Native { symbol, args } = &inst.op else {
                         continue;
                     };
-                    if symbol != "neon_fiber_lang_spawn_with" {
-                        continue;
-                    }
-                    if let Repr::Closure { params, .. } = t.resolve(f.value_repr(args[0])).clone()
-                    {
-                        if params.len() == 1 {
-                            t.intern_witness(&params[0]);
+                    match symbol.as_str() {
+                        "neon_fiber_lang_spawn_with" => {
+                            if let Repr::Closure { params, .. } =
+                                t.resolve(f.value_repr(args[0])).clone()
+                            {
+                                if params.len() == 1 {
+                                    t.intern_witness(&params[0]);
+                                }
+                            }
                         }
+                        // A task's result witness is keyed by the body's return repr.
+                        "neon_task_lang_spawn" => {
+                            if let Repr::Closure { params, ret, .. } =
+                                t.resolve(f.value_repr(args[0])).clone()
+                            {
+                                if params.is_empty() {
+                                    t.intern_witness(&ret);
+                                }
+                            }
+                        }
+                        _ => continue,
                     }
                 }
             }

@@ -1,0 +1,29 @@
+// Tasks: a fiber with a result (docs/design/fibers.md). `task::spawn(body)` runs `body` as
+// its own fiber and hands back a `Task[T]`; `task::await(t)` blocks THIS fiber — not the
+// thread — until the result is ready and returns it. The result crosses fibers the way a
+// channel message does: deep-copied to the shared heap, so it outlives the task entirely.
+//
+//     fn slow_square() -> i64 { 7 * 7 }
+//
+//     fn main() {
+//         fiber::runtime(() => {
+//             let t = task::spawn(slow_square);
+//             other_work();
+//             io::println("#{task::await(t)}");
+//         });
+//     }
+//
+// The body must be a named function or a capture-free lambda (the same rule every spawn
+// has, until captures can cross); its RESULT may be anything sendable — see std::channel's
+// list. `await` is one-shot: the result moves out to the awaiter, and awaiting twice
+// traps. A task whose body traps never completes; an awaiter left waiting for it surfaces
+// as the scheduler's deadlock report rather than a silent hang.
+
+/// A task handle. Not itself sendable (await it from the fiber tree that spawned it).
+@runtime("neon_task_lang") sealed opaque record Task[T] {}
+
+/// Run `body` as a new fiber and return the handle to its eventual result.
+@native("neon_task_lang_spawn") fn spawn[T](body: () -> T) -> Task[T]
+
+/// Block this fiber until the task completes, then return its result. One-shot.
+@native("neon_task_lang_await") fn await[T](t: Task[T]) -> T
