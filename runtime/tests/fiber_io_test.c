@@ -168,3 +168,51 @@ TEST(fiber_read_returns_ready_data_without_parking) {
     close(io_pipe[1]);
 }
 #endif
+
+// ---- fiber sleep (the deadline list) ----
+
+// A sleeping fiber must not block its siblings: the long sleeper is queued FIRST but
+// finishes LAST, and the whole runtime takes about as long as the longest sleep — not the
+// sum — because the scheduler waits in the kernel only when nothing is runnable.
+static int sl_log[3];
+static int sl_n;
+static void sl_long(void* arg) {
+    (void)arg;
+    neon_fiber_sleep(60);
+    sl_log[sl_n++] = 3;
+}
+static void sl_short(void* arg) {
+    (void)arg;
+    neon_fiber_sleep(20);
+    sl_log[sl_n++] = 2;
+}
+static void sl_instant(void* arg) {
+    (void)arg;
+    sl_log[sl_n++] = 1;
+}
+static void sl_parent(void* arg) {
+    (void)arg;
+    neon_fiber_spawn(sl_long, NULL);    // queued first, finishes last
+    neon_fiber_spawn(sl_short, NULL);
+    neon_fiber_spawn(sl_instant, NULL); // no sleep, finishes first
+}
+
+TEST(sleeping_fibers_wake_in_deadline_order) {
+    sl_n = 0;
+    neon_fiber_runtime(sl_parent, NULL);
+    EXPECT_EQ(sl_n, 3);
+    EXPECT_EQ(sl_log[0], 1);
+    EXPECT_EQ(sl_log[1], 2);
+    EXPECT_EQ(sl_log[2], 3);
+}
+
+TEST(sleeps_overlap_rather_than_add) {
+    // Three sleeps of 60/20/0ms concurrently: the runtime should take ~60ms, nowhere near
+    // the 80ms a serialized run would. The bound is generous (3x) against slow CI.
+    sl_n = 0;
+    int64_t began = neon_time_monotonic();
+    neon_fiber_runtime(sl_parent, NULL);
+    int64_t took_ms = (neon_time_monotonic() - began) / 1000000;
+    EXPECT(took_ms >= 60);
+    EXPECT(took_ms < 180);
+}

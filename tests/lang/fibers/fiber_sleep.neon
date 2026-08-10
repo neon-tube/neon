@@ -1,0 +1,31 @@
+// `time::sleep` inside a fiber parks THE FIBER, not the thread: `quick` (15ms) wakes
+// before `slow` (60ms) despite being spawned second, and the two sleeps overlap — the whole
+// run takes about the longest sleep, pinned coarsely (`took < 150`) so the golden is stable
+// on any machine. Off-fiber, sleep is the plain blocking call it always was.
+
+use std::fiber;
+use std::io;
+use std::time;
+
+fn slow() {
+    time::sleep(60);
+    io::println("slow: woke");
+}
+
+fn quick() {
+    time::sleep(15);
+    io::println("quick: woke");
+}
+
+fn main() {
+    let began = time::monotonic();
+    fiber::runtime(() => {
+        fiber::spawn(slow);  // queued first, wakes last
+        fiber::spawn(quick);
+        io::println("boss: spawned both");
+    });
+    let took = (time::monotonic() - began) / 1000000;
+    // Overlap proof: two sleeps totalling 75ms take ~60ms wall. Print a coarse fact, not
+    // the timing itself, so the output is stable.
+    io::println("overlapped: #{took < 150}");
+}

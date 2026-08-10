@@ -89,6 +89,11 @@ void neon_fiber_sched_yield(void);
 // on (src/fiber_chan.c).
 void neon_fiber_park(void);
 
+// Park the calling fiber until `millis` from now (a zero or negative sleep is a plain
+// yield); the scheduler runs everyone else and waits in the kernel only when idle. What
+// `time::sleep` becomes inside a fiber runtime.
+void neon_fiber_sleep(int64_t millis);
+
 // Re-admit a parked fiber to the run queue. Call it from the fiber that satisfied whatever
 // `f` was waiting on (a send, a Task completion). Single-thread M=1: no queue race.
 void neon_fiber_wake(neon_fiber* f);

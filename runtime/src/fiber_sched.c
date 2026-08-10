@@ -13,7 +13,10 @@
 #include "fiber_internal.h"
 #include "internal.h" // neon_fiber_trap_handler
 
+#include "platform.h" // neon_plat_sleep_ms, for the root-context sleep fallback
+
 #include <signal.h> // sig_atomic_t for the safepoint flag, the preemption timer's handler
+#include <time.h>   // clock_gettime for sleep deadlines
 #include <stddef.h>
 #include <string.h> // memset for the timer's sigaction/itimerval setup
 
@@ -39,12 +42,21 @@
 // a normal drain. `io_waiters` is how many of those live fibers are parked on a descriptor
 // (not on each other): while any are, an empty run queue means "wait in the kernel", not
 // deadlock.
+// A sleeping fiber: parked until its deadline. On the sleeper's own stack, like a channel
+// waiter — parking costs no heap.
+typedef struct neon_sleeper {
+    neon_fiber* fiber;
+    int64_t deadline_ms; // CLOCK_MONOTONIC milliseconds
+    struct neon_sleeper* next;
+} neon_sleeper;
+
 typedef struct {
     neon_fiber* head;
     neon_fiber* tail;
     int live;
     int io_waiters;
     bool active;
+    neon_sleeper* sleepers; // unordered; scanned for the nearest deadline (N is small)
 #if defined(NEON_FIBER_IO)
     int epfd; // epoll instance, created lazily on the first IO wait; -1 until then
 #endif
@@ -80,15 +92,71 @@ static neon_fiber* neon_sched_dequeue(void) {
     return f;
 }
 
+static int64_t neon_sched_now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+// Wake every sleeper whose deadline has passed; return the milliseconds until the nearest
+// remaining one, or -1 when nobody sleeps (epoll's "wait forever").
+static int neon_sched_wake_due(void) {
+    int64_t now = neon_sched_now_ms();
+    int64_t nearest = -1;
+    neon_sleeper** link = &t_sched.sleepers;
+    while (*link != NULL) {
+        neon_sleeper* s = *link;
+        if (s->deadline_ms <= now) {
+            *link = s->next;
+            neon_fiber_wake(s->fiber);
+            continue;
+        }
+        int64_t left = s->deadline_ms - now;
+        if (nearest < 0 || left < nearest) {
+            nearest = left;
+        }
+        link = &s->next;
+    }
+    if (nearest > 2147483647) {
+        nearest = 2147483647; // epoll takes an int; a 24-day sleep can re-wait
+    }
+    return (int)nearest;
+}
+
+// Park the calling fiber until `millis` from now. The sleeper record lives on this frame,
+// which persists while parked; the pump wakes it when the deadline passes.
+void neon_fiber_sleep(int64_t millis) {
+    if (millis <= 0) {
+        neon_fiber_sched_yield(); // a zero sleep is still a scheduling point
+        return;
+    }
+    // +1: deadlines are whole milliseconds and `now` truncates, so without the round-up a
+    // sleep could come back a fraction of a millisecond EARLY — `sleep` promises at least.
+    neon_sleeper s = {neon_fiber_current(), neon_sched_now_ms() + millis + 1, NULL};
+    s.next = t_sched.sleepers;
+    t_sched.sleepers = &s;
+    neon_fiber_park();
+}
+
+// The time::sleep hook (internal.h): fiber context parks, the root context — a resource
+// cleanup running on the scheduler, say — keeps the plain blocking sleep.
+static void neon_sched_sleep_hook(int64_t millis) {
+    if (neon_fiber_current()->is_root) {
+        neon_plat_sleep_ms(millis);
+        return;
+    }
+    neon_fiber_sleep(millis);
+}
+
 #if defined(NEON_FIBER_IO)
 // Block in the kernel until at least one awaited descriptor is ready, then wake every fiber
 // waiting on a ready one. Called only when nothing is runnable, so waiting here cannot starve
 // a ready fiber. Registrations are EPOLLONESHOT with the waiting fiber in `data.ptr`.
-static void neon_sched_poll_io(void) {
+static void neon_sched_poll_io(int timeout_ms) {
     struct epoll_event evs[16];
     int n;
     do {
-        n = epoll_wait(t_sched.epfd, evs, 16, -1);
+        n = epoll_wait(t_sched.epfd, evs, 16, timeout_ms);
     } while (n < 0 && errno == EINTR);
     if (n < 0) {
         neon_trap("epoll_wait failed");
@@ -106,9 +174,11 @@ void neon_fiber_runtime(neon_fiber_fn body, void* arg) {
     t_sched.active = true;
     t_sched.live = 0;
     t_sched.io_waiters = 0;
+    t_sched.sleepers = NULL;
 #if defined(NEON_FIBER_IO)
     t_sched.epfd = -1; // created lazily on the first IO wait
 #endif
+    neon_fiber_sleep_hook = neon_sched_sleep_hook; // time::sleep parks fibers from here on
 
     neon_sched_enqueue(neon_fiber_new(body, arg, 0));
     t_sched.live++;
@@ -121,9 +191,23 @@ void neon_fiber_runtime(neon_fiber_fn body, void* arg) {
     for (;;) {
         neon_fiber* f = neon_sched_dequeue();
         if (f == NULL) {
+            // Nothing runnable. Wake any due sleepers (which refills the queue); with only
+            // future deadlines and/or descriptor waits outstanding, wait in the kernel for
+            // whichever comes first. epoll with no registered fds is a plain timed wait, so
+            // sleep-only programs ride the same call.
+            int timeout = neon_sched_wake_due();
+            if (t_sched.head != NULL) {
+                continue; // a sleeper came due and is runnable again
+            }
 #if defined(NEON_FIBER_IO)
-            if (t_sched.io_waiters > 0) {
-                neon_sched_poll_io();
+            if (t_sched.io_waiters > 0 || timeout >= 0) {
+                if (t_sched.epfd < 0) {
+                    t_sched.epfd = epoll_create1(EPOLL_CLOEXEC);
+                    if (t_sched.epfd < 0) {
+                        neon_trap("epoll_create1 failed");
+                    }
+                }
+                neon_sched_poll_io(timeout);
                 continue;
             }
 #endif
@@ -155,6 +239,7 @@ void neon_fiber_runtime(neon_fiber_fn body, void* arg) {
     }
 
     neon_fiber_timer_disarm();
+    neon_fiber_sleep_hook = NULL;
 
     // The queue emptied with fibers still live AND none parked on a descriptor: every one is
     // waiting on another that will never run. That is a deadlock, and silence would be a hang.

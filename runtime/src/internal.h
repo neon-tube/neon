@@ -42,6 +42,13 @@ extern _Thread_local NEON_TLS_IE neon_arena* neon_current_arena;
 // where neon_current_arena is NULL). Only the fiber teardown sets it.
 extern _Thread_local NEON_TLS_IE neon_arena* neon_teardown_arena;
 
+// The fiber-sleep bridge, the trap-handler pattern again: while a fiber runtime is active
+// the scheduler arms this per-thread hook, and `time::sleep` routes through it — parking
+// just the calling FIBER on a deadline instead of blocking the whole thread. NULL in every
+// non-fiber program (sleep is the plain nanosleep it always was), and the hook itself falls
+// back to the plain sleep when called on the root context (a resource cleanup, say).
+extern _Thread_local void (*neon_fiber_sleep_hook)(int64_t millis);
+
 // The trap→fiber bridge. While a fiber runs, the scheduler arms this per-thread hook; a trap
 // (bounds, arithmetic, uncaught error) then calls it INSTEAD of ending the process — the hook
 // switches control back to the scheduler, killing just that fiber (docs/design/fibers.md's
