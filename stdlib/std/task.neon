@@ -20,7 +20,7 @@
 // as the scheduler's deadlock report rather than a silent hang.
 
 /// A task handle. Not itself sendable (await it from the fiber tree that spawned it).
-@runtime("neon_task_lang") sealed opaque record Task[T] {}
+@runtime("neon_task_ref") sealed opaque record Task[T] {}
 
 /// Run `body` as a new fiber and return the handle to its eventual result.
 @native("neon_task_lang_spawn") fn spawn[T](body: () -> T) -> Task[T]

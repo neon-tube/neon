@@ -32,7 +32,7 @@
 
 /// The channel type: a shared, refcounted handle. Two bindings to one channel are the same
 /// channel; equality is identity.
-@runtime("neon_channel") sealed opaque record Channel[T] {}
+@runtime("neon_channel_ref") sealed opaque record Channel[T] {}
 
 /// A fresh open channel. Sends never block (the buffer grows without limit); use `bounded`
 /// when the producer must not outrun the consumer.

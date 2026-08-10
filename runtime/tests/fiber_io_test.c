@@ -288,26 +288,22 @@ TEST(runtime_threads_runs_fibers_on_all_seats) {
     EXPECT_EQ(atomic_load(&mn_ran), 4);
 }
 
-static neon_channel* mnc_ch;
+static neon_channel_ref* mnc_ch;
 static const neon_witness mnc_i64_w = {sizeof(int64_t), NULL, NULL, nt_i64_eq, nt_i64_cmp};
 static long mnc_sum;
 static void mnc_consumer(void* arg) {
     (void)arg;
     int64_t v;
-    neon_retain_shared((neon_header*)mnc_ch);
-    while (neon_channel_recv(mnc_ch, &v)) {
+    while (neon_channel_recv(nt_chan_handle(&mnc_ch), &v)) {
         mnc_sum += v;
-        neon_retain_shared((neon_header*)mnc_ch);
     }
 }
 static void mnc_producer(void* arg) {
     (void)arg;
     for (int64_t i = 1; i <= 100; i++) {
-        neon_retain_shared((neon_header*)mnc_ch);
-        neon_channel_send(mnc_ch, &i);
+        neon_channel_send(nt_chan_handle(&mnc_ch), &i);
     }
-    neon_retain_shared((neon_header*)mnc_ch);
-    neon_channel_close(mnc_ch);
+    neon_channel_close(nt_chan_handle(&mnc_ch));
 }
 static void mnc_parent(void* arg) {
     (void)arg;
@@ -320,7 +316,7 @@ TEST(a_channel_crosses_the_mesh) {
     mnc_sum = 0;
     neon_fiber_runtime_threads(2, mnc_parent, NULL);
     EXPECT_EQ(mnc_sum, 5050L);
-    neon_release_shared((neon_header*)mnc_ch);
+    neon_release((neon_header*)mnc_ch);
 }
 
 // Sleeps on both seats overlap across the mesh exactly as they do on one.

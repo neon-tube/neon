@@ -46,34 +46,35 @@ void neon_chan_free(neon_chan* ch);
 // refcounted (its first field is a neon_header); every op consumes the handle reference it
 // is passed, per the runtime-wide native convention.
 
-typedef struct neon_channel neon_channel;
+typedef struct neon_channel neon_channel;      // the shared body: ring, waiters, lock
+typedef struct neon_channel_ref neon_channel_ref; // the per-holder handle (see fiber_chan.c)
 
 // A fresh open channel for elements described by `w`. The caller owns the returned handle.
-neon_channel* neon_channel_new(const neon_witness* w);
+neon_channel_ref* neon_channel_new(const neon_witness* w);
 
 // A bounded channel: sends park once `n` values are buffered (backpressure). n >= 1.
-neon_channel* neon_channel_new_bounded(const neon_witness* w, int64_t n);
+neon_channel_ref* neon_channel_new_bounded(const neon_witness* w, int64_t n);
 
 // Whether the channel has been closed. Consumes the handle reference.
-bool neon_channel_is_closed(neon_channel* ch);
+bool neon_channel_is_closed(neon_channel_ref* ch);
 
 // recv with a deadline: false on closed-and-drained OR timeout (probe is_closed to tell).
 // Consumes the handle reference.
-bool neon_channel_recv_timeout(neon_channel* ch, void* out, int64_t millis);
+bool neon_channel_recv_timeout(neon_channel_ref* ch, void* out, int64_t millis);
 
 // Deep-copy the value at `v` into the channel (straight into a parked receiver's slot when
 // one waits), release the original, wake the receiver. Traps on a closed channel. Consumes
 // the `ch` reference and the value.
-void neon_channel_send(neon_channel* ch, const void* v);
+void neon_channel_send(neon_channel_ref* ch, const void* v);
 
 // Receive into `out`: true with a value (owned by the caller), false only once the channel
 // is closed AND drained. Parks the calling fiber while open and empty. Consumes the `ch`
 // reference (after any park).
-bool neon_channel_recv(neon_channel* ch, void* out);
+bool neon_channel_recv(neon_channel_ref* ch, void* out);
 
 // Close: wake every parked receiver empty-handed; later receives drain then return false.
 // Idempotent. Consumes the `ch` reference.
-void neon_channel_close(neon_channel* ch);
+void neon_channel_close(neon_channel_ref* ch);
 
 // The witness `copy` for a channel-handle slot: retain + pointer copy (a channel is a
 // shared-heap identity). Used by emitted witness tables when a Channel crosses fibers.
@@ -85,7 +86,8 @@ void neon_wcopy_channel(const void* src, void* dst);
 // completion (the channel discipline), and `await` moves it out to the awaiter — one-shot.
 // The handle is shared-heap refcounted with the result slot inline.
 
-typedef struct neon_task_lang neon_task_lang;
+typedef struct neon_task_lang neon_task_lang; // the shared body: result slot, awaiter
+typedef struct neon_task_ref neon_task_ref;   // the per-holder handle
 
 // The per-repr call shim, emitted by codegen: call the zero-arg body closure and write its
 // result (whose C type only codegen knows) to `out`.
@@ -93,13 +95,13 @@ typedef void (*neon_task_shim)(neon_closure f, void* out);
 
 // Spawn `body` as a task fiber; the caller owns the returned handle. The body must be a
 // named function or capture-free lambda (the spawn rule).
-neon_task_lang* neon_task_lang_spawn(neon_closure body, const neon_witness* w,
-                                     neon_task_shim shim);
+neon_task_ref* neon_task_lang_spawn(neon_closure body, const neon_witness* w,
+                                    neon_task_shim shim);
 
 // Block until the task completes and move its result into `out` (owned by the caller).
 // One-shot: a second await traps, and awaiting a task whose body CRASHED traps too — the
 // failure propagates along await edges. Consumes the handle reference.
-void neon_task_lang_await(neon_task_lang* t, void* out);
+void neon_task_lang_await(neon_task_ref* t, void* out);
 
 // The witness `copy` for a task-handle slot: retain + pointer copy (a shared identity,
 // like a channel). Used by emitted witness tables when a Task crosses fibers.

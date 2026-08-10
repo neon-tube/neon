@@ -310,7 +310,11 @@ runtime above, with codegen assistance only where a generic value crosses the AB
   still-live object's drop forced — resources run their cleanups even on a crash, outgoing
   references release exactly once — under a teardown mode that no-ops internal releases
   (they vaporize in the bulk-free). The drop pointer IS the type knowledge; no registry.
-  Residual: a shared handle held only in crashed locals still leaks (no stack maps).
+  A handle (channel, task) is TWO objects for this reason: a shared body plus a per-holder
+  arena-resident ref owning one reference to it, so a handle held only in a crashed fiber's
+  LOCALS is still found by the walk — the leak that shape used to cause is structurally
+  impossible rather than tracked. It also confines atomic counting to the body: a ref is an
+  ordinary arena object with a plain, thread-local count.
 - **Copy-on-send is the witness's `copy` operation** — deep-relocate one value, allocating
   through the ambient routing, which the send path points at the shared slab. Emitted per
   repr: NULL for scalars, runtime helpers for str/list/map/any/channel-handle (retain —

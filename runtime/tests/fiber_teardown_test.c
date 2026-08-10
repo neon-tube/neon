@@ -139,3 +139,59 @@ TEST(internal_references_do_not_double_drop) {
     neon_fiber_runtime(internal_pair_then_crash, NULL);
     EXPECT_EQ(td_pair_drops, 2); // each node force-dropped exactly once
 }
+
+// ---- the crash-locals leak, closed ----
+//
+// The case that used to leak: a fiber holds a shared HANDLE (a channel) whose only
+// reference is in its LOCALS — never stored in any arena object — and then traps. Locals
+// die with the abandoned stack and there are no stack maps to find them, so a bare pointer
+// to the shared body was invisible to the teardown walk and the body (with everything
+// buffered in it) leaked. A handle is now an ARENA-RESIDENT ref owning that reference, so
+// the walk finds it by construction. LeakSanitizer is the oracle: it fails this test if the
+// body, its ring buffer, or the ref survive the fiber.
+
+static const neon_witness cl_i64_w = {sizeof(int64_t), NULL, NULL, nt_i64_eq, nt_i64_cmp};
+
+static void crash_holding_a_channel(void* arg) {
+    (void)arg;
+    // Created HERE, in this fiber, and never handed anywhere: no arena object references
+    // it, no other fiber knows it, and the buffered values make the leak measurable.
+    neon_channel_ref* ch = neon_channel_new(&cl_i64_w);
+    for (int64_t i = 0; i < 8; i++) {
+        neon_channel_send(nt_chan_handle(&ch), &i);
+    }
+    neon_trap("crash while a channel lives only in locals (test)");
+}
+
+TEST(a_handle_held_only_in_crashed_locals_is_reclaimed) {
+    neon_fiber_runtime(crash_holding_a_channel, NULL);
+    EXPECT(true); // reaching here leak-clean under LSan IS the assertion
+}
+
+// The same shape for a task handle, whose body additionally owns a result slot. The shim is
+// hand-written here; codegen emits one per result repr (see emit_spawn_shims).
+static int64_t cl_task_ran;
+static void cl_task_fn(neon_header* env) {
+    (void)env;
+    cl_task_ran = 42;
+}
+static void cl_task_shim(neon_closure f, void* out) {
+    ((void (*)(neon_header*))f.fn)(f.env);
+    *(int64_t*)out = cl_task_ran;
+}
+
+static void crash_holding_a_task(void* arg) {
+    (void)arg;
+    neon_closure body = {(void*)cl_task_fn, NULL};
+    // Spawned and never awaited: the handle lives only in this frame, and the trap
+    // abandons it. The walk must still reclaim the handle, and with it the task body and
+    // its result slot — the task's own fiber is reaped by the scheduler as usual.
+    neon_task_lang_spawn(body, &cl_i64_w, cl_task_shim);
+    neon_trap("crash while a task lives only in locals (test)");
+}
+
+TEST(a_crashed_fiber_holding_a_task_is_reclaimed) {
+    cl_task_ran = 0;
+    neon_fiber_runtime(crash_holding_a_task, NULL);
+    EXPECT_EQ(cl_task_ran, 42); // the task itself still ran to completion
+}

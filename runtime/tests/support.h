@@ -126,4 +126,15 @@ static inline bool nt_str_is(neon_str s, const char* expected) {
     return n == strlen(expected) && memcmp(neon_str_data(&s), expected, n) == 0;
 }
 
+
+// A per-holder channel handle, minted the way the language mints one: a `Channel[T]` value
+// is an arena-resident REF owning a reference to the shared body, so each holder needs its
+// own (sharing one ref across fibers would share a thread-local count). Every channel op
+// consumes its handle, so each call takes a fresh one. `neon_wcopy_channel` is exactly the
+// copy the compiler emits when a channel crosses a fiber boundary.
+static inline neon_channel_ref* nt_chan_handle(neon_channel_ref* const* src) {
+    neon_channel_ref* mine;
+    neon_wcopy_channel(src, &mine);
+    return mine;
+}
 #endif

@@ -179,7 +179,7 @@ TEST(awaiting_two_tasks) {
 
 // ---- bounded channels (backpressure) ----
 
-static neon_channel* bp_ch;
+static neon_channel_ref* bp_ch;
 static int bp_after_send2;
 static bool bp_consumer_done;
 
@@ -221,22 +221,22 @@ TEST(a_full_bounded_channel_parks_the_sender) {
 
 // Closing under a parked sender kills that sender (send-on-closed is a trap): the process
 // survives, the send after the park never completes, and the closer runs on.
-static neon_channel* cl2_ch;
+static neon_channel_ref* cl2_ch;
 static int cl2_sent_all;
 static void cl2_sender(void* arg) {
     (void)arg;
     int64_t v = 7;
-    neon_retain((neon_header*)cl2_ch);
-    neon_channel_send(cl2_ch, &v);
+    neon_channel_send(nt_chan_handle(&cl2_ch), &v);
     v = 8;
-    neon_retain((neon_header*)cl2_ch);
-    neon_channel_send(cl2_ch, &v); // parks (full), then traps on wake: channel closed
-    cl2_sent_all = 1;              // must never run
+    // Parks (full), then traps on wake: the channel closed under it. The handle this call
+    // holds is ARENA-resident, so the teardown walk releases it even though the send never
+    // returned — the crash-locals leak, structurally closed.
+    neon_channel_send(nt_chan_handle(&cl2_ch), &v);
+    cl2_sent_all = 1; // must never run
 }
 static void cl2_closer(void* arg) {
     (void)arg;
-    neon_retain((neon_header*)cl2_ch);
-    neon_channel_close(cl2_ch);
+    neon_channel_close(nt_chan_handle(&cl2_ch));
 }
 static void cl2_parent(void* arg) {
     (void)arg;

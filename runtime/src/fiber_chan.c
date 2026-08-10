@@ -232,7 +232,7 @@ static void neon_channel_drop(void* p) {
     neon_free(ch);
 }
 
-neon_channel* neon_channel_new(const neon_witness* w) {
+static neon_channel* neon_channel_new_impl(const neon_witness* w) {
     void* saved = neon_shared_routing_begin(); // invariant 1: the handle is concurrent-rc
     neon_channel* ch =
         (neon_channel*)neon_alloc(sizeof(neon_channel) - sizeof(neon_header), neon_channel_drop);
@@ -254,11 +254,11 @@ neon_channel* neon_channel_new(const neon_witness* w) {
 
 // A bounded channel: sends park once `n` values are buffered, until a receive drains one —
 // backpressure, so a fast producer cannot outrun a slow consumer into unbounded memory.
-neon_channel* neon_channel_new_bounded(const neon_witness* w, int64_t n) {
+static neon_channel* neon_channel_new_bounded_impl(const neon_witness* w, int64_t n) {
     if (n < 1) {
         neon_trap("channel::bounded: the bound must be at least 1");
     }
-    neon_channel* ch = neon_channel_new(w);
+    neon_channel* ch = neon_channel_new_impl(w); // the body; the ref layer wraps it
     ch->bound = (size_t)n;
     return ch;
 }
@@ -285,7 +285,7 @@ static void* neon_channel_slot_reserve(neon_channel* ch) {
     return ch->buf + ((ch->head + ch->len) % ch->cap) * sz;
 }
 
-void neon_channel_send(neon_channel* ch, const void* v) {
+static void neon_channel_send_impl(neon_channel* ch, const void* v) {
     pthread_mutex_lock(&ch->mu);
     if (ch->closed) {
         pthread_mutex_unlock(&ch->mu);
@@ -314,7 +314,6 @@ void neon_channel_send(neon_channel* ch, const void* v) {
         behind = false; // woken by a receive: the opened slot is ours
         if (me.closed) {
             pthread_mutex_unlock(&ch->mu);
-            neon_release_shared((neon_header*)ch);
             neon_trap("channel::send: the channel was closed while this send waited");
         }
     }
@@ -368,10 +367,9 @@ void neon_channel_send(neon_channel* ch, const void* v) {
     if (ch->w->release) {
         ch->w->release((void*)v);
     }
-    neon_release_shared((neon_header*)ch);
 }
 
-bool neon_channel_recv(neon_channel* ch, void* out) {
+static bool neon_channel_recv_impl(neon_channel* ch, void* out) {
     bool got;
     pthread_mutex_lock(&ch->mu);
     if (ch->len > 0) {
@@ -418,13 +416,10 @@ bool neon_channel_recv(neon_channel* ch, void* out) {
     }
     pthread_mutex_unlock(&ch->mu);
 out_unlocked:
-    // Invariant 3: the handle reference is released only now, after any park — the channel
-    // cannot die under a waiter that still names it.
-    neon_release_shared((neon_header*)ch);
     return got;
 }
 
-void neon_channel_close(neon_channel* ch) {
+static void neon_channel_close_impl(neon_channel* ch) {
     pthread_mutex_lock(&ch->mu);
     if (!ch->closed) {
         ch->closed = true;
@@ -446,28 +441,26 @@ void neon_channel_close(neon_channel* ch) {
         ch->stail = NULL;
     }
     pthread_mutex_unlock(&ch->mu);
-    neon_release_shared((neon_header*)ch);
 }
 
 // Whether the channel has been closed. A drained-ness probe belongs to recv (its null);
 // this answers "will more values ever arrive" for a receiver whose recv came back empty.
-bool neon_channel_is_closed(neon_channel* ch) {
+static bool neon_channel_is_closed_impl(neon_channel* ch) {
     pthread_mutex_lock(&ch->mu);
     bool c = ch->closed;
     pthread_mutex_unlock(&ch->mu);
-    neon_release_shared((neon_header*)ch);
     return c;
 }
 
 // recv with a deadline: true with a value; false when the channel closed-and-drained OR the
 // deadline passed first (the caller distinguishes with is_closed if it cares). On a timeout
 // the waiter is unlinked HERE — the wake that never came must find nothing to aim at.
-bool neon_channel_recv_timeout(neon_channel* ch, void* out, int64_t millis) {
+static bool neon_channel_recv_timeout_impl(neon_channel* ch, void* out, int64_t millis) {
     bool got;
     pthread_mutex_lock(&ch->mu);
     if (ch->len > 0 || ch->closed) {
         pthread_mutex_unlock(&ch->mu);
-        return neon_channel_recv(ch, out); // a value or the drained null, no parking needed
+        return neon_channel_recv_impl(ch, out); // a value or the drained null, no parking
     }
     neon_channel_waiter w = {neon_fiber_current(), out, false, NULL};
     if (ch->rtail != NULL) {
@@ -502,18 +495,10 @@ bool neon_channel_recv_timeout(neon_channel* ch, void* out, int64_t millis) {
         }
         pthread_mutex_unlock(&ch->mu);
     }
-    neon_release_shared((neon_header*)ch);
     return got;
 }
 
-// The witness `copy` for a channel-handle slot: a channel is a shared-heap identity — two
-// handles to it are the same channel — so crossing fibers is a retain and a pointer copy,
-// never a deep copy of the channel's contents.
-void neon_wcopy_channel(const void* src, void* dst) {
-    neon_channel* ch = *(neon_channel* const*)src;
-    neon_retain_shared((neon_header*)ch); // a handle's count is concurrent: atomic always
-    *(neon_channel**)dst = ch;
-}
+
 
 // ---- the language task (`std::task`'s Task[T]) ----
 //
@@ -609,8 +594,8 @@ static void neon_task_lang_reaped(void* arg, bool crashed) {
     neon_release_shared((neon_header*)t);
 }
 
-neon_task_lang* neon_task_lang_spawn(neon_closure body, const neon_witness* w,
-                                     neon_task_shim shim) {
+static neon_task_lang* neon_task_lang_spawn_impl(neon_closure body, const neon_witness* w,
+                                                 neon_task_shim shim) {
     // A capturing body crosses like any spawn's: an arena environment is deep-copied to
     // the shared heap through the env-copy table.
     if (body.env != NULL && (body.env->flags & NEON_ALLOC_ARENA)) {
@@ -640,7 +625,7 @@ neon_task_lang* neon_task_lang_spawn(neon_closure body, const neon_witness* w,
     return t;
 }
 
-void neon_task_lang_await(neon_task_lang* t, void* out) {
+static void neon_task_lang_await_impl(neon_task_lang* t, void* out) {
     pthread_mutex_lock(&t->mu);
     if (!t->done && !t->failed) {
         t->awaiter = neon_fiber_current();
@@ -652,7 +637,6 @@ void neon_task_lang_await(neon_task_lang* t, void* out) {
     if (t->failed) {
         // Propagate: the awaited work died, so the await dies too — in a fiber that is a
         // clean kill (crash isolation), and failures travel along await edges.
-        neon_release_shared((neon_header*)t);
         neon_trap("task::await: the awaited task crashed");
     }
     if (t->taken) {
@@ -660,13 +644,132 @@ void neon_task_lang_await(neon_task_lang* t, void* out) {
     }
     memcpy(out, (const void*)(t + 1), t->w->size);
     t->taken = true; // the result MOVED out; ownership is the awaiter's now
-    neon_release_shared((neon_header*)t);
 }
 
-// The witness `copy` for a task-handle slot: a task is a shared-heap identity, exactly as a
-// channel is — crossing fibers is a retain and a pointer copy.
+
+
+// ---- the handle layer: why a fiber's channel is TWO objects ----
+//
+// A channel has a shared BODY (the ring, the waiter lists, the lock) that genuinely lives
+// across fibers and threads, and a per-holder REF — an ordinary object in the holder's own
+// heap that owns exactly one reference to that body. The Neon value `Channel[T]` is the
+// ref; every operation derefs to the body.
+//
+// The split exists to make one bug UNREPRESENTABLE rather than tracked. Before it, a
+// handle was a bare pointer to the shared body, so a handle held only in a crashed fiber's
+// LOCALS — never stored in any arena object — was invisible to the teardown walk and
+// leaked (the body, and everything buffered in it). Locals die with the abandoned stack
+// and there are no stack maps to find them; conservative stack scanning is unsound for a
+// refcount release (a stale word that looks like a pointer would double-release). Making
+// the handle arena-RESIDENT solves it structurally: the walk finds every live ref by
+// construction, and the ref's drop releases the body. Nothing tracks anything.
+//
+// It also simplifies the counting. A ref is an ordinary arena object with a plain,
+// thread-local count — so codegen emits the generic retain/release for handles again, and
+// the atomic pair is confined to this file, where a ref's birth and death touch the body.
+// Refs never cross threads: a handle crossing fibers is a COPY (below), which mints a
+// fresh ref in the destination's heap. Same shape as `neon_str`'s data + owner.
+
+typedef struct neon_channel_ref {
+    neon_header header;
+    neon_channel* body;
+} neon_channel_ref;
+
+static void neon_channel_ref_drop(void* p) {
+    neon_channel_ref* r = (neon_channel_ref*)p;
+    neon_release_shared((neon_header*)r->body); // the body's count IS concurrent
+    neon_free(r);
+}
+
+// A handle in the CURRENT context's heap (the running fiber's arena, or the slab off-fiber)
+// owning the reference the caller already holds on `body`.
+static neon_channel_ref* neon_channel_ref_new(neon_channel* body) {
+    neon_channel_ref* r = (neon_channel_ref*)neon_alloc(
+        sizeof(neon_channel_ref) - sizeof(neon_header), neon_channel_ref_drop);
+    r->body = body;
+    return r;
+}
+
+neon_channel_ref* neon_channel_new(const neon_witness* w) {
+    return neon_channel_ref_new(neon_channel_new_impl(w));
+}
+
+neon_channel_ref* neon_channel_new_bounded(const neon_witness* w, int64_t n) {
+    return neon_channel_ref_new(neon_channel_new_bounded_impl(w, n));
+}
+
+// Each op borrows the body for the duration and then consumes the caller's REF — the
+// runtime-wide native convention, now paid on an ordinary arena object.
+void neon_channel_send(neon_channel_ref* r, const void* v) {
+    neon_channel_send_impl(r->body, v);
+    neon_release((neon_header*)r);
+}
+
+bool neon_channel_recv(neon_channel_ref* r, void* out) {
+    bool got = neon_channel_recv_impl(r->body, out);
+    neon_release((neon_header*)r);
+    return got;
+}
+
+bool neon_channel_recv_timeout(neon_channel_ref* r, void* out, int64_t millis) {
+    bool got = neon_channel_recv_timeout_impl(r->body, out, millis);
+    neon_release((neon_header*)r);
+    return got;
+}
+
+void neon_channel_close(neon_channel_ref* r) {
+    neon_channel_close_impl(r->body);
+    neon_release((neon_header*)r);
+}
+
+bool neon_channel_is_closed(neon_channel_ref* r) {
+    bool c = neon_channel_is_closed_impl(r->body);
+    neon_release((neon_header*)r);
+    return c;
+}
+
+// The witness `copy` for a handle slot: a channel is an identity, so crossing fibers keeps
+// the SAME body — but mints a fresh ref in the destination's heap (the ambient routing),
+// because a ref belongs to exactly one holder. That is what keeps a ref's count
+// thread-local while the body's is atomic.
+void neon_wcopy_channel(const void* src, void* dst) {
+    neon_channel_ref* r = *(neon_channel_ref* const*)src;
+    neon_retain_shared((neon_header*)r->body);
+    *(neon_channel_ref**)dst = neon_channel_ref_new(r->body);
+}
+
+// ---- the same split for tasks ----
+
+typedef struct neon_task_ref {
+    neon_header header;
+    neon_task_lang* body;
+} neon_task_ref;
+
+static void neon_task_ref_drop(void* p) {
+    neon_task_ref* r = (neon_task_ref*)p;
+    neon_release_shared((neon_header*)r->body);
+    neon_free(r);
+}
+
+static neon_task_ref* neon_task_ref_new(neon_task_lang* body) {
+    neon_task_ref* r = (neon_task_ref*)neon_alloc(
+        sizeof(neon_task_ref) - sizeof(neon_header), neon_task_ref_drop);
+    r->body = body;
+    return r;
+}
+
+neon_task_ref* neon_task_lang_spawn(neon_closure body, const neon_witness* w,
+                                    neon_task_shim shim) {
+    return neon_task_ref_new(neon_task_lang_spawn_impl(body, w, shim));
+}
+
+void neon_task_lang_await(neon_task_ref* r, void* out) {
+    neon_task_lang_await_impl(r->body, out);
+    neon_release((neon_header*)r);
+}
+
 void neon_wcopy_task(const void* src, void* dst) {
-    neon_task_lang* t = *(neon_task_lang* const*)src;
-    neon_retain_shared((neon_header*)t); // a handle's count is concurrent: atomic always
-    *(neon_task_lang**)dst = t;
+    neon_task_ref* r = *(neon_task_ref* const*)src;
+    neon_retain_shared((neon_header*)r->body);
+    *(neon_task_ref**)dst = neon_task_ref_new(r->body);
 }
