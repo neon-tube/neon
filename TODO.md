@@ -27,6 +27,27 @@ Each item still has a repro or a file:line.
 
 ---
 
+## Fibers — the crash-locals leak, and its designed fix
+
+A fiber killed by a trap leaks any SHARED-heap handle (a channel, a task) whose only
+reference lives in its abandoned locals — never stored in any arena object, so the
+teardown walk cannot see it (and its buffered contents leak with it). Resources are
+immune: the resource struct itself is arena-resident, so the walk finds it and the
+cleanup runs regardless of who referenced it. Crash-path only; normal exits leak nothing.
+
+Ruled out: conservative stack scanning. It works for tracing collectors (over-finding
+merely retains) but is UNSOUND for refcount release — a stale word that looks like a
+handle pointer (a dead local, an already-released copy) would double-release and corrupt.
+
+The designed fix is codegen: bind locals of shared-handle repr through a small ARENA CELL
+(one word + drop) instead of a bare register/stack slot, released at last use exactly as
+the binding is today. Normal lifetimes unchanged; on a crash the walk finds the live cell
+and releases the handle. Costs one indirection on handle access — handles are rare and
+never hot. Do it when the fiber surface next gets codegen attention; until then the leak
+is bounded to bug paths and is memory, not corruption.
+
+---
+
 ## Design — `TODO` should error at the CALL site, not the definition
 
 `TODO("why")` type-checks and panics if reached, as Rust's `todo!()` does. That is the

@@ -74,12 +74,18 @@ compiler guarantees it is safe.
 
 ## The register
 
-The current fiber's arena — specifically its bump/free-list state — is pinned in a
-dedicated register (or an initial-exec `_Thread_local`), updated by the swap gadget on a
-fiber switch (free — the gadget already saves and restores callee-saved registers). So
-allocation reads the arena with no lookup and no branch. This is Go's `mcache`-via-`g`
-register, exactly. The current *fiber* (for park/trap/spawn) is reached the same way; a
-`_Thread_local` here is a single segment-relative load, not `pthread_getspecific`.
+**Measured resolution (2026-08-10): initial-exec TLS is enough; the register is not
+critical.** The arena pointer is an initial-exec `_Thread_local` — one `%fs`-relative,
+L1-hot load per allocation. Measured on the binary-trees pattern: general-dynamic TLS
+(a `__tls_get_addr` call) costs 6-7%; initial-exec costs ~1%, inside noise; and the
+IN-FIBER arena path matches the global slab exactly (23-26ms both, 4M nodes, safepoints
+on). What the earlier draft of this section overestimated was the identity lookup — the
+one load amortizes into the ~dozen-instruction alloc path and an out-of-order core hides
+it. What actually matters, and what isolation bought: no atomics, no locks, and never the
+general-dynamic model. A dedicated register (`-ffixed-reg`, Go's `mcache`-via-`g`) remains
+the documented LAST ~1% — it burns a register in all generated code and couples build
+flags across the archive seam, so it waits for a fiber-heavy profile that names the load,
+which no measurement yet has.
 
 (An earlier draft derived the current fiber from a size-aligned stack via `rsp`-masking.
 That is unsound for non-fiber threads — a file-offload pool worker on an ordinary pthread
