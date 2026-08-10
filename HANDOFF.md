@@ -59,8 +59,11 @@ fiber-local ("pinned") resources are unshipped until a type needs one.
 
 ## Tracked next tasks
 
-1. `std::http` on llhttp (the natural next feature; llhttp reaching runtime C is a
-   deliberate vendoring decision when it happens — docs/design/toolchain.md, last bullet).
+1. `std::http` SHIPPED (client + server, HTTP/1.1, keep-alive, chunked decode; llhttp is
+   FetchContent-pinned into the archives — the `cargo make rt` step fetches, the cargo
+   path stays offline). Next on that road, both researched and task-tracked: URL parsing
+   via uriparser (replaces http::split_url) and TLS via mbedTLS on the fiber BIO seam
+   (mbedtls_ssl_set_bio callbacks -> the existing fiber-parking socket ops).
 2. Known checker gaps found while testing, worth fixing:
    - `expr is T as x` fails on nullable runtime records and on any `T | null` with a
      qualified generic (`is` on a BINDING works — see `resource_through_channel.neon`'s

@@ -1,0 +1,255 @@
+// HTTP/1.1, client and server, over `std::net`'s fiber-aware sockets and llhttp's parser
+// (`runtime/src/http.c` wraps it; docs/design/fibers.md for how connections cross fibers).
+//
+//     // server: one fiber per connection, keep-alive handled, handler per request
+//     try http::serve(l, (req: http::Request) => {
+//         http::ok("hello, #{req.target}")
+//     });
+//
+//     // client
+//     let resp = try http::get("http://127.0.0.1:8080/hello");
+//
+// Plain HTTP only: nothing in this toolchain does TLS, and pretending otherwise with a
+// vendored cipher suite would be worse than saying so. Bodies are fully buffered both
+// ways (streaming is a later shape), requests are served one at a time per connection
+// (a pipelined client's extra bytes are carried to the next parse, never dropped), and
+// chunked transfer-encoding is DECODED on receipt — llhttp does it — while responses are
+// always sent with Content-Length.
+//
+// The server's `handler` crosses to each connection's fiber, so it must be a NAMED
+// function or a capture-free lambda — `tcp::serve`'s rule, for the same reason. State
+// belongs in a channel the handler talks to.
+
+use std::fiber;
+use std::io::IoError;
+use std::list;
+use std::net;
+use std::string;
+
+/// A parse or protocol failure — malformed bytes, a connection closing mid-message, a URL
+/// this module cannot speak (https). IO failures stay `IoError`.
+record HttpError { message: str }
+impl Error for HttpError { fn message(v: HttpError) -> str { v.message } }
+
+record Request { method: str, target: str, headers: List[(str, str)], body: str }
+record Response { status: i64, headers: List[(str, str)], body: str }
+
+/// The llhttp accumulator (see `runtime/include/neon/http.h`). Fiber-local by design: the
+/// CONNECTION crosses fibers, and whichever fiber reads it makes the parser.
+@runtime("neon_http_parser") sealed opaque record Parser {}
+
+internal mod raw {
+    @native("neon_http_parser_new") fn new(response: bool) -> Parser
+    /// (code, consumed): 0 = need more (all consumed), 1 = complete (bytes after the
+    /// message are NOT consumed), 2 = error (`error` names it).
+    @native("neon_http_parser_feed") fn feed(p: Parser, data: str) -> (i64, i64)
+    @native("neon_http_parser_finish") fn finish(p: Parser) -> i64
+    @native("neon_http_parser_method") fn method(p: Parser) -> str
+    @native("neon_http_parser_target") fn target(p: Parser) -> str
+    @native("neon_http_parser_status") fn status(p: Parser) -> i64
+    @native("neon_http_parser_body") fn body(p: Parser) -> str
+    @native("neon_http_parser_keep_alive") fn keep_alive(p: Parser) -> bool
+    @native("neon_http_parser_header_count") fn header_count(p: Parser) -> i64
+    @native("neon_http_parser_header_at") fn header_at(p: Parser, i: i64) -> (str, str)
+    @native("neon_http_parser_error") fn error(p: Parser) -> str
+    @native("neon_http_parser_reset") fn reset(p: Parser)
+}
+
+// ---- shared: reading one message off a stream ----
+
+/// Feed bytes until the parser completes a message. `pending` is what a previous parse
+/// left unconsumed (a pipelined follow-up); the return is what THIS parse leaves. EOF
+/// mid-message is an error unless `finish` says the message legally ends at EOF (a
+/// response body delimited by connection close).
+fn read_message(c: net::tcp::Stream, p: Parser, pending: str) throws HttpError | IoError -> str {
+    let buf = pending;
+    while true {
+        if buf != "" {
+            let (code, used) = raw::feed(p, buf);
+            if code == 2 {
+                throw HttpError { message: "bad message: #{raw::error(p)}" };
+            };
+            if code == 1 {
+                return try! string::slice(buf, used, string::byte_len(buf));
+            };
+            buf = "";
+        } else {
+            let data = try net::tcp::read(c, 65536);
+            if data == "" {
+                if raw::finish(p) == 1 {
+                    return "";
+                };
+                throw HttpError { message: "connection closed mid-message" };
+            };
+            buf = data;
+        };
+    };
+    "" // unreachable: the loop returns or throws
+}
+
+fn collect_headers(p: Parser) -> List[(str, str)] {
+    let out: List[(str, str)] = [];
+    let n = raw::header_count(p);
+    let i = 0;
+    while i < n {
+        out = list::push(out, raw::header_at(p, i));
+        i = i + 1;
+    };
+    out
+}
+
+/// The first header with this name, case-insensitively (HTTP field names are), or null.
+fn header(headers: List[(str, str)], name: str) -> str | null {
+    let want = string::to_lower(name);
+    let i = 0;
+    while i < list::len(headers) {
+        let (f, v) = try! list::get(headers, i);
+        if string::to_lower(f) == want {
+            return v;
+        };
+        i = i + 1;
+    };
+    null
+}
+
+// ---- serialisation ----
+
+fn serialize_headers(headers: List[(str, str)], body: str) -> str {
+    let out = "";
+    let i = 0;
+    while i < list::len(headers) {
+        let (f, v) = try! list::get(headers, i);
+        out = string::concat(out, "#{f}: #{v}\r\n");
+        i = i + 1;
+    };
+    // Content-Length always: responses and requests both frame their body with it, so no
+    // peer ever has to wait for a close to know the message ended.
+    string::concat(out, "Content-Length: #{string::byte_len(body)}\r\n\r\n#{body}")
+}
+
+/// The reason phrase for the status line. RFC 7230 lets it be empty; the common ones are
+/// spelled for logs and humans.
+fn reason(status: i64) -> str {
+    if status == 200 { "OK" }
+    else if status == 201 { "Created" }
+    else if status == 204 { "No Content" }
+    else if status == 301 { "Moved Permanently" }
+    else if status == 302 { "Found" }
+    else if status == 304 { "Not Modified" }
+    else if status == 400 { "Bad Request" }
+    else if status == 403 { "Forbidden" }
+    else if status == 404 { "Not Found" }
+    else if status == 405 { "Method Not Allowed" }
+    else if status == 500 { "Internal Server Error" }
+    else if status == 501 { "Not Implemented" }
+    else { "" }
+}
+
+// ---- the server ----
+
+/// A 200 with a text body — the shape most handlers return.
+fn ok(body: str) -> Response {
+    Response { status: 200, headers: [], body: body }
+}
+
+/// A response with the given status and a text body.
+fn respond(status: i64, body: str) -> Response {
+    Response { status: status, headers: [], body: body }
+}
+
+/// Serve forever: one fiber per connection (`move` hands each accepted socket to its
+/// fiber), requests parsed and answered in order per connection, keep-alive honoured.
+/// A handler's throw becomes a 500 carrying the error's message; a client that sends
+/// garbage gets a 400 and the connection closes. Returns only by throwing, hence `never`.
+fn serve(l: net::tcp::Listener, handler: (Request) throws HttpError -> Response) throws IoError -> never {
+    while true {
+        let c = try net::tcp::accept(l);
+        fiber::spawn(move () => { connection(c, handler); });
+    };
+    throw IoError { message: "unreachable: the accept loop ended without failing" }
+}
+
+/// One connection's whole life. Errors end the connection rather than the server: IO
+/// failures mean the peer is gone (nothing to tell them), parse failures get a best-effort
+/// 400. `try?` softens the goodbye writes — a peer that vanished mid-farewell is fine.
+fn connection(c: net::tcp::Stream, handler: (Request) throws HttpError -> Response) {
+    let p = raw::new(false);
+    let pending = "";
+    while true {
+        let leftover = try read_message(c, p, pending) catch (e) {
+            try? net::tcp::write(c, "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n");
+            try? net::tcp::close(c);
+            return
+        };
+        pending = leftover;
+        let req = Request {
+            method: raw::method(p),
+            target: raw::target(p),
+            headers: collect_headers(p),
+            body: raw::body(p),
+        };
+        let keep = raw::keep_alive(p);
+        let resp = try handler(req) catch (e) {
+            Response { status: 500, headers: [], body: e.message }
+        };
+        let head = "HTTP/1.1 #{resp.status} #{reason(resp.status)}\r\n";
+        try net::tcp::write(c, string::concat(head, serialize_headers(resp.headers, resp.body))) catch (e) {
+            try? net::tcp::close(c);
+            return
+        };
+        if !keep {
+            try? net::tcp::close(c);
+            return;
+        };
+        raw::reset(p);
+    };
+}
+
+// ---- the client ----
+
+/// `http://host[:port]/path` split at the syscall boundary's shape: an address for
+/// `tcp::connect` and a request-target. The only scheme this module speaks is `http`.
+fn split_url(url: str) throws HttpError -> (str, str) {
+    if !string::starts_with(url, "http://") {
+        throw HttpError { message: "only http:// URLs are supported (no TLS in this toolchain): `#{url}`" };
+    };
+    let rest = string::strip_prefix(url, "http://");
+    let at = string::find(rest, "/");
+    let (addr, target) = if at is i64 {
+        (try! string::slice(rest, 0, at), try! string::slice(rest, at, string::byte_len(rest)))
+    } else {
+        (rest, "/")
+    };
+    if addr == "" {
+        throw HttpError { message: "no host in `#{url}`" };
+    };
+    // A bare host gets HTTP's default port; tcp::connect wants host:port.
+    let with_port = if string::find(addr, ":") is i64 { addr } else { "#{addr}:80" };
+    (with_port, target)
+}
+
+/// One request, one connection: connect, send, read the full response, close. The
+/// `Connection: close` header means an EOF-delimited body parses too (`finish`).
+fn request(method: str, url: str, headers: List[(str, str)], body: str) throws HttpError | IoError -> Response {
+    let (addr, target) = try split_url(url);
+    let c = try net::tcp::connect(addr);
+    let head = "#{method} #{target} HTTP/1.1\r\nHost: #{addr}\r\nConnection: close\r\n";
+    try net::tcp::write(c, string::concat(head, serialize_headers(headers, body)));
+    let p = raw::new(true);
+    try read_message(c, p, "");
+    let resp = Response {
+        status: raw::status(p),
+        headers: collect_headers(p),
+        body: raw::body(p),
+    };
+    try? net::tcp::close(c);
+    resp
+}
+
+fn get(url: str) throws HttpError | IoError -> Response {
+    try request("GET", url, [], "")
+}
+
+fn post(url: str, body: str) throws HttpError | IoError -> Response {
+    try request("POST", url, [], body)
+}

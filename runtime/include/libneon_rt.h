@@ -18,6 +18,7 @@
 #include "neon/encoding.h"
 #include "neon/fiber.h"
 #include "neon/file.h"
+#include "neon/http.h"
 #include "neon/io.h"
 #include "neon/lifecycle.h"
 #include "neon/list.h"

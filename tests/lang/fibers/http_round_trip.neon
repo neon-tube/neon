@@ -1,0 +1,71 @@
+// std::http end to end, over real sockets on the fiber runtime: the client verbs (GET,
+// POST with a body), a handler throw becoming a 500 with the error's message, a 404, and
+// — on a raw connection — keep-alive: two requests down one socket, the server's parser
+// reset between them. Every accepted socket is `move`d to its connection fiber; the
+// bounded accept loop is what lets a corpus program drain (http::serve is the forever
+// shape, and `http::connection` here is exactly what it spawns per accept).
+//
+// `runtime_on(1, ..)` for a deterministic interleaving; port 0 so the test never fights
+// over a number; the golden pins statuses and bodies, never addresses.
+
+use std::channel;
+use std::fiber;
+use std::http;
+use std::io;
+use std::net;
+use std::string;
+
+fn handle(req: http::Request) throws http::HttpError -> http::Response {
+    if req.target == "/boom" {
+        throw http::HttpError { message: "kaboom" };
+    };
+    if req.target == "/hello" {
+        http::ok("hi #{req.method} #{req.body}")
+    } else {
+        http::respond(404, "nope")
+    }
+}
+
+fn clients(addr: str, done: channel::Channel[str]) {
+    let r1 = try! http::get("http://#{addr}/hello");
+    try! channel::send(done, "get: #{r1.status} #{r1.body}");
+    let r2 = try! http::post("http://#{addr}/hello", "bodybytes");
+    try! channel::send(done, "post: #{r2.status} #{r2.body}");
+    let r3 = try! http::get("http://#{addr}/boom");
+    try! channel::send(done, "boom: #{r3.status} #{r3.body}");
+    let r4 = try! http::get("http://#{addr}/missing");
+    try! channel::send(done, "missing: #{r4.status} #{r4.body}");
+
+    // Keep-alive, on a raw socket: two requests, one connection. The server must answer
+    // both (parser reset between messages) — the first line of each response proves it.
+    let c = try! net::tcp::connect(addr);
+    try! net::tcp::write(c, "GET /hello HTTP/1.1\r\nHost: h\r\n\r\n");
+    let first = try! net::tcp::read(c, 4096);
+    try! net::tcp::write(c, "GET /missing HTTP/1.1\r\nHost: h\r\n\r\n");
+    let second = try! net::tcp::read(c, 4096);
+    try! net::tcp::close(c);
+    let (l1, rest1) = string::split_once(first, "\r\n") orelse ("?", "");
+    let (l2, rest2) = string::split_once(second, "\r\n") orelse ("?", "");
+    try! channel::send(done, "keepalive: #{l1} then #{l2}");
+}
+
+fn main() {
+    let l = try! net::tcp::listen("127.0.0.1:0");
+    let addr = try! net::tcp::local_addr(l);
+    fiber::runtime_on(1, move () => {
+        let done: channel::Channel[str] = channel::new();
+        fiber::spawn(() => clients(addr, done));
+        let served = 0;
+        while served < 5 {
+            let c = try! net::tcp::accept(l);
+            fiber::spawn(move () => { http::connection(c, handle); });
+            served = served + 1;
+        };
+        let n = 0;
+        while n < 5 {
+            io::println(channel::recv(done) orelse "?");
+            n = n + 1;
+        };
+    });
+    io::println("done");
+}

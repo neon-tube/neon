@@ -18,6 +18,7 @@ set(NEON_RT_SOURCES
     src/resource.c
     src/file.c
     src/math.c
+    src/http.c
     src/io.c
     src/list.c
     src/any.c
@@ -29,6 +30,38 @@ set(NEON_RT_SOURCES
     src/random.c
     src/time.c
 )
+
+# llhttp: the HTTP/1.x parser behind `std::http` (src/http.c wraps it). Pinned to an exact
+# release tarball by URL and content hash so the pull is reproducible — the release/* tags
+# carry the pre-generated C parser, so nothing depends on llhttp's TypeScript toolchain.
+# `SOURCE_SUBDIR do-not-build` is the populate-only trick (tinyunit's, below): llhttp's own
+# CMakeLists never loads (it rejects the `None` build type this project builds under), and
+# its three sources are compiled directly into each archive variant instead — with
+# warnings suppressed per-source, because third-party code does not get to fail OUR
+# -Werror, and we do not get to edit it.
+#
+# Fetching happens at configure time of `cargo make rt` — an explicit orchestrator step,
+# never inside `cargo build` (docs/design/toolchain.md; the locator keeps the cargo path
+# offline).
+include(FetchContent)
+FetchContent_Declare(
+    llhttp
+    URL      https://github.com/nodejs/llhttp/archive/refs/tags/release/v9.4.3.tar.gz
+    URL_HASH SHA256=1eb813c7437b31a87496a1cd3ed79f00746720f5e7e29c79b42c02cb69f36c39
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    SOURCE_SUBDIR  do-not-build
+)
+FetchContent_MakeAvailable(llhttp)
+set(NEON_RT_LLHTTP_SOURCES
+    ${llhttp_SOURCE_DIR}/src/llhttp.c
+    ${llhttp_SOURCE_DIR}/src/api.c
+    ${llhttp_SOURCE_DIR}/src/http.c
+)
+if(MSVC)
+    set_source_files_properties(${NEON_RT_LLHTTP_SOURCES} PROPERTIES COMPILE_OPTIONS "/w")
+else()
+    set_source_files_properties(${NEON_RT_LLHTTP_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
+endif()
 
 # Fibers (docs/design/fibers.md). The swap gadget is per-ABI assembly; x86-64 System V is the
 # only ABI wired so far, so on anything else the fiber sources are simply left out and the
@@ -188,8 +221,9 @@ check_c_compiler_flag("${NEON_RT_SAN_PROBE}" NEON_RT_HAS_SAN)
 unset(CMAKE_REQUIRED_LINK_OPTIONS)
 
 function(neon_rt_variant name)
-    add_library(${name} STATIC ${NEON_RT_SOURCES})
+    add_library(${name} STATIC ${NEON_RT_SOURCES} ${NEON_RT_LLHTTP_SOURCES})
     target_include_directories(${name} PUBLIC include)
+    target_include_directories(${name} PRIVATE ${llhttp_SOURCE_DIR}/include)
     # Warnings-as-errors on every variant: the runtime is warning-clean in all three
     # shapes, and a variant that is only ever built in CI is exactly where rot would go
     # unnoticed.
@@ -267,32 +301,13 @@ if(NEON_RT_TESTS)
     )
     FetchContent_MakeAvailable(tinyunit)
 
-    # llhttp, pinned to an exact release tarball by URL and content hash so the pull is
-    # reproducible — the release/* tags carry the pre-generated C parser, so nothing here
-    # depends on llhttp's TypeScript toolchain. Unlike tinyunit this uses the project's own
-    # CMakeLists: it defines an `llhttp_static` target whose usage requirements carry the
-    # include directory, and the test binary links it below.
-    FetchContent_Declare(
-        llhttp
-        URL      https://github.com/nodejs/llhttp/archive/refs/tags/release/v9.4.3.tar.gz
-        URL_HASH SHA256=1eb813c7437b31a87496a1cd3ed79f00746720f5e7e29c79b42c02cb69f36c39
-        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-    )
-    # A function so the set()s reach llhttp's add_subdirectory and nothing else: llhttp's
-    # CMakeLists rejects build types outside its own allowlist ("None", which the archive
-    # and Windows-test configures use, is one), and its shared/static options default the
-    # wrong way round for linking into one test binary. Variables set in this scope are
-    # inherited by the subdirectory FetchContent adds, and die with the function.
-    function(neon_rt_fetch_llhttp)
-        set(CMAKE_BUILD_TYPE RelWithDebInfo)
-        set(LLHTTP_BUILD_SHARED_LIBS OFF)
-        set(LLHTTP_BUILD_STATIC_LIBS ON)
-        FetchContent_MakeAvailable(llhttp)
-    endfunction()
-    neon_rt_fetch_llhttp()
+    # llhttp is fetched (populate-only) at the top level for the archives; the test
+    # binary compiles the same sources so one set of sanitizer flags instruments
+    # everything, exactly as it does the runtime's own.
 
     add_executable(neon_rt_tests
         ${NEON_RT_SOURCES}
+        ${NEON_RT_LLHTTP_SOURCES}
         ${tinyunit_SOURCE_DIR}/tinyunit.c
         tests/init.c
         tests/arith_test.c
@@ -312,6 +327,7 @@ if(NEON_RT_TESTS)
         tests/random_test.c
         tests/process_test.c
         tests/llhttp_test.c
+        tests/http_test.c
     )
     # The fiber tests only build where the swap gadget does.
     if(NEON_RT_HAS_FIBERS)
@@ -322,7 +338,7 @@ if(NEON_RT_TESTS)
     endif()
     # The rich assertion and TEST macros use GNU C (__auto_type, constructors, _Generic).
     set_target_properties(neon_rt_tests PROPERTIES C_STANDARD 11 C_EXTENSIONS ON)
-    target_include_directories(neon_rt_tests PRIVATE include src ${tinyunit_SOURCE_DIR})
+    target_include_directories(neon_rt_tests PRIVATE include src ${tinyunit_SOURCE_DIR} ${llhttp_SOURCE_DIR}/include)
     # `std::math` bottoms out in libm, a separate library on Linux. Not on Windows, where
     # the math functions are in the CRT and there is no `m` to find.
     if(NOT WIN32)
@@ -331,8 +347,6 @@ if(NEON_RT_TESTS)
         find_package(Threads REQUIRED)
         target_link_libraries(neon_rt_tests PRIVATE m Threads::Threads)
     endif()
-    # `llhttp_test.c` picks its header up from this target's usage requirements.
-    target_link_libraries(neon_rt_tests PRIVATE llhttp_static)
 
     # Sanitizers on the whole test binary — the runtime sources and tinyunit compiled in with
     # it — so a memory or UB bug in the runtime is caught here, not only in the corpus.
