@@ -13,8 +13,9 @@
 #include "fiber_internal.h"
 #include "internal.h" // neon_fiber_trap_handler
 
-#include <signal.h> // sig_atomic_t for the safepoint flag
+#include <signal.h> // sig_atomic_t for the safepoint flag, the preemption timer's handler
 #include <stddef.h>
+#include <string.h> // memset for the timer's sigaction/itimerval setup
 
 // A completion-shaped IO integration. The design's production engine is a proactor —
 // io_uring on Linux, IOCP on Windows, kqueue/epoll adapted elsewhere, with a thread pool
@@ -50,6 +51,11 @@ typedef struct {
 } neon_sched;
 
 static _Thread_local neon_sched t_sched;
+
+// The preemption timer (defined with the safepoint machinery at the end of this file),
+// armed for exactly the life of the runtime.
+static void neon_fiber_timer_arm(void);
+static void neon_fiber_timer_disarm(void);
 
 static void neon_sched_enqueue(neon_fiber* f) {
     f->q_next = NULL;
@@ -106,6 +112,7 @@ void neon_fiber_runtime(neon_fiber_fn body, void* arg) {
 
     neon_sched_enqueue(neon_fiber_new(body, arg, 0));
     t_sched.live++;
+    neon_fiber_timer_arm(); // preemption ticks for the life of the runtime (see below)
 
     // The pump. A finished fiber is freed (arena bulk-dropped) and drops the live count; a
     // yielded one is re-enqueued; a PARKED one (a channel, a Task, or a descriptor) is left
@@ -141,6 +148,8 @@ void neon_fiber_runtime(neon_fiber_fn body, void* arg) {
             neon_sched_enqueue(f);
         }
     }
+
+    neon_fiber_timer_disarm();
 
     // The queue emptied with fibers still live AND none parked on a descriptor: every one is
     // waiting on another that will never run. That is a deadlock, and silence would be a hang.
@@ -251,6 +260,53 @@ ssize_t neon_fiber_read(int fd, void* buf, size_t count) {
 // is the runtime half — the flag, the check, and a way to request preemption; the timer
 // trigger and the compiler's safepoint emission are the halves above this file.
 static _Thread_local volatile sig_atomic_t t_preempt;
+
+// The production trigger: a CPU-time interval timer, armed for the life of the runtime.
+// ITIMER_VIRTUAL on purpose — it ticks only while this process burns CPU, so a scheduler
+// sitting in epoll_wait (or a program blocked on a read) is never interrupted for nothing,
+// and a hot loop is preempted at its next safepoint. SA_RESTART so slow syscalls elsewhere
+// in the runtime resume instead of failing EINTR (epoll_wait is exempt from SA_RESTART by
+// spec; its loop handles EINTR itself). 10ms: Go's scheduler quantum, long enough to be
+// invisible, short enough that no fiber hogs a core.
+#if defined(__unix__)
+#include <sys/time.h>
+
+#define NEON_FIBER_QUANTUM_US 10000
+
+static void neon_fiber_alarm(int sig) {
+    (void)sig;
+    t_preempt = 1;
+}
+
+static void neon_fiber_timer_arm(void) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = neon_fiber_alarm;
+    sa.sa_flags = SA_RESTART;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGVTALRM, &sa, NULL);
+    struct itimerval it;
+    it.it_interval.tv_sec = 0;
+    it.it_interval.tv_usec = NEON_FIBER_QUANTUM_US;
+    it.it_value = it.it_interval;
+    setitimer(ITIMER_VIRTUAL, &it, NULL);
+}
+
+static void neon_fiber_timer_disarm(void) {
+    struct itimerval off;
+    memset(&off, 0, sizeof(off));
+    setitimer(ITIMER_VIRTUAL, &off, NULL);
+    struct sigaction dfl;
+    memset(&dfl, 0, sizeof(dfl));
+    dfl.sa_handler = SIG_DFL;
+    sigemptyset(&dfl.sa_mask);
+    sigaction(SIGVTALRM, &dfl, NULL);
+    t_preempt = 0; // a tick that landed after the last safepoint must not leak out
+}
+#else
+static void neon_fiber_timer_arm(void) {}
+static void neon_fiber_timer_disarm(void) {}
+#endif
 
 // Emitted by codegen at loop back-edges. If preemption was requested, clear it and yield;
 // otherwise a handful of instructions and on. A no-op outside a fiber (the root has nowhere to

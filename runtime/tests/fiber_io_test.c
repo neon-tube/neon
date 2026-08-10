@@ -70,6 +70,37 @@ TEST(safepoint_without_a_request_does_not_yield) {
     EXPECT_EQ(nosp_log[3], 2);
 }
 
+// The timer end of preemption: a spinner that never yields VOLUNTARILY — it only calls the
+// safepoint, as codegen would at a loop back-edge — must still be preempted by the CPU-time
+// timer so a sibling fiber gets a turn. Without the timer this spins its full bound and the
+// sibling never runs before it finishes; with it, the sibling's flag flips mid-spin.
+static volatile bool tp_sibling_ran;
+static bool tp_preempted;
+static void tp_spinner(void* arg) {
+    (void)arg;
+    // ~a few hundred ms of spinning at worst — the 10ms timer fires long before the bound.
+    for (long i = 0; i < 2000000000L && !tp_sibling_ran; i++) {
+        neon_fiber_safepoint();
+    }
+    tp_preempted = tp_sibling_ran; // true only if the sibling ran while we were mid-loop
+}
+static void tp_sibling(void* arg) {
+    (void)arg;
+    tp_sibling_ran = true;
+}
+static void tp_parent(void* arg) {
+    (void)arg;
+    neon_fiber_spawn(tp_spinner, NULL); // queued first: runs first, yields only via safepoint
+    neon_fiber_spawn(tp_sibling, NULL);
+}
+
+TEST(the_timer_preempts_a_spinning_fiber) {
+    tp_sibling_ran = false;
+    tp_preempted = false;
+    neon_fiber_runtime(tp_parent, NULL);
+    EXPECT(tp_preempted);
+}
+
 // ---- the completion-IO seam (Linux/epoll) ----
 
 #if defined(__linux__)
