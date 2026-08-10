@@ -116,6 +116,31 @@ dependencies = ["release"]
 command = "bash"
 args = ["tools/dist.sh"]
 
+# ---- detached workspaces, from the same front door ----
+# Each wraps a standalone entry point with its own toolchain requirements (named in the
+# description); the script remains directly runnable with filters/flags the wrapper
+# does not take.
+
+[tasks.kani]
+description = "The Kani proofs (verify/run.sh; needs cargo-kani)"
+command = "bash"
+args = ["verify/run.sh"]
+
+[tasks.inert]
+description = "Prove a change is inert: diff emitted C across the corpus (verify/inert.sh)"
+command = "sh"
+args = ["verify/inert.sh"]
+
+[tasks.win]
+description = "The Windows build + C suite locally (verify/windows.sh; needs mingw-w64 + wine)"
+command = "sh"
+args = ["verify/windows.sh"]
+
+[tasks.fuzz]
+description = "Fuzz the format target 300s (fuzz/run.sh; needs nightly + cargo-fuzz)"
+command = "bash"
+args = ["fuzz/run.sh"]
+
 # ---- housekeeping ----
 
 [tasks.fmt]
