@@ -4,14 +4,20 @@
 // THE INVARIANT: cleanup runs EXACTLY ONCE over a resource's life -- from the armed state
 // and from the disarmed state, whichever public operation takes the last reference.
 //
-// This is the property the armed flag exists for. Cleanup has two entry points that know
-// nothing about each other: the explicit Neon-level `release`, which disarms and calls the
-// closure so the error propagates, and the emitted drop on the last reference, which has
-// no error channel. Both can run for the same resource in the same execution -- an
-// explicit release whose reference was not the last one, a drop after something already
-// took the payload -- and the failure modes on either side are silent. Twice is a second
-// `close` on a descriptor the OS has already reused; zero times is a handle leak that no
-// test observes because the program exits anyway.
+// This is the property the armed flag exists for, and the body/ref split does not change
+// its shape: cleanup still has two entry points that know nothing about each other. The
+// explicit Neon-level `release` fetches the closure, disarms and calls it so the error
+// propagates; the emitted REF-drop on the last owning ref has no error channel and runs
+// cleanup itself. Both can run for the same body in the same execution -- an explicit
+// release whose reference was not the last one, a drop after something already took the
+// payload -- and the failure modes on either side are silent. Twice is a second `close`
+// on a descriptor the OS has already reused; zero times is a handle leak that no test
+// observes because the program exits anyway.
+//
+// What the split adds is a third life stage under the cleanup: the BODY outlives the
+// cleanup decision, and its own drop (memory death, when the last ref's count on it goes)
+// releases the payload slot and the closure environment. The end-of-scenario counts now
+// check that stage too: the env dies exactly once, with the body, never with the cleanup.
 //
 // Rule 7 is why the payload is a COUNTED handle -- a `neon_header*` with a real
 // retain/release witness -- and not a scalar. Every `Resource[...]` in the tree held a
@@ -25,51 +31,56 @@
 // codegen emits it. It is harness, not code under test: every runtime function it calls is
 // the real one.
 //
-// Verifies `src/resource.c` compiled from source; see rule 1.
+// Verifies `src/resource.c` compiled from source; see rule 1. The harness stays on the
+// root context with the one owning ref throughout, so the gate in `neon_resource_get` /
+// `neon_resource_disarm` always answers OK here; the gate's own contract (claim,
+// NOT_OWNER, RELEASED) is `verify-resource-disarm-picks-exactly-one-winner` and
+// `verify-a-transfer-leaves-exactly-one-owning-ref`.
 //
 // ---- VALIDATED BY MUTATION (rule 6) ----
 //
-// Baseline: 520 properties, VERIFICATION SUCCESSFUL. Five mutations, each reverted.
+// Mutations are applied to a scratch COPY of `src/resource.c` (or of this harness, where
+// the historical defect was in emitted code) and the model re-run against the copy; the
+// shipping source is never edited. Baseline: 770 properties, VERIFICATION SUCCESSFUL.
+// Five mutations, each discarded with its scratch copy.
 //
 // 1. THE HISTORICAL BUG, reproduced. `model_drop` changed to read the payload slot
-//    directly -- `payload = *(neon_header**)neon_resource_payload(r)` guarded by
-//    `r->armed` -- and hand those bytes to the consuming cleanup, instead of calling
-//    `neon_resource_take` first. The slot is never zeroed, so `neon_resource_finish`
-//    releases the same bytes the cleanup already released. Failed on "the payload was
-//    released exactly once, by whoever ran the cleanup" and "the payload is not dropped
-//    while the harness still holds it", plus three deallocated-object dereferences inside
-//    `neon_release` (6 of 538). This is the shape that shipped: it ran clean against every
-//    `Resource[i64, E]` in the tree, because a scalar witness has no `release` and the
-//    second call went through a NULL pointer, and use-after-freed the first
+//    directly -- `payload = *(neon_header**)neon_resource_body_payload(r->body)` guarded
+//    by `r->owning && r->body->armed` -- and hand those bytes to the consuming cleanup,
+//    instead of calling `neon_resource_take` first. The slot is never zeroed, so the
+//    body's drop releases the same bytes the cleanup already released. Failed on "the
+//    payload was released exactly once, by whoever ran the cleanup" and "the payload is
+//    not dropped while the harness still holds it", plus deallocated-object dereferences
+//    inside `neon_release` (6 of 794). This is the shape that shipped in the single-object
+//    design: clean against every scalar payload, a use-after-free on the first
 //    `Resource[str, E]`. The mutation is in the harness because the defect was in emitted
 //    code, not in the runtime.
 //
 // 2. `neon_resource_take` no longer clearing `armed`. Failed on "cleanup runs exactly once
 //    over the resource's life, from either state and whichever operation ended it", and on
-//    four more including "take wins the cleanup if and only if the resource is armed"
-//    (5 of 514). Shipped, this is a second `close` on a descriptor the OS has already
+//    four more including "take wins the cleanup if and only if the body is armed"
+//    (5 of 770). Shipped, this is a second `close` on a descriptor the OS has already
 //    handed to someone else.
 //
 // 3. `neon_resource_get` additionally disarming. One property, and it is the headline one:
-//    "cleanup runs exactly once ..." (1 of 520). A read that steals the cleanup leaves the
+//    "cleanup runs exactly once ..." (1 of 770). A read that steals the cleanup leaves the
 //    drop with nothing to do, so the handle leaks -- the direction no test notices, because
 //    the process exits and the OS closes it.
 //
 // 4. `neon_resource_take` no longer zeroing the source slot. Failed on "the payload was
-//    released exactly once ..." (6 of 505) -- the same double release as 1, reached from
+//    released exactly once ..." (6 of 755) -- the same double release as 1, reached from
 //    the runtime side rather than the harness side.
 //
 // 5. `neon_resource_get` dropping its payload retain. Failed on "the payload was released
-//    exactly once ..." (6 of 501): the caller gives back a reference it was never given.
+//    exactly once ..." (6 of 751): the caller gives back a reference it was never given.
 //
 // NOT CAUGHT, and analysed rather than excused: deleting the `w->release` call in
-// `neon_resource_finish`, and doubling it, both leave this model green (0 of 483 and
-// 0 of 539). Neither is a live defect. Every drop reaches `neon_resource_finish` through
-// a `neon_resource_take` that has zeroed the payload slot, so that release is always
-// `release(NULL)` and the two mutants are equivalent. Confirmed directly: with mutation 1's
-// broken drop in place, deleting the release makes the model pass again (0 of 501) --
-// i.e. the release in `finish` is exactly the backstop that turns a take-less drop into a
-// double free, and it has no effect on any correct one. See
+// `neon_resource_body_drop`, and doubling it, both leave this model green (0 of 739 and
+// 0 of 789). Neither is a live defect. Every body drop here is reached through a
+// `neon_resource_take` that has zeroed the payload slot, so that release is always
+// `release(NULL)` and the two mutants are equivalent. The release in the body's drop is
+// exactly the backstop that turns a take-less ref-drop into a double free (mutation 1),
+// and it has no effect on any correct one. See
 // `verify-resource-take-moves-the-payload-out-once`, which owns the zeroing claim.
 //
 // ---- SCOPE: what this model does not cover ----
@@ -79,17 +90,18 @@
 //    is the expensive dimension rather than a cheap one to relax: a `neon_release` whose
 //    outcome CBMC cannot constant-fold leaves its object *symbolically* freed, every
 //    later dereference carries that disjunction, and the drop recursion behind it
-//    (release -> drop -> `neon_resource_finish` -> release -> ...) re-expands to the full
-//    `--unwind` depth at each one. Measured on the model this one was split out of: one
-//    extra consuming operation ahead of the final one took the run from 0.45s to over
-//    300s, and cutting the choices at that position from seven to two changed nothing --
-//    it is sequence DEPTH that costs, not path count.
+//    (release -> ref-drop -> `neon_resource_ref_finish` -> shared release -> body drop ->
+//    ...) re-expands to the full `--unwind` depth at each one. Measured on the
+//    single-object predecessor of this model: one extra consuming operation ahead of the
+//    final one took the run from 0.45s to over 300s, and cutting the choices at that
+//    position from seven to two changed nothing -- it is sequence DEPTH that costs, not
+//    path count.
 //
-//    The bound is argued rather than hoped: only `take` and `disarm` change a resource's
+//    The bound is argued rather than hoped: only `take` and `disarm` change a body's
 //    state, and every operation here is covered from both states. Everything else is a
 //    pure read followed by a release, so a sequence of them differs only in the reference
 //    count -- which is what the lifecycle models verify, over sequences this one does not
-//    duplicate. It does mean the resource is never held at a reference count above one.
+//    duplicate. It does mean the ref is never held at a reference count above one.
 //
 // 2. TAKE COUNTS ARE LITERALS AT EACH CALL SITE, not a nondet value, and that is
 //    load-bearing for the same reason. Made nondeterministic, the armed and disarmed
@@ -102,21 +114,26 @@
 //    fails and writes nothing is proved by
 //    `verify-resource-take-moves-the-payload-out-once`, not here.
 //
-// 4. Out-of-memory does not appear as a *return* anywhere: `neon_alloc` traps rather than
+// 4. ONE REF, held on the root context, so the gate always says OK or RELEASED and a
+//    claim never happens. The NOT_OWNER answer, the claim on an in-flight body, and lives
+//    with more than one ref are the disarm-race and transfer models' ground.
+//
+// 5. Out-of-memory does not appear as a *return* anywhere: `neon_alloc` traps rather than
 //    returning NULL, so `neon_resource_new` has no failure path to model. What
 //    `--malloc-may-fail --malloc-fail-null` buys is a check that the trap terminates
 //    rather than running on with a NULL header, which the `_exit` stub encodes. A leak
 //    check cannot fire past a trap, so "no leak on OOM" is vacuous by design.
 //
-// 5. Concurrency. The refcount is a plain `uint64_t` and the runtime is single-threaded;
+// 6. Concurrency. `armed` and `owner` are plain fields -- neon/resource.h's handoff
+//    argument is why -- and the body's atomic count is exercised only single-threaded;
 //    the disarm race is modelled as sequential orderings, in
 //    `verify-resource-disarm-picks-exactly-one-winner`, not as simultaneous ones.
 //
-// 6. The closure's *body*. `cleanup.fn` is called through the pointer, as codegen does,
+// 7. The closure's *body*. `cleanup.fn` is called through the pointer, as codegen does,
 //    but what a user's cleanup computes is not this file's business -- only that it is
 //    invoked once, with a payload it owns.
 //
-// 7. Payloads other than one counted pointer: larger ones, and witnesses with a `retain`
+// 8. Payloads other than one counted pointer: larger ones, and witnesses with a `retain`
 //    but no `release` or the reverse. `w->size` is still read from the witness by the
 //    code under test, so the sizing arithmetic in `neon_resource_new` is exercised, just
 //    at a single size.
@@ -137,6 +154,25 @@
 // each of those sites. The model has nothing to say about stdio.
 int fprintf(FILE* stream, const char* fmt, ...) { (void)stream; (void)fmt; return 0; }
 int fflush(FILE* stream) { (void)stream; return 0; }
+
+// ---- stubs for the modules sources.txt does not compile (rule 4's other half) ----
+
+// resource.c routes the body's allocation through the shared heap. Under NEON_CBMC the
+// allocator is plain malloc with nothing to route around; lifecycle.c already stubs
+// `neon_send_routing_end` to a no-op the same way.
+void* neon_shared_routing_begin(void) { return NULL; }
+
+// The current execution context, from the fiber sources this model does not build. NULL
+// is the root context -- resource.c substitutes its own sentinel for it, so NULL never
+// reaches an owner comparison. This model never leaves the root context.
+neon_fiber* neon_fiber_current(void) { return NULL; }
+
+// Reached only for a closure environment flagged NEON_ALLOC_ARENA, which the CBMC
+// `neon_alloc` never sets -- asserted, not assumed.
+neon_header* neon_env_copy_to_shared(neon_header* env) {
+    PROVE(0, "unreachable in this model: the CBMC neon_alloc never sets NEON_ALLOC_ARENA");
+    return env;
+}
 
 // ---- a counted payload, and a counted closure environment ----
 
@@ -174,12 +210,22 @@ static bool handle_eq(const void* a, const void* b) {
     return *(neon_header* const*)a == *(neon_header* const*)b;
 }
 
+// `neon_resource_new` CONSUMES the caller's payload: it deep-copies it into the body
+// through `copy` and then releases the original. A counted handle's copy is
+// alias-and-retain -- without it the memcpy fallback would move the pointer and the
+// release would destroy the reference that just moved in.
+static void handle_copy(const void* src, void* dst) {
+    *(neon_header**)dst = *(neon_header* const*)src;
+    neon_retain(*(neon_header**)dst);
+}
+
 static const neon_witness handle_witness = {
     .size = sizeof(neon_header*),
     .retain = handle_retain,
     .release = handle_release,
     .eq = handle_eq,
     .cmp = NULL,
+    .copy = handle_copy,
 };
 
 // ---- the emitted, per-instantiation half ----
@@ -196,16 +242,17 @@ static void model_cleanup(neon_header* env, neon_header* payload) {
     neon_release(payload); // consumes the payload
 }
 
-// What codegen emits as the resource's `drop`: run cleanup if still armed, then land in
-// the shared tail. The `neon_resource_take` is load-bearing -- without it the payload is
-// released here and again in `neon_resource_finish`.
+// What codegen emits as the resource's REF-drop: if this ref carries the baton and the
+// body is still armed, take the payload and run cleanup, then land in the shared tail.
+// The `neon_resource_take` is load-bearing -- without it the payload is released here and
+// again by the body's own drop.
 static void model_drop(void* p) {
     neon_resource* r = (neon_resource*)p;
     neon_header* payload = NULL;
-    if (neon_resource_take(r, &payload)) {
-        ((cleanup_fn)r->cleanup.fn)(r->cleanup.env, payload);
+    if (r->owning && neon_resource_take(r->body, &payload)) {
+        ((cleanup_fn)r->body->cleanup.fn)(r->body->cleanup.env, payload);
     }
-    neon_resource_finish(r);
+    neon_resource_ref_finish(r);
 }
 
 // What the explicit Neon-level `release` compiles to: take an owned copy of the closure,
@@ -215,11 +262,13 @@ static void explicit_release(neon_resource* r) {
     neon_retain((neon_header*)r);
     neon_closure c = neon_resource_cleanup(r); // consumes one ref; c.env comes back owned
     neon_header* got = NULL;
-    bool mine = neon_resource_disarm(r, &got); // consumes the other
-    if (mine) {
+    int64_t code = neon_resource_disarm(r, &got); // consumes the other
+    if (code == NEON_RESOURCE_OK) {
         PROVE(got != NULL, "a winning disarm yields the payload for its caller to clean up");
         ((cleanup_fn)c.fn)(c.env, got);
     } else {
+        PROVE(code == NEON_RESOURCE_RELEASED,
+              "on the root context with the owning ref, the only losing answer is RELEASED");
         PROVE(got == NULL, "a losing disarm leaves out untouched, so nothing is cleaned twice");
     }
     neon_release(c.env);
@@ -231,28 +280,28 @@ static neon_header* g_payload;
 static neon_header* g_env;
 static bool expect_armed;
 
-// A bare `neon_resource_take`: the move-out on its own, as the drop path and any emitted
-// "take the payload and clean it up here" both use it. It does NOT consume a reference,
-// which is what lets it run ahead of the consuming operation without ending the life.
-// Whoever wins a take owes the payload a cleanup, exactly as the emitted code does.
+// A bare `neon_resource_take` on the BODY: the ungated move-out on its own, as the
+// ref-drop and the gated disarm both use it. It does NOT consume a reference, which is
+// what lets it run ahead of the consuming operation without ending the life. Whoever wins
+// a take owes the payload a cleanup, exactly as the emitted code does.
 static void do_take(neon_resource* r) {
     neon_header* got = NULL;
-    bool mine = neon_resource_take(r, &got);
-    PROVE(mine == expect_armed, "take wins the cleanup if and only if the resource is armed");
+    bool mine = neon_resource_take(r->body, &got);
+    PROVE(mine == expect_armed, "take wins the cleanup if and only if the body is armed");
     if (mine) {
         expect_armed = false;
-        // Borrowing `r->cleanup.env` is safe: the resource is still alive, since a take
-        // consumes no reference.
-        ((cleanup_fn)r->cleanup.fn)(r->cleanup.env, got);
+        // Borrowing `r->body->cleanup.env` is safe: the ref still holds the body, since a
+        // take consumes no reference.
+        ((cleanup_fn)r->body->cleanup.fn)(r->body->cleanup.env, got);
     }
 }
 
 // Each of these consumes exactly one reference to `r`. In this model that is always the
-// last one, so each runs the emitted drop before returning -- which is the point: the
+// last one, so each runs the emitted ref-drop before returning -- which is the point: the
 // claim is about cleanup running once whichever of them ends the life.
 static void do_final_op(neon_resource* r, unsigned op) {
     if (op == 0) {
-        // Take, then release the resource that no longer owns anything.
+        // Take, then release the ref that no longer owes anything.
         do_take(r);
         neon_release((neon_header*)r);
 
@@ -266,10 +315,10 @@ static void do_final_op(neon_resource* r, unsigned op) {
               "explicit release runs cleanup if and only if it won the disarm");
 
     } else if (op == 2) {
-        // `get`: a read that consumes the resource, so the drop runs cleanup.
+        // `get`: a read that consumes the ref, so the drop runs cleanup.
         neon_header* got = NULL;
-        bool live = neon_resource_get(r, &got);
-        if (live) {
+        int64_t code = neon_resource_get(r, &got);
+        if (code == NEON_RESOURCE_OK) {
             neon_release(got); // the read was owned, so give it back
         }
 
@@ -301,9 +350,9 @@ static void scenario(unsigned takes) {
 
     neon_closure cleanup;
     cleanup.fn = (void*)model_cleanup;
-    cleanup.env = g_env; // the resource takes ownership of this reference
+    cleanup.env = g_env; // the body takes ownership of this reference
 
-    // The payload's single reference moves into the resource.
+    // The payload's single reference moves into the body.
     neon_resource* r = neon_resource_new(&g_payload, &handle_witness, cleanup, model_drop);
 
     // A reference the harness keeps for this whole scenario and releases last. It changes
@@ -314,8 +363,10 @@ static void scenario(unsigned takes) {
     // touch the freed bytes.
     neon_retain(g_payload);
 
-    PROVE(r->header.rc == 1, "a fresh resource is uniquely owned");
-    PROVE(r->armed, "a fresh resource is armed, so its cleanup is still owed");
+    PROVE(r->header.rc == 1, "a fresh ref is uniquely owned");
+    PROVE(r->body->header.rc == 1, "and it holds the body's only count");
+    PROVE(r->owning, "the ref neon_resource_new returns carries the baton");
+    PROVE(r->body->armed, "a fresh body is armed, so its cleanup is still owed");
     expect_armed = true;
 
     // Phase one: at most one bare take. Non-consuming, so the reference count is untouched
@@ -324,7 +375,7 @@ static void scenario(unsigned takes) {
         do_take(r);
     }
 
-    PROVE(r->header.rc == 1, "a bare take does not touch the reference count");
+    PROVE(r->header.rc == 1, "a bare take does not touch the ref's count");
 
     // Phase two: exactly one consuming operation, which takes the last reference and so
     // runs `model_drop` from inside itself.
@@ -339,11 +390,12 @@ static void scenario(unsigned takes) {
         "is_live, bare release). Values above 5 name no operation at all.");
     do_final_op(r, op);
 
-    // The drop has run and the resource is gone.
+    // The drop has run; the ref and the body are gone.
     PROVE(cleanup_calls == 1,
           "cleanup runs exactly once over the resource's life, from either state and "
           "whichever operation ended it");
-    PROVE(env_drops == 1, "the closure environment is released exactly once");
+    PROVE(env_drops == 1,
+          "the closure environment is released exactly once, by the body's own drop");
 
     // The payload's references are balanced against the harness's pinning reference.
     // `rc == 0` here means it was released once too often -- the use-after-free this
@@ -355,12 +407,12 @@ static void scenario(unsigned takes) {
     neon_release(g_payload);
     PROVE(payload_drops == 1, "the payload is dropped exactly once, and only at rc == 0");
 
-    // Nothing else is freed by hand. The resource and the environment must both have been
-    // reclaimed by the code under test; --memory-leak-check is the assertion.
+    // Nothing else is freed by hand. The ref, the body and the environment must all have
+    // been reclaimed by the code under test; --memory-leak-check is the assertion.
 }
 
 int main(void) {
-    scenario(0); // the operation finds the resource armed
+    scenario(0); // the operation finds the body armed
     scenario(1); // something took the payload first: it finds it disarmed
     return 0;
 }

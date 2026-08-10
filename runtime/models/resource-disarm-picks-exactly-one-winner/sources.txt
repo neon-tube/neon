@@ -1,6 +1,6 @@
 # The shipping runtime sources this model compiles and verifies (rule 1): the resource
-# operations under test, the retain/release every one of them consumes a reference
-# through, and the trap that each allocation check lands on.
+# operations under test, the lifecycle pair a ref's plain count and the body's shared
+# count go through, and the trap that each allocation check lands on.
 src/resource.c
 src/lifecycle.c
 src/trap.c
