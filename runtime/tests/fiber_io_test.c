@@ -346,3 +346,178 @@ TEST(sleeps_overlap_across_the_mesh) {
     EXPECT(took < 90); // three 30ms sleeps overlapped, not summed
 }
 #endif
+
+// ---- per-thread preemption (M:N) ----
+
+#if defined(__linux__)
+// TWO spinners, one per seat, neither yielding voluntarily; each must be preempted by ITS
+// OWN thread's timer so its sibling on the same seat runs. Under the old process-wide timer
+// only one thread caught the tick and the other seat's spinner starved its sibling forever.
+static _Atomic int pt_siblings;
+static void pt_spinner(void* arg) {
+    (void)arg;
+    long id = (long)arg;
+    for (long i = 0; i < 2000000000L; i++) {
+        // stop once BOTH siblings have run — proves both seats preempted
+        if (atomic_load(&pt_siblings) >= 2) {
+            break;
+        }
+        neon_fiber_safepoint();
+    }
+    (void)id;
+}
+static void pt_sibling(void* arg) {
+    (void)arg;
+    atomic_fetch_add(&pt_siblings, 1);
+}
+static void pt_parent(void* arg) {
+    (void)arg;
+    // Four fibers over two seats: round-robin puts a spinner and a sibling on each seat.
+    neon_fiber_spawn(pt_spinner, (void*)1);
+    neon_fiber_spawn(pt_spinner, (void*)2);
+    neon_fiber_spawn(pt_sibling, NULL);
+    neon_fiber_spawn(pt_sibling, NULL);
+}
+
+TEST(both_seats_preempt_their_spinners) {
+    atomic_store(&pt_siblings, 0);
+    neon_fiber_runtime_threads(2, pt_parent, NULL);
+    EXPECT_EQ(atomic_load(&pt_siblings), 2); // both siblings ran → both seats' timers fired
+}
+#endif
+
+// ---- the io_uring backend ----
+//
+// These run against WHICHEVER engine the seat opened — the ring on a modern kernel, the
+// epoll+offload path under NEON_IO=epoll or an old one. That is the point: the backend is
+// a seam, and the behaviour above it is identical, so the same assertions hold either way.
+// The CI script runs the suite twice, once with NEON_IO=epoll.
+
+#if defined(__linux__)
+// A read that must block: the pipe is empty when the reader runs, so the operation is
+// genuinely in flight (a ring SQE, or a pool worker) while a sibling fiber writes.
+static int ur_pipe[2];
+static bool ur_sibling_ran;
+static bool ur_ok;
+
+static void ur_reader(void* arg) {
+    (void)arg;
+    int64_t err = 0;
+    neon_str s = neon_io_read_all(ur_pipe[0], &err);
+    ur_ok = err == 0 && neon_str_len(&s) == 5 &&
+            memcmp(neon_str_data(&s), "uring", 5) == 0 && ur_sibling_ran;
+    neon_str_release(s);
+}
+static void ur_writer(void* arg) {
+    (void)arg;
+    ur_sibling_ran = true;
+    ssize_t w = write(ur_pipe[1], "uring", 5);
+    (void)w;
+    close(ur_pipe[1]); // EOF ends read_all's loop
+}
+static void ur_parent(void* arg) {
+    (void)arg;
+    neon_fiber_spawn(ur_reader, NULL); // parks with the read in flight
+    neon_fiber_spawn(ur_writer, NULL); // satisfies it
+}
+
+TEST(a_read_completes_through_the_active_engine) {
+    if (pipe(ur_pipe) != 0) {
+        EXPECT(false);
+        return;
+    }
+    ur_sibling_ran = false;
+    ur_ok = false;
+    neon_fiber_runtime(ur_parent, NULL);
+    EXPECT(ur_ok);
+    close(ur_pipe[0]);
+}
+
+// Many concurrent reads, so the submission path is exercised in batches rather than one at
+// a time — and every fiber must get ITS OWN result back (user_data → the right waiter).
+enum { UR_N = 24 };
+static int ur_pipes[UR_N][2];
+static int ur_got[UR_N];
+static void ur_many_reader(void* arg) {
+    long i = (long)arg;
+    char buf[4];
+    int64_t err = 0;
+    neon_str s = neon_io_read_all(ur_pipes[i][0], &err);
+    ur_got[i] = err == 0 && neon_str_len(&s) == 1 ? (unsigned char)neon_str_data(&s)[0] : -1;
+    neon_str_release(s);
+    (void)buf;
+}
+static void ur_many_writer(void* arg) {
+    (void)arg;
+    for (long i = 0; i < UR_N; i++) {
+        char c = (char)(i + 1);
+        ssize_t w = write(ur_pipes[i][1], &c, 1);
+        (void)w;
+        close(ur_pipes[i][1]);
+    }
+}
+static void ur_many_parent(void* arg) {
+    (void)arg;
+    for (long i = 0; i < UR_N; i++) {
+        neon_fiber_spawn(ur_many_reader, (void*)i);
+    }
+    neon_fiber_spawn(ur_many_writer, NULL);
+}
+
+TEST(concurrent_reads_each_get_their_own_result) {
+    for (int i = 0; i < UR_N; i++) {
+        if (pipe(ur_pipes[i]) != 0) {
+            EXPECT(false);
+            return;
+        }
+        ur_got[i] = 0;
+    }
+    neon_fiber_runtime(ur_many_parent, NULL);
+    bool all = true;
+    for (int i = 0; i < UR_N; i++) {
+        if (ur_got[i] != i + 1) { // fiber i must receive byte i+1, not another's
+            all = false;
+        }
+        close(ur_pipes[i][0]);
+    }
+    EXPECT(all);
+}
+
+// A blocking read and a sleep outstanding at once: the idle wait must serve BOTH — under
+// the ring that is one enter() carrying a TIMEOUT SQE alongside the read.
+static int urm_pipe[2];
+static bool urm_slept;
+static bool urm_read_ok;
+static void urm_sleeper(void* arg) {
+    (void)arg;
+    neon_fiber_sleep(25);
+    urm_slept = true;
+    ssize_t w = write(urm_pipe[1], "x", 1); // the sleeper satisfies the reader
+    (void)w;
+    close(urm_pipe[1]);
+}
+static void urm_reader(void* arg) {
+    (void)arg;
+    int64_t err = 0;
+    neon_str s = neon_io_read_all(urm_pipe[0], &err);
+    urm_read_ok = err == 0 && neon_str_len(&s) == 1 && urm_slept;
+    neon_str_release(s);
+}
+static void urm_parent(void* arg) {
+    (void)arg;
+    neon_fiber_spawn(urm_reader, NULL);
+    neon_fiber_spawn(urm_sleeper, NULL);
+}
+
+TEST(a_deadline_and_an_operation_wait_together) {
+    if (pipe(urm_pipe) != 0) {
+        EXPECT(false);
+        return;
+    }
+    urm_slept = false;
+    urm_read_ok = false;
+    neon_fiber_runtime(urm_parent, NULL);
+    EXPECT(urm_read_ok); // the read completed, and only after the deadline fired
+    close(urm_pipe[0]);
+}
+#endif

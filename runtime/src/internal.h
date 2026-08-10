@@ -28,6 +28,22 @@
 // load and is sound because the runtime is always statically linked into the program
 // executable, never dlopen'd, so its TLS block exists at process start. (The design's
 // register-pinned arena would drop even this load; initial-exec is the cheap 90%.)
+// THE TLS RULE, since this is the thing most likely to be misremembered as "no TLS": the
+// runtime uses thread-local state freely — an M:N runtime is per-thread state — and what
+// was measured and rejected is narrower than that. Two findings, both on binary-trees:
+//
+//   * general-dynamic TLS (the default model) on the ALLOCATION path costs 6-7%, because
+//     each access is a __tls_get_addr CALL. initial-exec is one %fs-relative load and
+//     costs ~1%. Hence NEON_TLS_IE on the three hot ones — the current arena, the teardown
+//     arena, the slab free lists — and only those: the annotation forces a fixed TLS
+//     offset, which is not free at link time and buys nothing for a variable read beside a
+//     syscall.
+//   * ANY addition to neon_retain/neon_release costs 30-44%, TLS or not. That pair is
+//     measured surface and carries nothing new; see the comment above it.
+//
+// Everything else — the scheduler seat, the current fiber, the preemption flag, the seat's
+// io_uring, the sleep/trap/IO hooks — is ordinary _Thread_local at the default model, read
+// beside a context switch or a syscall where the cost is unmeasurable.
 #if defined(__GNUC__) && !defined(NEON_CBMC)
 #  define NEON_TLS_IE __attribute__((tls_model("initial-exec")))
 #else

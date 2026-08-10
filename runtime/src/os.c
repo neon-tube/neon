@@ -226,3 +226,46 @@ neon_str neon_io_read_line_raw(void) {
 neon_str neon_io_read_all_stdin(void) {
     return neon_io_read_stdin(false);
 }
+
+// ---- runtime introspection (std::sys) ----
+//
+// What a program can ask about the runtime it is actually running on. Both answers are
+// build-and-kernel facts, not preferences: whether this binary HAS the fiber machinery
+// (x86-64 SysV Unix today — elsewhere the sources are not compiled and fiber calls would
+// not link), and which non-blocking engine a fiber runtime would use here. The engine
+// answer is honest about context: it reports what THIS seat opened when called inside a
+// runtime, and what a runtime WOULD open when called outside one.
+
+#if defined(NEON_RT_FIBERS)
+#include "fiber_internal.h" // neon_sys_uring_here
+#endif
+
+bool neon_sys_has_fibers(void) {
+#if defined(NEON_RT_FIBERS)
+    return true;
+#else
+    return false;
+#endif
+}
+
+// The atom a `std::sys::io_engine()` answers with, as its FNV-1a hash — atoms are hashes at
+// runtime, and these must match what codegen computes for `:io_uring` / `:epoll` / `:none`.
+static uint64_t neon_sys_atom(const char* s) {
+    uint64_t h = 0xcbf29ce484222325ULL;
+    for (const unsigned char* p = (const unsigned char*)s; *p != '\0'; p++) {
+        h ^= *p;
+        h *= 0x100000001b3ULL;
+    }
+    return h;
+}
+
+uint64_t neon_sys_io_engine(void) {
+#if defined(NEON_RT_FIBERS)
+    if (neon_sys_uring_here()) {
+        return neon_sys_atom("io_uring");
+    }
+    return neon_sys_atom("epoll");
+#else
+    return neon_sys_atom("none");
+#endif
+}

@@ -35,8 +35,13 @@ set(NEON_RT_SOURCES
 if(NOT WIN32 AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
     list(APPEND NEON_RT_SOURCES
         src/fiber.c src/fiber_sched.c src/fiber_chan.c src/fiber_lang.c src/fiber_offload.c
+        src/fiber_uring.c
         src/fiber_swap_x86_64_sysv.S)
     set(NEON_RT_HAS_FIBERS ON)
+    # `std::sys::has_fibers()` answers from this: the fiber sources are compiled here, so a
+    # program on this build may use them. Elsewhere the natives report false and the fiber
+    # entry points are not linked at all.
+    add_compile_definitions(NEON_RT_FIBERS=1)
 endif()
 
 # The runtime ships as prebuilt archives, one per build shape the CLI can ask for, so a

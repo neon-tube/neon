@@ -33,4 +33,14 @@ neon_str neon_os_lossy(const char* bytes, size_t len);
 neon_str neon_io_read_line_raw(void); // includes the trailing newline; "" only at EOF
 neon_str neon_io_read_all_stdin(void);
 
+
+// ---- runtime introspection (std::sys) ----
+
+// Whether this build has the fiber machinery compiled in (x86-64 SysV Unix today).
+bool neon_sys_has_fibers(void);
+
+// Which non-blocking engine a fiber runtime uses here, as an atom hash: `:io_uring`,
+// `:epoll`, or `:none` on a build without fibers. Inside a runtime it reports the engine
+// THIS seat opened; outside one, what a runtime would open.
+uint64_t neon_sys_io_engine(void);
 #endif

@@ -245,6 +245,28 @@ static void neon_sched_sleep_hook(int64_t millis) {
     neon_fiber_sleep(millis);
 }
 
+// The operation hooks a seat installs when it has a ring: submit the operation and park.
+// Off-fiber (a resource cleanup running on the root context) there is no fiber to park, so
+// fall through to the plain blocking syscall — the same rule the offload hooks follow.
+static neon_ssize neon_sched_uring_read_hook(int fd, void* buf, size_t n) {
+    if (neon_fiber_current()->is_root) {
+        return neon_plat_read(fd, buf, n);
+    }
+    return neon_uring_read(fd, buf, n);
+}
+
+static neon_ssize neon_sched_uring_writev_hook(int fd, const neon_iovec* iov, int n) {
+    if (neon_fiber_current()->is_root) {
+        return neon_plat_writev(fd, (neon_iovec*)iov, n);
+    }
+    return neon_uring_writev(fd, iov, n);
+}
+
+static void neon_fiber_uring_arm(void) {
+    neon_fiber_blocking_read = neon_sched_uring_read_hook;
+    neon_fiber_blocking_writev = neon_sched_uring_writev_hook;
+}
+
 #if defined(NEON_FIBER_IO)
 static void neon_sched_ensure_epfd(void) {
     if (t_sched.epfd < 0) {
@@ -330,14 +352,31 @@ static void neon_sched_open(bool mesh) {
 #else
     (void)mesh;
 #endif
+    // This seat's io_uring, when the kernel has one. With a ring, the operation hooks
+    // submit the operation ITSELF and the offload pool is never armed — files need no
+    // worker threads under a completion engine. Without one (old kernel, seccomp,
+    // NEON_IO=epoll) the pool arms and the epoll reactor stands, unchanged.
+    if (neon_uring_open()) {
+        neon_fiber_uring_arm();
+        // The doorbell must be watched by the engine this seat actually IDLES in: a seat
+        // blocked in io_uring_enter cannot be reached through an epoll set. Registering it
+        // on the ring is what lets a remote wake interrupt an idle seat.
+        if (mesh && t_sched.doorbell >= 0) {
+            neon_uring_watch_doorbell(t_sched.doorbell);
+        }
+    } else {
+        neon_offload_arm(); // file reads/writes park fibers via the pool from here on
+    }
     neon_fiber_sleep_hook = neon_sched_sleep_hook; // time::sleep parks fibers from here on
-    neon_offload_arm(); // file reads/writes park fibers via the pool from here on
     neon_fiber_pidwait_hook = neon_sched_pidwait_hook; // process waits park via pidfd
+    neon_fiber_timer_arm(); // THIS seat's own preemption timer
 }
 
 static void neon_sched_close(void) {
+    neon_fiber_timer_disarm(); // this seat's timer
     neon_fiber_sleep_hook = NULL;
     neon_offload_disarm();
+    neon_uring_close();
     neon_fiber_pidwait_hook = NULL;
 #if defined(NEON_FIBER_IO)
     if (t_sched.doorbell >= 0) {
@@ -376,6 +415,9 @@ static void neon_sched_ring_all(void) {
 static void neon_sched_pump(void) {
     for (;;) {
         neon_sched_drain_inj();
+        if (neon_uring_active()) {
+            neon_uring_poll_completions(); // non-blocking reap: publish + take what landed
+        }
         neon_fiber* f = neon_sched_dequeue();
         if (f == NULL) {
             if (atomic_load(&g_done)) {
@@ -408,11 +450,57 @@ static void neon_sched_pump(void) {
                 int waiting = atomic_fetch_add(&g_waiting, 1) + 1;
                 if (waiting == (g_nscheds > 0 ? g_nscheds : 1) && atomic_load(&g_ext) == 0 &&
                     atomic_load(&g_live) > 0 && !atomic_load(&g_done)) {
-                    neon_trap("deadlock: all fibers are blocked");
+                    // Every seat is idle with nothing external outstanding — but "idle" was
+                    // sampled, and a wake already pushed onto some seat's injection queue is
+                    // work that no counter reflects until that seat looks. So RE-CHECK the
+                    // queues before declaring deadlock: a real one has no queued fiber
+                    // anywhere and will still be true a moment later, while a race resolves
+                    // the instant the pending injection is seen. (Sampling alone was a
+                    // 1-in-40 false trap on the mesh pipeline — found when the epoll path's
+                    // different timing exposed it.)
+                    bool any_queued = false;
+                    for (int i = 0; i < g_nscheds && !any_queued; i++) {
+                        neon_sched* s = g_scheds[i];
+                        if (s == NULL) {
+                            continue;
+                        }
+                        pthread_mutex_lock(&s->mu);
+                        any_queued = s->inj_head != NULL || s->sleepers != NULL;
+                        pthread_mutex_unlock(&s->mu);
+                        if (!any_queued && s == &t_sched) {
+                            any_queued = t_sched.head != NULL; // our own local queue
+                        }
+                    }
+                    if (!any_queued && atomic_load(&g_ext) == 0 && atomic_load(&g_live) > 0 &&
+                        !atomic_load(&g_done)) {
+                        neon_trap("deadlock: all fibers are blocked");
+                    }
                 }
-                neon_sched_ensure_epfd();
-                neon_sched_poll_io(-1);
+                // The idle wait, on whichever engine this seat opened. With a ring one call
+                // carries the wait AND the deadline (a TIMEOUT SQE) and reaps what landed;
+                // the epoll path needs its descriptors registered first. A seat with a ring
+                // may still hold epoll registrations — the doorbell, and any POLL_ADD that
+                // could not be submitted — so when both exist the ring waits briefly and
+                // the epoll drain follows, rather than either blocking the other out.
+                if (neon_uring_active()) {
+                    if (t_sched.epfd >= 0) {
+                        neon_uring_wait(1);
+                        neon_sched_poll_io(0);
+                    } else {
+                        neon_uring_wait(-1);
+                    }
+                } else {
+                    neon_sched_ensure_epfd();
+                    neon_sched_poll_io(-1);
+                }
                 atomic_fetch_sub(&g_waiting, 1);
+            } else if (neon_uring_active()) {
+                if (t_sched.epfd >= 0) {
+                    neon_uring_wait(timeout < 1 ? 1 : timeout);
+                    neon_sched_poll_io(0);
+                } else {
+                    neon_uring_wait(timeout);
+                }
             } else {
                 neon_sched_ensure_epfd();
                 neon_sched_poll_io(timeout);
@@ -463,11 +551,9 @@ void neon_fiber_runtime(neon_fiber_fn body, void* arg) {
     first->home = &t_sched;
     atomic_fetch_add(&g_live, 1);
     neon_sched_enqueue(first);
-    neon_fiber_timer_arm(); // preemption ticks for the life of the runtime (see below)
 
     neon_sched_pump();
 
-    neon_fiber_timer_disarm();
     neon_sched_close();
     g_scheds[0] = NULL;
     g_nscheds = 0;
@@ -534,14 +620,12 @@ void neon_fiber_runtime_threads(int64_t threads, neon_fiber_fn body, void* arg) 
     first->home = &t_sched;
     atomic_fetch_add(&g_live, 1);
     neon_sched_enqueue(first);
-    neon_fiber_timer_arm();
 
     neon_sched_pump();
 
     for (int i = 1; i < (int)threads; i++) {
         pthread_join(tids[i], NULL);
     }
-    neon_fiber_timer_disarm();
     neon_sched_close();
     g_scheds[0] = NULL;
     g_nscheds = 0;
@@ -682,6 +766,12 @@ void neon_fiber_io_wait(int fd, uint32_t events) {
     if (cur->is_root) {
         neon_trap("neon_fiber_io_wait: the root context cannot wait on IO");
     }
+    // Under a ring, readiness is a POLL_ADD completion like any other operation. It can
+    // decline only when the submission queue is momentarily full, and then the epoll
+    // registration below is the fallback for this one wait.
+    if (neon_uring_active() && neon_uring_poll(fd, events)) {
+        return;
+    }
     if (t_sched.epfd < 0) {
         t_sched.epfd = epoll_create1(EPOLL_CLOEXEC);
         if (t_sched.epfd < 0) {
@@ -732,47 +822,78 @@ ssize_t neon_fiber_read(int fd, void* buf, size_t count) {
 // trigger and the compiler's safepoint emission are the halves above this file.
 static _Thread_local volatile sig_atomic_t t_preempt;
 
-// The production trigger: a CPU-time interval timer, armed for the life of the runtime.
-// ITIMER_VIRTUAL on purpose — it ticks only while this process burns CPU, so a scheduler
-// sitting in epoll_wait (or a program blocked on a read) is never interrupted for nothing,
-// and a hot loop is preempted at its next safepoint. SA_RESTART so slow syscalls elsewhere
-// in the runtime resume instead of failing EINTR (epoll_wait is exempt from SA_RESTART by
-// spec; its loop handles EINTR itself). 10ms: Go's scheduler quantum, long enough to be
-// invisible, short enough that no fiber hogs a core.
-#if defined(__unix__)
-#include <sys/time.h>
+// The production trigger: a PER-THREAD CPU-time timer, one per scheduler seat, armed for the
+// life of the runtime. CLOCK_THREAD_CPUTIME_ID + SIGEV_THREAD_ID (not the old process-wide
+// ITIMER_VIRTUAL) is what makes preemption correct under M:N: each seat's timer ticks only
+// while THAT thread burns CPU and the tick is delivered to THAT thread, whose thread-local
+// safepoint flag it sets — so a hot loop on any seat is preempted, not just whichever
+// thread happened to catch the one process timer. A seat idle in epoll_wait accrues no CPU
+// time and is never interrupted for nothing. The signal disposition (SIGVTALRM, SA_RESTART
+// so slow syscalls elsewhere resume rather than EINTR — epoll_wait is exempt by spec and
+// handles EINTR in its own loop) is process-wide and installed once. 10ms: Go's quantum.
+#if defined(__linux__)
+#include <sys/syscall.h>
+#include <time.h>
 
-#define NEON_FIBER_QUANTUM_US 10000
+#define NEON_FIBER_QUANTUM_NS 10000000L
+
+static _Thread_local timer_t t_timer;
+static _Thread_local bool t_timer_armed;
+static volatile sig_atomic_t g_alarm_installed;
 
 static void neon_fiber_alarm(int sig) {
     (void)sig;
-    t_preempt = 1;
+    t_preempt = 1; // thread-local: the tick lands on the seat whose CPU time it measured
 }
 
 static void neon_fiber_timer_arm(void) {
-    struct sigaction sa;
-    memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = neon_fiber_alarm;
-    sa.sa_flags = SA_RESTART;
-    sigemptyset(&sa.sa_mask);
-    sigaction(SIGVTALRM, &sa, NULL);
-    struct itimerval it;
+    if (!g_alarm_installed) {
+        // The disposition is per-process; racing installs of the identical handler are
+        // harmless, so no lock — the first mesh seat that gets here wins and the rest match.
+        g_alarm_installed = 1;
+        struct sigaction sa;
+        memset(&sa, 0, sizeof(sa));
+        sa.sa_handler = neon_fiber_alarm;
+        sa.sa_flags = SA_RESTART;
+        sigemptyset(&sa.sa_mask);
+        sigaction(SIGVTALRM, &sa, NULL);
+    }
+    struct sigevent sev;
+    memset(&sev, 0, sizeof(sev));
+    sev.sigev_notify = SIGEV_THREAD_ID;
+    sev.sigev_signo = SIGVTALRM;
+    sev._sigev_un._tid = (int)syscall(SYS_gettid); // deliver to THIS seat's thread
+    if (timer_create(CLOCK_THREAD_CPUTIME_ID, &sev, &t_timer) != 0) {
+        return; // no per-thread timer here: cooperative-only, still correct, just not preemptive
+    }
+    t_timer_armed = true;
+    struct itimerspec it;
     it.it_interval.tv_sec = 0;
-    it.it_interval.tv_usec = NEON_FIBER_QUANTUM_US;
+    it.it_interval.tv_nsec = NEON_FIBER_QUANTUM_NS;
     it.it_value = it.it_interval;
-    setitimer(ITIMER_VIRTUAL, &it, NULL);
+    timer_settime(t_timer, 0, &it, NULL);
 }
 
 static void neon_fiber_timer_disarm(void) {
-    struct itimerval off;
-    memset(&off, 0, sizeof(off));
-    setitimer(ITIMER_VIRTUAL, &off, NULL);
-    struct sigaction dfl;
-    memset(&dfl, 0, sizeof(dfl));
-    dfl.sa_handler = SIG_DFL;
-    sigemptyset(&dfl.sa_mask);
-    sigaction(SIGVTALRM, &dfl, NULL);
+    if (t_timer_armed) {
+        timer_delete(t_timer);
+        t_timer_armed = false;
+    }
     t_preempt = 0; // a tick that landed after the last safepoint must not leak out
+}
+#elif defined(__unix__)
+#include <sys/time.h>
+static void neon_fiber_alarm(int sig) { (void)sig; t_preempt = 1; }
+static void neon_fiber_timer_arm(void) {
+    struct sigaction sa; memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = neon_fiber_alarm; sa.sa_flags = SA_RESTART; sigemptyset(&sa.sa_mask);
+    sigaction(SIGVTALRM, &sa, NULL);
+    struct itimerval it; it.it_interval.tv_sec = 0; it.it_interval.tv_usec = 10000;
+    it.it_value = it.it_interval; setitimer(ITIMER_VIRTUAL, &it, NULL); // process-wide fallback
+}
+static void neon_fiber_timer_disarm(void) {
+    struct itimerval off; memset(&off, 0, sizeof(off)); setitimer(ITIMER_VIRTUAL, &off, NULL);
+    t_preempt = 0;
 }
 #else
 static void neon_fiber_timer_arm(void) {}

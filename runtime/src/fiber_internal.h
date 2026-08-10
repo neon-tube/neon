@@ -11,6 +11,8 @@
 #include "neon/arena.h"
 #include "neon/fiber.h"
 
+#include "platform.h" // neon_ssize / neon_iovec, for the uring operation signatures
+
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -66,6 +68,33 @@ void neon_sched_epoll_add_tag(int fd, void* tag);
 // an idle queue means "wait in the kernel", not deadlock.
 void neon_sched_io_waiter_begin(void);
 void neon_sched_io_waiter_end(void);
+
+// ---- the io_uring backend (fiber_uring.c) ----
+//
+// A completion engine under the same seams as the epoll reactor: when a seat has a ring,
+// the operation hooks submit the operation itself (no offload pool) and the pump idles in
+// io_uring_enter. Absent a ring — old kernel, seccomp, or NEON_IO=epoll — every entry
+// point declines and the epoll+offload path stands.
+
+// One in-flight operation, living on the PARKED FIBER'S OWN STACK: it stays valid exactly
+// as long as the fiber is parked, which is exactly as long as the completion can arrive.
+// Its address is the SQE's user_data, so a completion names its own waiter.
+typedef struct neon_uring_req {
+    neon_fiber* fiber;
+    int32_t res; // the kernel's result: >= 0 a count, < 0 a negated errno
+    bool done;
+} neon_uring_req;
+
+bool neon_uring_open(void);   // false when io_uring is unavailable here
+void neon_uring_close(void);
+bool neon_uring_active(void); // whether THIS seat has a ring
+neon_ssize neon_uring_read(int fd, void* buf, size_t n);
+neon_ssize neon_uring_writev(int fd, const neon_iovec* iov, int n);
+bool neon_uring_poll(int fd, uint32_t events); // false if it could not be submitted
+void neon_uring_watch_doorbell(int fd);        // the cross-seat doorbell, as a ring poll
+bool neon_sys_uring_here(void);                // std::sys::io_engine's probe
+void neon_uring_wait(int timeout_ms);          // idle: block for a completion or the deadline
+void neon_uring_poll_completions(void);        // non-blocking drain
 
 extern char neon_offload_tag;
 void neon_offload_drain(void);
