@@ -6,9 +6,10 @@ Repo: `/home/kibb/projects/neon-tube/neon` (Rust → C compiler + C runtime), br
 
 - **No `Co-Authored-By` trailers** in any commit, in any neon-tube repo.
 - **No `mut`** — the language has no such keyword. `let` rebinds; the optimiser earns mutation.
-- **No `-> null`** (ruled 2026-08-10): never explicitly return null, and null must not be the
-  implicit return type. The existing stdlib violates this everywhere a throwing function
-  returns; the sweep is a tracked task (see below), do not add new violations.
+- **No `-> null`** (ruled 2026-08-10): never explicitly return null, and null must not be
+  the implicit return type. The stdlib+corpus sweep LANDED in 6649595 (arrowless
+  `throws E` / `-> ()` are the spellings); do not add new violations. Checker-side
+  enforcement gaps remain — see Tracked next tasks.
 - `cargo fmt` is fine to run; the repo is rustfmt-clean.
 - **`neon_retain`/`neon_release` admit no additions.** Measured 26–44% regressions for every
   attempted branch. The resource ownership design (below) was shaped by this: batons cost
@@ -43,9 +44,8 @@ fiber-local ("pinned") resources are unshipped until a type needs one.
 - **CBMC resource models**: an agent is reworking the five `resource-*` models for the
   body/ref ABI and adding `a-transfer-leaves-exactly-one-owning-ref`, mutation-validated,
   committing under `runtime/models/` only. If its commit is absent, check for a report.
-- **llhttp**: vendored via CMake FetchContent (pinned `release/v9.4.3`, sha256) on worktree
-  branch `worktree-agent-a76e584a10fe9b8f7`, commit `075b477` — based on pre-fibers main;
-  merge is two small edits to `runtime/CMakeLists.txt` + one test file. NOT yet merged.
+- **llhttp**: MERGED (bcea3e0) — CMake FetchContent, pinned `release/v9.4.3` by sha256,
+  gated behind NEON_RT_TESTS so `cargo build` never fetches; smoke test in the C suite.
 - **Toolchain redesign** (user-requested): a full build-graph map, ranked smells, and a
   recommended redesign (cc-crate compile of the runtime from build.rs; CMake retreats to
   tests/models/MSVC; shared flag files; 6-step migration) was produced by a Plan agent —
@@ -56,14 +56,17 @@ fiber-local ("pinned") resources are unshipped until a type needs one.
 
 ## Tracked next tasks
 
-1. **null-as-unit sweep** (user ruling, above): grammar for arrowless `throws E` meaning
-   unit; `Union([Unit, E])` tagged results; migrate every `-> null` signature in the stdlib
-   and corpus.
-2. Toolchain redesign (after llhttp merge; see tension note).
-3. Known checker gaps found while testing, worth fixing: `expr is T as x` fails on
-   nullable runtime records and on any `T | null` with a qualified generic (`is` on a
-   BINDING works — see `resource_through_channel.neon`'s comment); the error message is the
-   nonsensical "a `bool` can never be a `#error`".
+1. Toolchain redesign (llhttp merged; see tension note above).
+2. Known checker gaps found while testing, worth fixing:
+   - `expr is T as x` fails on nullable runtime records and on any `T | null` with a
+     qualified generic (`is` on a BINDING works — see `resource_through_channel.neon`'s
+     comment); the error message is the nonsensical "a `bool` can never be a `#error`".
+   - null→unit coercion is inconsistent: an annotated lambda `(n: i64) => null` against
+     `-> ()` is rejected, but a fn BODY ending in `null` against a unit return is
+     silently accepted — the enforcement gap the null-as-unit ruling (swept in 6649595)
+     still leaves open.
+   - An EMPTY lambda block `{ }` types as the empty record `{}`, not unit, so a
+     do-nothing cleanup needs a filler statement.
 
 ## Residual design notes (documented, deliberate)
 
@@ -72,5 +75,5 @@ fiber-local ("pinned") resources are unshipped until a type needs one.
   narrow, documented in the design section.
 - `is` narrowing gap above; `Resource` equality is per-ref (two refs to one body compare
   unequal) — same standing quirk channels have.
-- `neon check` stops before lowering, so the `move` diagnostics only fire on build/run
-  paths (post-mono errors, Rust-style).
+- `neon check` now runs lowering too (6649595), so the `move` diagnostics fire on check,
+  build and run alike.
