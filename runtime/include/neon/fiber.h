@@ -94,6 +94,10 @@ void neon_fiber_park(void);
 // `time::sleep` becomes inside a fiber runtime.
 void neon_fiber_sleep(int64_t millis);
 
+// Park with a deadline: true when an external wake arrived first, false when the deadline
+// fired (the loser of the race is cancelled either way). What a timed receive builds on.
+bool neon_fiber_park_deadline(int64_t millis);
+
 // Re-admit a parked fiber to the run queue. Call it from the fiber that satisfied whatever
 // `f` was waiting on (a send, a Task completion). Single-thread M=1: no queue race.
 void neon_fiber_wake(neon_fiber* f);

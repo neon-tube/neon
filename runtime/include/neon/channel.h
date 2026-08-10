@@ -51,6 +51,16 @@ typedef struct neon_channel neon_channel;
 // A fresh open channel for elements described by `w`. The caller owns the returned handle.
 neon_channel* neon_channel_new(const neon_witness* w);
 
+// A bounded channel: sends park once `n` values are buffered (backpressure). n >= 1.
+neon_channel* neon_channel_new_bounded(const neon_witness* w, int64_t n);
+
+// Whether the channel has been closed. Consumes the handle reference.
+bool neon_channel_is_closed(neon_channel* ch);
+
+// recv with a deadline: false on closed-and-drained OR timeout (probe is_closed to tell).
+// Consumes the handle reference.
+bool neon_channel_recv_timeout(neon_channel* ch, void* out, int64_t millis);
+
 // Deep-copy the value at `v` into the channel (straight into a parked receiver's slot when
 // one waits), release the original, wake the receiver. Traps on a closed channel. Consumes
 // the `ch` reference and the value.

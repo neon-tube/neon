@@ -192,6 +192,15 @@ typedef struct neon_channel_waiter {
     struct neon_channel_waiter* next;
 } neon_channel_waiter;
 
+// A parked SENDER on a full bounded channel, on its own stack like a receiver's waiter.
+// `closed` reports that a close happened while it waited — sending on a closed channel
+// traps, and the parked sender must learn that on wake.
+typedef struct neon_channel_sender {
+    neon_fiber* fiber;
+    bool closed;
+    struct neon_channel_sender* next;
+} neon_channel_sender;
+
 typedef struct neon_channel {
     neon_header header;
     const neon_witness* w;
@@ -199,8 +208,11 @@ typedef struct neon_channel {
     size_t cap;
     size_t head;
     size_t len;
+    size_t bound; // 0 = unbounded; else sends park when len reaches it (backpressure)
     neon_channel_waiter* rhead;
     neon_channel_waiter* rtail;
+    neon_channel_sender* shead; // FIFO of parked senders
+    neon_channel_sender* stail;
     bool closed;
 } neon_channel;
 
@@ -226,9 +238,23 @@ neon_channel* neon_channel_new(const neon_witness* w) {
     ch->cap = 0;
     ch->head = 0;
     ch->len = 0;
+    ch->bound = 0;
     ch->rhead = NULL;
     ch->rtail = NULL;
+    ch->shead = NULL;
+    ch->stail = NULL;
     ch->closed = false;
+    return ch;
+}
+
+// A bounded channel: sends park once `n` values are buffered, until a receive drains one —
+// backpressure, so a fast producer cannot outrun a slow consumer into unbounded memory.
+neon_channel* neon_channel_new_bounded(const neon_witness* w, int64_t n) {
+    if (n < 1) {
+        neon_trap("channel::bounded: the bound must be at least 1");
+    }
+    neon_channel* ch = neon_channel_new(w);
+    ch->bound = (size_t)n;
     return ch;
 }
 
@@ -257,6 +283,30 @@ static void* neon_channel_slot_reserve(neon_channel* ch) {
 void neon_channel_send(neon_channel* ch, const void* v) {
     if (ch->closed) {
         neon_trap("channel::send: send on a closed channel");
+    }
+    // Backpressure: on a bounded channel a send parks while the ring is full — and, ON
+    // FIRST ENTRY, while earlier senders still wait (FIFO fairness; a late send must not
+    // steal the slot a receive just opened for the first in line). Once WOKEN, this sender
+    // holds the right-of-way: the receive that woke it popped it off the queue and opened a
+    // slot that no later sender can take (they queue behind on entry) — re-checking the
+    // queue here would send it to the back of its own line, wasting the wake and stalling
+    // the receiver that made room. A close while parked is a trap on wake: the send can
+    // never complete, and send-on-closed is already the loud path.
+    bool behind = ch->shead != NULL;
+    while (ch->bound != 0 && ch->rhead == NULL && (ch->len >= ch->bound || behind)) {
+        neon_channel_sender me = {neon_fiber_current(), false, NULL};
+        if (ch->stail != NULL) {
+            ch->stail->next = &me;
+        } else {
+            ch->shead = &me;
+        }
+        ch->stail = &me;
+        neon_fiber_park();
+        behind = false; // woken by a receive: the opened slot is ours
+        if (me.closed) {
+            neon_release((neon_header*)ch);
+            neon_trap("channel::send: the channel was closed while this send waited");
+        }
     }
     // Invariant 2: deep-copy into the destination with allocation routed to the shared
     // heap. The destination is a parked receiver's slot when one is waiting, the ring
@@ -304,6 +354,15 @@ bool neon_channel_recv(neon_channel* ch, void* out) {
         memcpy(out, ch->buf + ch->head * sz, sz);
         ch->head = (ch->head + 1) % ch->cap;
         ch->len--;
+        if (ch->shead != NULL) {
+            // A slot opened: the first parked sender gets its turn.
+            neon_channel_sender* sndr = ch->shead;
+            ch->shead = sndr->next;
+            if (ch->shead == NULL) {
+                ch->stail = NULL;
+            }
+            neon_fiber_wake(sndr->fiber);
+        }
         got = true;
     } else if (ch->closed) {
         got = false;
@@ -335,8 +394,62 @@ void neon_channel_close(neon_channel* ch) {
         }
         ch->rhead = NULL;
         ch->rtail = NULL;
+        for (neon_channel_sender* s = ch->shead; s != NULL;) {
+            neon_channel_sender* next = s->next;
+            s->closed = true; // the woken send traps: it can never complete
+            neon_fiber_wake(s->fiber);
+            s = next;
+        }
+        ch->shead = NULL;
+        ch->stail = NULL;
     }
     neon_release((neon_header*)ch);
+}
+
+// Whether the channel has been closed. A drained-ness probe belongs to recv (its null);
+// this answers "will more values ever arrive" for a receiver whose recv came back empty.
+bool neon_channel_is_closed(neon_channel* ch) {
+    bool c = ch->closed;
+    neon_release((neon_header*)ch);
+    return c;
+}
+
+// recv with a deadline: true with a value; false when the channel closed-and-drained OR the
+// deadline passed first (the caller distinguishes with is_closed if it cares). On a timeout
+// the waiter is unlinked HERE — the wake that never came must find nothing to aim at.
+bool neon_channel_recv_timeout(neon_channel* ch, void* out, int64_t millis) {
+    bool got;
+    if (ch->len > 0 || ch->closed) {
+        return neon_channel_recv(ch, out); // a value or the drained null, no parking needed
+    }
+    neon_channel_waiter w = {neon_fiber_current(), out, false, NULL};
+    if (ch->rtail != NULL) {
+        ch->rtail->next = &w;
+    } else {
+        ch->rhead = &w;
+    }
+    ch->rtail = &w;
+    if (neon_fiber_park_deadline(millis)) {
+        got = w.delivered; // a send (true) or a close (false) won the race
+    } else {
+        // The deadline fired: pull our waiter out so a later send cannot deliver into a
+        // frame that has moved on.
+        neon_channel_waiter** link = &ch->rhead;
+        neon_channel_waiter* prev = NULL;
+        while (*link != NULL && *link != &w) {
+            prev = *link;
+            link = &(*link)->next;
+        }
+        if (*link == &w) {
+            *link = w.next;
+            if (ch->rtail == &w) {
+                ch->rtail = prev;
+            }
+        }
+        got = false;
+    }
+    neon_release((neon_header*)ch);
+    return got;
 }
 
 // The witness `copy` for a channel-handle slot: a channel is a shared-heap identity — two

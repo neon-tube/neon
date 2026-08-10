@@ -163,6 +163,7 @@ errors/try_soften_needs_null_handling.neon
 errors/try_soften_orelse.neon
 errors/try_soften_to_null.neon
 errors/uncaught_at_top_level.neon
+fibers/bounded_channel.neon
 fibers/capturing_spawn.neon
 fibers/channel_pipeline.neon
 fibers/crash_cleanup.neon

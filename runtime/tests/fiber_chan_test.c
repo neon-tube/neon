@@ -176,3 +176,78 @@ TEST(awaiting_two_tasks) {
     neon_fiber_runtime(two_tasks_parent, NULL);
     EXPECT_EQ(task_result, 9 + 16);
 }
+
+// ---- bounded channels (backpressure) ----
+
+static neon_channel* bp_ch;
+static int bp_after_send2;
+static bool bp_consumer_done;
+
+static void bp_producer(void* arg) {
+    (void)arg;
+    int64_t v = 1;
+    neon_retain((neon_header*)bp_ch);
+    neon_channel_send(bp_ch, &v); // fills the single slot
+    v = 2;
+    neon_retain((neon_header*)bp_ch);
+    neon_channel_send(bp_ch, &v); // full: PARKS until the consumer drains
+    bp_after_send2 = 1;           // reached only after the consumer made room
+}
+static void bp_consumer(void* arg) {
+    (void)arg;
+    int64_t out;
+    neon_retain((neon_header*)bp_ch);
+    bool a = neon_channel_recv(bp_ch, &out); // drains 1, wakes the parked producer
+    neon_retain((neon_header*)bp_ch);
+    bool b = neon_channel_recv(bp_ch, &out); // gets 2
+    bp_consumer_done = a && b && out == 2 && bp_after_send2 == 1;
+}
+static void bp_parent(void* arg) {
+    (void)arg;
+    neon_fiber_spawn(bp_producer, NULL);
+    neon_fiber_spawn(bp_consumer, NULL);
+}
+
+static const neon_witness bp_i64_w = {sizeof(int64_t), NULL, NULL, nt_i64_eq, nt_i64_cmp};
+
+TEST(a_full_bounded_channel_parks_the_sender) {
+    bp_ch = neon_channel_new_bounded(&bp_i64_w, 1);
+    bp_after_send2 = 0;
+    bp_consumer_done = false;
+    neon_fiber_runtime(bp_parent, NULL);
+    EXPECT(bp_consumer_done); // the second value arrived AFTER the drain unblocked the send
+    neon_release((neon_header*)bp_ch);
+}
+
+// Closing under a parked sender kills that sender (send-on-closed is a trap): the process
+// survives, the send after the park never completes, and the closer runs on.
+static neon_channel* cl2_ch;
+static int cl2_sent_all;
+static void cl2_sender(void* arg) {
+    (void)arg;
+    int64_t v = 7;
+    neon_retain((neon_header*)cl2_ch);
+    neon_channel_send(cl2_ch, &v);
+    v = 8;
+    neon_retain((neon_header*)cl2_ch);
+    neon_channel_send(cl2_ch, &v); // parks (full), then traps on wake: channel closed
+    cl2_sent_all = 1;              // must never run
+}
+static void cl2_closer(void* arg) {
+    (void)arg;
+    neon_retain((neon_header*)cl2_ch);
+    neon_channel_close(cl2_ch);
+}
+static void cl2_parent(void* arg) {
+    (void)arg;
+    neon_fiber_spawn(cl2_sender, NULL);
+    neon_fiber_spawn(cl2_closer, NULL);
+}
+
+TEST(close_kills_a_parked_sender) {
+    cl2_ch = neon_channel_new_bounded(&bp_i64_w, 1);
+    cl2_sent_all = 0;
+    neon_fiber_runtime(cl2_parent, NULL);
+    EXPECT_EQ(cl2_sent_all, 0);
+    neon_release((neon_header*)cl2_ch);
+}

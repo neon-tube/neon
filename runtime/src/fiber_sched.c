@@ -47,6 +47,7 @@
 typedef struct neon_sleeper {
     neon_fiber* fiber;
     int64_t deadline_ms; // CLOCK_MONOTONIC milliseconds
+    bool expired;        // set when the DEADLINE woke this fiber (vs an external wake)
     struct neon_sleeper* next;
 } neon_sleeper;
 
@@ -108,7 +109,10 @@ static int neon_sched_wake_due(void) {
         neon_sleeper* s = *link;
         if (s->deadline_ms <= now) {
             *link = s->next;
-            neon_fiber_wake(s->fiber);
+            s->expired = true;
+            // Enqueue directly rather than via neon_fiber_wake, whose sleeper-cancel scan
+            // would walk the list this loop is mid-way through mutating.
+            neon_sched_enqueue(s->fiber);
             continue;
         }
         int64_t left = s->deadline_ms - now;
@@ -132,10 +136,30 @@ void neon_fiber_sleep(int64_t millis) {
     }
     // +1: deadlines are whole milliseconds and `now` truncates, so without the round-up a
     // sleep could come back a fraction of a millisecond EARLY — `sleep` promises at least.
-    neon_sleeper s = {neon_fiber_current(), neon_sched_now_ms() + millis + 1, NULL};
+    neon_sleeper s = {neon_fiber_current(), neon_sched_now_ms() + millis + 1, false, NULL};
     s.next = t_sched.sleepers;
     t_sched.sleepers = &s;
     neon_fiber_park();
+}
+
+// Park with a deadline: returns true when an external neon_fiber_wake arrived first, false
+// when the deadline fired. The one primitive a timed receive needs — the waker and the
+// timer race, and whichever loses is CANCELLED (the wake pulls the sleeper off the list;
+// the caller unlinks its own waiter on a timeout), so no stale wake can reach a fiber that
+// has moved on.
+bool neon_fiber_park_deadline(int64_t millis) {
+    if (millis <= 0) {
+        return false; // an expired deadline before parking: the timeout outcome
+    }
+    neon_sleeper s = {neon_fiber_current(), neon_sched_now_ms() + millis + 1, false, NULL};
+    s.next = t_sched.sleepers;
+    t_sched.sleepers = &s;
+    neon_fiber_park();
+    if (!s.expired) {
+        // An external wake won the race; neon_fiber_wake already unlinked the sleeper.
+        return true;
+    }
+    return false;
 }
 
 // The time::sleep hook (internal.h): fiber context parks, the root context — a resource
@@ -289,6 +313,19 @@ void neon_fiber_wake(neon_fiber* f) {
     // Re-admit a parked fiber. Enqueue resets its state to READY. Safe to call from within
     // another fiber (the common case: a sender waking a blocked receiver) — it runs on the
     // same thread under the same scheduler, so there is no queue race in the M=1 build.
+    //
+    // If `f` was parked WITH a deadline, cancel the sleeper: a deadline firing later for a
+    // fiber that was woken (and may since have finished, or parked on something else
+    // entirely) would be a wake aimed at whatever that fiber is now — the stale-wake bug
+    // every timed-wait design has to close.
+    neon_sleeper** link = &t_sched.sleepers;
+    while (*link != NULL) {
+        if ((*link)->fiber == f) {
+            *link = (*link)->next;
+            break;
+        }
+        link = &(*link)->next;
+    }
     neon_sched_enqueue(f);
 }
 

@@ -34,8 +34,14 @@
 /// channel; equality is identity.
 @runtime("neon_channel") sealed opaque record Channel[T] {}
 
-/// A fresh open channel.
+/// A fresh open channel. Sends never block (the buffer grows without limit); use `bounded`
+/// when the producer must not outrun the consumer.
 @native("neon_channel_new") fn new[T]() -> Channel[T]
+
+/// A channel that holds at most `n` undelivered values: a send onto a full channel blocks
+/// THIS FIBER until a receive drains one — backpressure, so a fast producer is paced by its
+/// consumer instead of growing memory without bound. `n` must be at least 1.
+@native("neon_channel_new_bounded") fn bounded[T](n: i64) -> Channel[T]
 
 /// Send `v`: deep-copy it to the shared heap, hand it to a waiting receiver (waking it) or
 /// buffer it. Never blocks. Traps if the channel is closed.
@@ -48,5 +54,15 @@
 @native("neon_channel_recv") fn recv[T](ch: Channel[T]) -> T | null
 
 /// Close the channel: every parked receiver wakes with `null`, later receives drain the
-/// buffer then return `null`, and later sends trap. Idempotent.
+/// buffer then return `null`, and later sends trap (a send already blocked on a full
+/// bounded channel traps on wake — it can never complete). Idempotent.
 @native("neon_channel_close") fn close[T](ch: Channel[T])
+
+/// Whether the channel has been closed. A `null` from `recv` already means closed AND
+/// drained; this answers the sharper "will more values ever arrive" — after a
+/// `recv_timeout` came back `null`, say.
+@native("neon_channel_is_closed") fn is_closed[T](ch: Channel[T]) -> bool
+
+/// Receive with a deadline: a value, or `null` once the channel is closed and drained OR
+/// after `millis` with nothing arriving — `is_closed` tells the two apart when it matters.
+@native("neon_channel_recv_timeout") fn recv_timeout[T](ch: Channel[T], millis: i64) -> T | null

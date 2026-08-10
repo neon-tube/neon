@@ -399,7 +399,9 @@ fn emit_inst(out: &mut String, types: &TypeTable, f: &Func, inst: &crate::ir::ss
                 var(r),
             );
         }
-        Op::Native { symbol, args } if symbol == "neon_channel_recv" => {
+        Op::Native { symbol, args }
+            if symbol == "neon_channel_recv" || symbol == "neon_channel_recv_timeout" =>
+        {
             let Some(r) = inst.result else {
                 return;
             };
@@ -408,10 +410,14 @@ fn emit_inst(out: &mut String, types: &TypeTable, f: &Func, inst: &crate::ir::ss
             let res = f.value_repr(r).clone();
             let got = coerce_expr(types, "_crv", &e, &res);
             let none = coerce_expr(types, "((neon_unit){0})", &Repr::Null, &res);
+            let call = if symbol == "neon_channel_recv_timeout" {
+                format!("neon_channel_recv_timeout({}, &_crv, {})", var(args[0]), var(args[1]))
+            } else {
+                format!("neon_channel_recv({}, &_crv)", var(args[0]))
+            };
             let _ = writeln!(
                 out,
-                "{{ {ec} _crv; if (neon_channel_recv({}, &_crv)) {{ {} = {got}; }} else {{ {} = {none}; }} }}",
-                var(args[0]),
+                "{{ {ec} _crv; if ({call}) {{ {} = {got}; }} else {{ {} = {none}; }} }}",
                 var(r),
                 var(r),
             );
@@ -619,6 +625,7 @@ fn is_list_builder(symbol: &str) -> bool {
             // before this gate). `spawn_with`'s argument crosses by address with its
             // witness and a per-repr call shim.
             | "neon_channel_new"
+            | "neon_channel_new_bounded"
             | "neon_channel_send"
             | "neon_fiber_lang_spawn_with"
             // A task's result crosses by witness + a per-repr shim, like a spawn argument
@@ -1106,6 +1113,14 @@ fn emit_list_builder(
         "neon_channel_new" => {
             let e = chan_elem(types, f, r);
             format!("neon_channel_new({})", types.witness_ref(&e))
+        }
+        "neon_channel_new_bounded" => {
+            let e = chan_elem(types, f, r);
+            format!(
+                "neon_channel_new_bounded({}, {})",
+                types.witness_ref(&e),
+                var(args[0])
+            )
         }
         // The task carries its RESULT's witness and per-repr call shim; both are keyed by
         // the body closure's return repr, which only this emitter knows.
