@@ -1,0 +1,6 @@
+bound: true
+reply: HELLO
+reply: HELLO
+reply: HELLO
+udp: ping from-self=true
+done

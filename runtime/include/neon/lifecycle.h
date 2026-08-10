@@ -38,6 +38,10 @@ static inline void neon_str_release(neon_str s) {
 // would corrupt where loudness names the rule.
 void neon_wcopy_unsendable(const void* src, void* dst);
 
+// The witness `copy` for a closure slot: a capture-free closure is a plain function pointer
+// and copies; a capturing one traps (its environment is the env-copy table's business).
+void neon_wcopy_closure(const void* src, void* dst);
+
 // Route the AMBIENT allocation to the shared heap for the duration of a send copy: begin
 // returns the current fiber arena (may be NULL) and clears it, end restores it. Between
 // the two, every neon_alloc lands in the process slab, which any fiber may free into.

@@ -23,6 +23,7 @@
 #include "neon/list.h"
 #include "neon/map.h"
 #include "neon/math.h"
+#include "neon/net.h"
 #include "neon/os.h"
 #include "neon/portability.h"
 #include "neon/process.h"

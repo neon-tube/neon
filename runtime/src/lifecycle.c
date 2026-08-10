@@ -269,6 +269,22 @@ __attribute__((destructor)) static void neon_slab_teardown(void) {
 
 // ---- sendability helpers (see neon/core.h's witness `copy` contract) ----
 
+// A closure crossing fibers. A CAPTURE-FREE one is just a function pointer — nothing owns
+// anything, so copying it is a pointer copy and it is perfectly sendable. That is what lets
+// a named function be handed to a spawned fiber (`net::serve(listener, handle_conn)`), which
+// is the shape every server wants. A closure that CAPTURES is a different object: its
+// environment is an arena-resident tuple whose contents would have to be deep-copied, and
+// that is the env-copy table's job at a spawn boundary, not a value copy's — so it traps
+// here with the same message any unsendable value gets.
+void neon_wcopy_closure(const void* src, void* dst) {
+    const neon_closure* c = (const neon_closure*)src;
+    if (c->env != NULL) {
+        neon_trap("this closure captures values and cannot be sent between fibers "
+                  "(a named function or a capture-free lambda can)");
+    }
+    *(neon_closure*)dst = *c;
+}
+
 void neon_wcopy_unsendable(const void* src, void* dst) {
     (void)src;
     (void)dst;

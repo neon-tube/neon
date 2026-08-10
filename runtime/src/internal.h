@@ -85,6 +85,13 @@ extern _Thread_local neon_ssize (*neon_fiber_blocking_writev)(int fd, const neon
 // Linux; NULL (a plain blocking waitpid) everywhere else and off-runtime.
 extern _Thread_local void (*neon_fiber_pidwait_hook)(int64_t pid);
 
+// Wait for a descriptor to become readable (`for_write` false) or writable, parking the
+// CALLING FIBER rather than the thread. What `std::net` blocks on: every socket is
+// non-blocking underneath, so an operation that would block instead waits here and retries.
+// Returns 0 on readiness, or a negative errno. NULL off-runtime, where net.c falls back to
+// an ordinary poll(2) — which is why sockets work identically outside a fiber.
+extern _Thread_local int (*neon_fiber_readiness_hook)(int fd, bool for_write);
+
 // The trap→fiber bridge. While a fiber runs, the scheduler arms this per-thread hook; a trap
 // (bounds, arithmetic, uncaught error) then calls it INSTEAD of ending the process — the hook
 // switches control back to the scheduler, killing just that fiber (docs/design/fibers.md's

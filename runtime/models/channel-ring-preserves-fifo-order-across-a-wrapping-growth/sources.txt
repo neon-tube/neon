@@ -1,0 +1,5 @@
+# The language channel (the ring, the growth, the handle layer), the refcount pair its
+# handles and elements ride on, and the trap its allocation checks reach.
+src/fiber_chan.c
+src/lifecycle.c
+src/trap.c

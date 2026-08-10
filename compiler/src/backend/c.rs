@@ -1887,7 +1887,13 @@ fn copy_stmts(types: &TypeTable, repr: &Repr, src: &str, dst: &str, out: &mut Ve
         Repr::Runtime { c_type, .. } if c_type == "neon_task_ref" => {
             out.push(format!("neon_wcopy_task(&{src}, &{dst})"))
         }
-        Repr::Closure { .. } | Repr::Runtime { .. } => {
+        // A CAPTURE-FREE closure is a plain function pointer and crosses fine — that is what
+        // lets a named handler be handed to a spawned fiber. A capturing one traps, because
+        // its environment would have to be deep-copied and that is the env-copy table's job
+        // at a spawn boundary, not a value copy's. The test is on the value, so the runtime
+        // helper makes it.
+        Repr::Closure { .. } => out.push(format!("neon_wcopy_closure(&{src}, &{dst})")),
+        Repr::Runtime { .. } => {
             out.push("neon_wcopy_unsendable((const void*)0, (void*)0)".to_string())
         }
         Repr::Union(variants) => {
@@ -1961,7 +1967,8 @@ fn witness_copy_ref(out: &mut String, types: &TypeTable, name: &str, repr: &Repr
         Repr::Runtime { c_type, .. } if c_type == "neon_task_ref" => {
             return "neon_wcopy_task".into()
         }
-        Repr::Closure { .. } | Repr::Runtime { .. } => return "neon_wcopy_unsendable".into(),
+        Repr::Closure { .. } => return "neon_wcopy_closure".into(),
+        Repr::Runtime { .. } => return "neon_wcopy_unsendable".into(),
         _ => {}
     }
     let mut stmts = Vec::new();

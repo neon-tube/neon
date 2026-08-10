@@ -23,6 +23,7 @@ set(NEON_RT_SOURCES
     src/any.c
     src/encoding.c
     src/map.c
+    src/net.c
     src/os.c
     src/process.c
     src/random.c

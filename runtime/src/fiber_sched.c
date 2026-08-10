@@ -262,6 +262,23 @@ static neon_ssize neon_sched_uring_writev_hook(int fd, const neon_iovec* iov, in
     return neon_uring_writev(fd, iov, n);
 }
 
+// The std::net readiness hook: park this fiber until `fd` is ready. On the root context
+// there is no fiber to park, so decline and let net.c poll(2) — the same rule every other
+// hook follows.
+static int neon_sched_readiness_hook(int fd, bool for_write) {
+#if defined(NEON_FIBER_IO)
+    if (neon_fiber_current()->is_root) {
+        return 1; // "not handled": net.c falls back to poll
+    }
+    neon_fiber_io_wait(fd, for_write ? EPOLLOUT : EPOLLIN);
+    return 0;
+#else
+    (void)fd;
+    (void)for_write;
+    return 1;
+#endif
+}
+
 static void neon_fiber_uring_arm(void) {
     neon_fiber_blocking_read = neon_sched_uring_read_hook;
     neon_fiber_blocking_writev = neon_sched_uring_writev_hook;
@@ -369,6 +386,7 @@ static void neon_sched_open(bool mesh) {
     }
     neon_fiber_sleep_hook = neon_sched_sleep_hook; // time::sleep parks fibers from here on
     neon_fiber_pidwait_hook = neon_sched_pidwait_hook; // process waits park via pidfd
+    neon_fiber_readiness_hook = neon_sched_readiness_hook; // std::net parks on descriptors
     neon_fiber_timer_arm(); // THIS seat's own preemption timer
 }
 

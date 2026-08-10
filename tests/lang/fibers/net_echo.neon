@@ -1,0 +1,63 @@
+// A concurrent TCP echo server and its clients, in one program, plus a UDP round trip —
+// the shape std::net exists for. Three clients each get their own fiber; the server accepts
+// on another and hands every connection to a fiber of its own, across four OS threads. Not
+// one line of `echo` or `client` mentions concurrency: they are ordinary blocking code, and
+// the blocking parks a fiber rather than a thread.
+//
+// Port 0 everywhere, so the test never fights another process (or another copy of itself)
+// over a fixed number; the golden pins that the bound address is real rather than what it
+// is. The three replies are identical, so their order carries no information and the output
+// is deterministic however the seats interleave.
+
+use std::channel;
+use std::fiber;
+use std::io;
+use std::net;
+use std::string;
+
+fn echo(c: net::TcpStream) {
+    let msg = try! net::read(c, 4096);
+    while msg != "" {
+        try! net::write(c, string::to_upper(msg));
+        msg = try! net::read(c, 4096);
+    };
+    try! net::close(c);
+}
+
+fn client(pair: (str, channel::Channel[str])) {
+    let (addr, done) = pair;
+    let c = try! net::connect(addr);
+    try! net::write(c, "hello");
+    let reply = try! net::read(c, 4096);
+    try! net::close(c);
+    channel::send(done, reply);
+}
+
+fn main() {
+    let l = try! net::listen("127.0.0.1:0");
+    let addr = try! net::local_addr(l);
+    io::println("bound: #{string::starts_with(addr, "127.0.0.1:")}");
+
+    fiber::runtime_threads(4, () => {
+        let done: channel::Channel[str] = channel::new();
+        let i = 0;
+        while i < 3 {
+            fiber::spawn_with(client, (addr, done));
+            i = i + 1;
+        };
+        try! net::serve_n(l, echo, 3);
+        let n = 0;
+        while n < 3 {
+            io::println("reply: #{channel::recv(done) orelse "?"}");
+            n = n + 1;
+        };
+    });
+
+    // UDP: bind, send to self, receive — the same park-the-fiber discipline.
+    let u = try! net::udp_bind("127.0.0.1:0");
+    let uaddr = try! net::udp_local_addr(u);
+    try! net::send_to(u, uaddr, "ping");
+    let (data, from) = try! net::recv_from(u, 1024);
+    io::println("udp: #{data} from-self=#{from == uaddr}");
+    io::println("done");
+}
