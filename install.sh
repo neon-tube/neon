@@ -207,11 +207,15 @@ if [ "$BUILD_FROM_SOURCE" = true ]; then
     fi
     info "C compilers found:${CYAN}$HAVE${NC} (one runtime archive set per family)"
 
-    info "Building the Neon toolchain (cargo build --release)..."
+    info "Building the Neon toolchain (rt.sh + cargo build --release + bundle.sh)..."
+    # The same sequence `cargo make release` runs, as the underlying scripts so the
+    # installer needs no cargo-make bootstrap: archives -> cargo -> staged sysroot.
+    bash tools/rt.sh
     cargo build --release
+    bash tools/bundle.sh release
 
-    # cli/build.rs staged the complete sysroot next to the binary; install is a copy of
-    # that staging, nothing scavenged out of cargo's build directories. (`install_tree`
+    # tools/bundle.sh staged the complete sysroot next to the binary; install is a copy
+    # of that staging, nothing scavenged out of cargo's build directories. (`install_tree`
     # finds the binary at the tree's root there, where a release asset has it in bin/.)
     install_tree "target/release"
     install_lsp_from_source

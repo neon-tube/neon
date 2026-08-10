@@ -1,0 +1,4 @@
+-fsanitize=address,undefined
+-O1
+-g
+-fno-omit-frame-pointer

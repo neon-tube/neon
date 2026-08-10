@@ -41,22 +41,22 @@ jobs:
       - name: Cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Install nextest
-        uses: taiki-e/install-action@nextest
+      - name: Install nextest + cargo-make
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest,cargo-make
 
-      # cmake + gcc drive the runtime's CMake build (via neon-runtime's build script) and
-      # link the corpus programs. Both are preinstalled on ubuntu-latest; assert it rather
-      # than discover it missing three minutes into a build.
+      # cmake + gcc build the runtime archives (the `rt` task) and link the corpus
+      # programs. Both are preinstalled on ubuntu-latest; assert it rather than discover
+      # it missing three minutes into a build.
       - name: Check C toolchain
         run: cc --version && cmake --version
 
-      # Builds the whole workspace, which builds the runtime archives as a side effect.
-      - name: Build
-        run: cargo build --workspace --locked
-
-      # The compiler's own tests plus the runtime-linking corpus.
+      # The menu: rt (archives) -> cargo build -> bundle -> nextest. The archives are
+      # produced by the top-level make, never by a build script; `runtime/build.rs` only
+      # verifies they are present and fresh.
       - name: Test
-        run: cargo nextest run --workspace --locked
+        run: cargo make nextest
 
   # The C runtime's own tinyunit unit tests, under ASan/UBSan. Separate from the cargo run
   # because they are a CMake build gated behind `-DNEON_RT_TESTS=ON` (off in every normal
@@ -68,39 +68,25 @@ jobs:
       - uses: actions/checkout@v4
 
       # cmake, gcc are preinstalled on ubuntu-latest; git (present) is needed for the
-      # FetchContent pull of tinyunit.
+      # FetchContent pulls (tinyunit, llhttp).
       - name: Check C toolchain
         run: cmake --version && gcc --version
 
-      - name: Configure
-        run: >
-          cmake -S runtime -B runtime/build-tests
-          -DNEON_RT_TESTS=ON
-          -DCMAKE_BUILD_TYPE=Debug
-          -DCMAKE_C_COMPILER=gcc
-
-      - name: Build
-        run: cmake --build runtime/build-tests --target neon_rt_tests
+      - name: Install cargo-make
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-make
 
       # tinyunit forks per test: a leak (LeakSanitizer at exit) or a UB finding
-      # (-fno-sanitize-recover) makes that test's child exit non-zero, which fails the run;
-      # ctest surfaces the non-zero exit. `-V` prints tinyunit's per-test list on every run,
-      # not just failures, so a green CI log still shows what ran.
-      - name: Test
-        run: ctest --test-dir runtime/build-tests -V
+      # (-fno-sanitize-recover) makes that test's child exit non-zero, which fails the
+      # run. The task runs the suite under BOTH IO engines.
+      - name: C unit tests
+        run: cargo make rt-tests
 
-      # The portability smoke test, here as well as in the Windows job. Its assertions hold
-      # on every platform, and running it where the archive is built anyway means it cannot
-      # rot between Windows runs — a file whose only driver is the job you are least likely
-      # to read is a file nobody notices has stopped compiling.
+      # The portability smoke, here as well as in the Windows job — flags come from
+      # runtime/flags/, the same authority the archives are built with.
       - name: Portability smoke test
-        run: |
-          cmake -S runtime -B runtime/build-archive -DCMAKE_BUILD_TYPE=None -DCMAKE_C_COMPILER=gcc
-          cmake --build runtime/build-archive --target neon_rt
-          gcc -std=c11 -Wall -Wextra -Werror -O2 runtime/tests/portability_smoke.c \
-            runtime/build-archive/libneon_rt.a -Iruntime/include -o smoke -lm
-          ./smoke > out.txt
-          test "$(wc -c < out.txt)" = "3" || { echo "stdout was newline-translated"; od -c out.txt; exit 1; }
+        run: cargo make smoke
 
   # The C runtime on Windows. Two toolchains, because they answer different questions and
   # only one of them can answer both.

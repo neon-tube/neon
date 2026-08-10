@@ -1,0 +1,127 @@
+# The top-level menu. Everything is driven from here: `cargo make <task>`.
+#
+# The shape (docs/design/toolchain.md, ruled 2026-08-10): cargo-make owns the
+# SEQUENCE, cmake owns the C, cargo owns the Rust, and every hand-off is an explicit
+# artifact. The runtime archives are produced exactly once, by `rt`, into
+# `target/neon-rt/<flavor>/`; `runtime/build.rs` is a locator that refuses stale or
+# missing archives by naming the task to run. Nothing in any build.rs invokes a tool.
+#
+#     cargo make build       dev build + staged sysroot (target/debug is runnable)
+#     cargo make release     the same, optimized (target/release)
+#     cargo make test        the full Rust suite (corpus included) against fresh archives
+#     cargo make rt-tests    the C unit suite under ASan/UBSan, both IO engines
+#     cargo make models      the CBMC models (verify-all)
+#     cargo make smoke       the portability smoke against a plain archive
+#     cargo make dist        an installable prefix at target/dist
+#     cargo make ci          what CI runs on Linux
+#
+# Rust-only inner loop: after one `cargo make rt`, plain `cargo build`/`cargo test` and
+# rust-analyzer work directly — the locator only re-checks freshness. Touch runtime C and
+# the locator will stop you until `cargo make rt` runs again.
+
+[config]
+skip_core_tasks = true
+default_to_workspace = false
+
+[tasks.default]
+alias = "build"
+
+# ---- the C runtime archives: the single producer ----
+
+[tasks.rt]
+description = "Build the runtime archives (per compiler family) into target/neon-rt"
+command = "bash"
+args = ["tools/rt.sh"]
+
+# ---- Rust builds + the staged sysroot ----
+
+[tasks.cargo-build]
+private = true
+command = "cargo"
+args = ["build", "--workspace", "--locked"]
+dependencies = ["rt"]
+
+[tasks.cargo-build-release]
+private = true
+command = "cargo"
+args = ["build", "--workspace", "--locked", "--release"]
+dependencies = ["rt"]
+
+[tasks.build]
+description = "Dev build with a runnable sysroot at target/debug"
+dependencies = ["cargo-build"]
+command = "bash"
+args = ["tools/bundle.sh", "debug"]
+
+[tasks.release]
+description = "Release build with a runnable sysroot at target/release"
+dependencies = ["cargo-build-release"]
+command = "bash"
+args = ["tools/bundle.sh", "release"]
+
+# ---- tests ----
+
+[tasks.test]
+description = "The whole Rust suite (unit + corpus + cli), archives fresh, sysroot staged"
+dependencies = ["release"]
+command = "cargo"
+args = ["test", "--workspace", "--locked", "--release"]
+
+[tasks.nextest]
+description = "As `test`, via cargo-nextest (what CI uses)"
+dependencies = ["build"]
+command = "cargo"
+args = ["nextest", "run", "--workspace", "--locked"]
+
+[tasks.rt-tests]
+description = "The C unit suite (ASan/UBSan), run under BOTH IO engines"
+script = '''
+#!/usr/bin/env bash
+set -euo pipefail
+cmake -S runtime -B runtime/build-tests -DNEON_RT_TESTS=ON -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=gcc
+cmake --build runtime/build-tests --target neon_rt_tests --parallel
+ctest --test-dir runtime/build-tests -V
+NEON_IO=epoll runtime/build-tests/neon_rt_tests
+'''
+
+[tasks.models]
+description = "The CBMC models: verify-all"
+script = '''
+#!/usr/bin/env bash
+set -euo pipefail
+cmake -S runtime/models -B runtime/models/build
+cmake --build runtime/models/build --target verify-all
+'''
+
+[tasks.smoke]
+description = "Portability smoke: link a plain archive, assert stdout byte-exactness"
+script = '''
+#!/usr/bin/env bash
+set -euo pipefail
+cmake -S runtime -B runtime/build-archive -DCMAKE_BUILD_TYPE=None -DCMAKE_C_COMPILER=gcc
+cmake --build runtime/build-archive --target neon_rt --parallel
+# Flags from the one authority the archives themselves are built with.
+mapfile -t warn < runtime/flags/warn.txt
+gcc -std=c11 "${warn[@]}" -O2 runtime/tests/portability_smoke.c \
+    runtime/build-archive/libneon_rt.a -Iruntime/include -o target/smoke -lm
+target/smoke > target/smoke-out.txt
+test "$(wc -c < target/smoke-out.txt)" = "3" || { echo "stdout was newline-translated"; od -c target/smoke-out.txt; exit 1; }
+'''
+
+# ---- packaging ----
+
+[tasks.dist]
+description = "Assemble an installable prefix at target/dist from a release build"
+dependencies = ["release"]
+command = "bash"
+args = ["tools/dist.sh"]
+
+# ---- housekeeping ----
+
+[tasks.fmt]
+command = "cargo"
+args = ["fmt", "--all"]
+
+[tasks.ci]
+description = "The Linux CI surface: Rust suite, C suite, smoke"
+dependencies = ["nextest", "rt-tests", "smoke"]

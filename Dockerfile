@@ -16,22 +16,21 @@
 FROM rust:slim-bookworm AS build
 
 # The rust image already carries gcc + libc6-dev for building C-dependency crates; cmake is
-# what it lacks, and the runtime is a CMake project driven by neon-runtime's build script.
+# what it lacks — the runtime archives are a CMake project built by tools/rt.sh.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends cmake make \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
 COPY . .
-RUN cargo build --release --locked
-
-# `cargo build` stages the sysroot (include/, lib/<flavor>/, stdlib/) next to the binaries
-# in target/release. Rearrange into an install prefix: bin/ beside lib/, include/, stdlib/,
-# which is the layout `Sysroot::find` resolves from the binary's parent directory.
+# The same sequence `cargo make dist` runs, invoked as the underlying scripts so the image
+# build does not have to bootstrap cargo-make: archives -> cargo -> sysroot -> prefix.
+# tools/dist.sh is the one definition of the install layout.
 RUN set -eux; \
-    mkdir -p /out/bin; \
-    cp target/release/neon /out/bin/; \
-    cp -r target/release/include target/release/lib target/release/stdlib /out/
+    bash tools/rt.sh; \
+    cargo build --release --locked; \
+    bash tools/bundle.sh release; \
+    bash tools/dist.sh /out
 
 # ---- final ----
 FROM debian:bookworm-slim

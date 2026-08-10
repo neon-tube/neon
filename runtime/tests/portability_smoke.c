@@ -37,7 +37,7 @@
 // The element witness for a `List[str]` of literals. Literals have no owner, so
 // retain/release are no-ops and NULL is the honest spelling; nothing here is compared or
 // ordered.
-static const neon_witness str_w = {sizeof(neon_str), NULL, NULL, NULL, NULL};
+static const neon_witness str_w = {sizeof(neon_str), NULL, NULL, NULL, NULL, NULL};
 
 // The bytes written, and what they must still weigh on disk.
 #define SMOKE_BODY_LEN 8

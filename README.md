@@ -17,13 +17,21 @@ fn main() {
 
 ## Building
 
-Needs a Rust toolchain and a C compiler (`cc`, or set `$CC`).
+Needs a Rust toolchain, a C compiler (`gcc` and/or `clang`), cmake, and
+[cargo-make](https://github.com/sagiegurari/cargo-make) (`cargo install cargo-make`).
+Everything is driven from the top-level menu:
 
 ```sh
-cargo build --release        # builds the compiler, CLI, LSP, and runtime
+cargo make release           # runtime archives + compiler + CLI + staged sysroot
+cargo make test              # the full test suite
+cargo make                   # (or any task) — see Makefile.toml for the menu
 ```
 
 The CLI is `target/release/neon`. Run `neon doctor` to check the toolchain is wired up.
+
+Rust-only inner loop: after one `cargo make rt`, plain `cargo build` / `cargo test` and
+rust-analyzer work directly — the runtime crate's build script only *locates* the
+prebuilt C archives, and refuses stale ones by naming the task to rerun.
 
 ## Using it
 

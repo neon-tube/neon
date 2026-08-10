@@ -551,6 +551,21 @@ fn find_manifest(near: &Path) -> Result<Option<TomlFile>> {
 mod tests {
     use super::*;
 
+    /// `SANITIZED_VARIANT_COVERS` and `runtime/flags/san.txt` are two spellings of one
+    /// fact — what the prebuilt sanitized archive is instrumented with. The archive is
+    /// built from the file; the CLI's refuse-or-link decision reads the constant. This
+    /// makes their agreement mechanical instead of a "keep in step with" comment.
+    #[test]
+    fn sanitized_covers_matches_the_flags_file() {
+        let san = include_str!("../../runtime/flags/san.txt");
+        let line = san
+            .lines()
+            .find(|l| l.starts_with("-fsanitize="))
+            .expect("runtime/flags/san.txt names the sanitizers");
+        let listed: Vec<&str> = line.trim_start_matches("-fsanitize=").split(',').collect();
+        assert_eq!(listed, SANITIZED_VARIANT_COVERS);
+    }
+
     fn cfg(mode: Mode, stacktrace: bool) -> BuildConfig {
         BuildConfig {
             cc: "cc".into(),

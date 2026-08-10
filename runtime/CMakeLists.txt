@@ -161,10 +161,15 @@ if(MSVC)
     # coverage, and a report of "clean under the sanitized runtime" means less here.
     set(NEON_RT_FLAGS_SAN /fsanitize=address /Od /Zi)
 else()
-    set(NEON_RT_WARN -Wall -Wextra -Werror)
-    set(NEON_RT_FLAGS_RELEASE -O3 ${NEON_RT_LTO} ${NEON_RT_ARCH})
-    set(NEON_RT_FLAGS_DEBUG -O0 -g -DNEON_DEBUG)
-    set(NEON_RT_FLAGS_SAN -fsanitize=address,undefined -O1 -g -fno-omit-frame-pointer)
+    # The GNU-family flags live in `flags/*.txt` — one flag per line, one authority —
+    # shared with the Makefile.toml smoke task and asserted against the CLI's
+    # sanitizer-coverage constant by a cli test. Probed flags (LTO, -march=native) are
+    # appended here, after their probes, and deliberately never enter those files.
+    file(STRINGS flags/warn.txt NEON_RT_WARN)
+    file(STRINGS flags/release.txt NEON_RT_FLAGS_RELEASE)
+    file(STRINGS flags/debug.txt NEON_RT_FLAGS_DEBUG)
+    file(STRINGS flags/san.txt NEON_RT_FLAGS_SAN)
+    list(APPEND NEON_RT_FLAGS_RELEASE ${NEON_RT_LTO} ${NEON_RT_ARCH})
 endif()
 
 # The sanitized variant is the one shape a compiler can flatly decline: mingw-w64's gcc

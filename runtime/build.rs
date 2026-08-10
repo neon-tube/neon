@@ -1,77 +1,87 @@
-use std::path::PathBuf;
+//! LOCATOR, not builder. The archives are produced by `cargo make rt` (tools/rt.sh, a
+//! plain cmake invocation per compiler family) into `target/neon-rt/<flavor>/`; this
+//! script only verifies they are present and FRESH, and publishes their location. It
+//! never invokes anything — which is what makes `cargo check` and rust-analyzer instant,
+//! where the previous version configured and built two cmake trees on every rerun.
+//!
+//! Freshness is a refusal, not a rebuild: an archive older than the C sources it was
+//! built from does not get silently used (a runtime change measured as having no effect,
+//! because it was never linked, once cost an afternoon) — the build stops and names the
+//! command. The one thing this script must therefore never do is guess.
+
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 fn main() {
+    // Rerun when the C changes (to re-check freshness), when a stamp changes (a new `rt`
+    // run), or when the override moves.
     println!("cargo:rerun-if-changed=src");
     println!("cargo:rerun-if-changed=include");
     println!("cargo:rerun-if-changed=CMakeLists.txt");
+    println!("cargo:rerun-if-changed=flags");
+    println!("cargo:rerun-if-env-changed=NEON_RT_DIST");
 
-    // One full archive set per compiler *family*, under `<OUT_DIR>/<flavor>/lib/`. The
-    // motivation is measured, not theoretical: LTO bitcode does not cross families, so a
-    // clang-linked program against gcc-built fat objects silently falls back to the
-    // machine code and loses every cross-archive inline — 2.8s vs 0.7s on the n-body
-    // benchmark — and the sanitizer runtimes do not mix across families at all. The CLI
-    // picks the flavor matching the `cc` doing the final link
-    // (`cli/src/buildcfg.rs::cc_flavor`).
-    //
-    // Identification is by `--version`, not by name: on macOS `gcc` *is* clang, and
-    // building the same compiler twice under two names would stage a lie. A family whose
-    // compiler is absent is skipped — the CLI reports a missing flavor at link time,
-    // naming what this machine had when the toolchain was built.
-    // `-march=native` in the runtime archives is opt-in and only sound from source: this
-    // build script runs on the machine that will run the program, so tuning for its CPU is
-    // safe here in a way it never is for a shipped archive. `NEON_RT_NATIVE` in the
-    // environment turns it on; the release CI that packages downloadable archives leaves it
-    // unset. `CMakeLists.txt` still probes that the compiler accepts the flag.
-    //
-    // Set-but-falsey is off, not on: `NEON_RT_NATIVE=0` reads as "no" everywhere else, and
-    // a build flag that ignores its own value is how someone ends up shipping an archive
-    // they thought they had turned off.
-    println!("cargo:rerun-if-env-changed=NEON_RT_NATIVE");
-    let native = std::env::var("NEON_RT_NATIVE").is_ok_and(|v| {
-        !matches!(
-            v.trim().to_ascii_lowercase().as_str(),
-            "" | "0" | "no" | "off" | "false"
-        )
-    });
+    let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    let dist = std::env::var("NEON_RT_DIST")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| manifest.join("../target/neon-rt"));
 
-    let out = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
-    let mut built: Vec<&str> = Vec::new();
+    let newest_source = newest_mtime(&manifest.join("src"))
+        .max(newest_mtime(&manifest.join("include")))
+        .max(mtime(&manifest.join("CMakeLists.txt")))
+        .max(newest_mtime(&manifest.join("flags")));
+
+    let mut found: Vec<String> = Vec::new();
     for flavor in ["gcc", "clang"] {
-        if !identifies_as(flavor, flavor) {
+        let dir = dist.join(flavor);
+        let stamp = dir.join(".stamp");
+        if !dir.join("lib/libneon_rt.a").is_file() {
             continue;
         }
-        // See the previous revision's note, still load-bearing: the runtime's variants
-        // carry hand-picked flags (`CMakeLists.txt`), so cmake must not inject its own.
-        cmake::Config::new(".")
-            .no_default_flags(true)
-            .define("CMAKE_BUILD_TYPE", "None")
-            .define("CMAKE_C_COMPILER", flavor)
-            .define("NEON_RT_NATIVE", if native { "ON" } else { "OFF" })
-            .out_dir(out.join(flavor))
-            .build();
-        built.push(flavor);
+        println!("cargo:rerun-if-changed={}", stamp.display());
+        if mtime(&stamp) < newest_source {
+            panic!(
+                "the {flavor} runtime archives under {} are STALE (the C sources are \
+                 newer). Run `cargo make rt` — this build will not link an archive that \
+                 no longer matches the source.",
+                dir.display()
+            );
+        }
+        found.push(flavor.to_string());
     }
     assert!(
-        !built.is_empty(),
-        "neither `gcc` nor `clang` is on PATH; the runtime cannot be built"
+        !found.is_empty(),
+        "no runtime archives under {} — run `cargo make rt` first (the archives are \
+         built by the top-level cargo-make, not by cargo)",
+        dist.display()
     );
 
     // `links = "neon_rt"` turns these into DEP_NEON_RT_{ROOT,INCLUDE} for dependents'
-    // build scripts. ROOT holds one subdirectory per flavor built; the headers are
+    // build scripts. ROOT holds one subdirectory per flavor staged; the headers are
     // compiler-independent, so INCLUDE points into whichever flavor exists.
-    println!("cargo:root={}", out.display());
-    println!("cargo:include={}/{}/include", out.display(), built[0]);
+    println!("cargo:root={}", dist.display());
+    println!("cargo:include={}/{}/include", dist.display(), found[0]);
 }
 
-/// Whether running `cc --version` says the compiler is the named family.
-fn identifies_as(cc: &str, family: &str) -> bool {
-    let Ok(output) = std::process::Command::new(cc).arg("--version").output() else {
-        return false;
+fn mtime(p: &Path) -> SystemTime {
+    std::fs::metadata(p)
+        .and_then(|m| m.modified())
+        .unwrap_or(SystemTime::UNIX_EPOCH)
+}
+
+fn newest_mtime(dir: &Path) -> SystemTime {
+    let mut newest = SystemTime::UNIX_EPOCH;
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return newest;
     };
-    let text = String::from_utf8_lossy(&output.stdout).to_lowercase();
-    match family {
-        "clang" => text.contains("clang"),
-        // gcc must positively identify, not merely "not clang": on macOS `gcc` is clang.
-        _ => text.contains("gcc") && !text.contains("clang"),
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let t = if path.is_dir() {
+            newest_mtime(&path)
+        } else {
+            mtime(&path)
+        };
+        newest = newest.max(t);
     }
+    newest
 }

@@ -9,9 +9,9 @@ chumsky = { version = "0.13.0" }
 unicode-ident = "1.0.24"
 unicode-normalization = "0.1.25"
 # Nothing in the compiler calls into this: `neon-runtime` is an empty Rust crate whose
-# build script drives cmake. It is a dependency so that cargo builds the runtime archives
-# before this crate's tests run, and so that `build.rs` receives `DEP_NEON_RT_ROOT` (the
-# archives' path) — which `tests/backend_run.rs` needs to link a *sanitized* runtime.
+# build script LOCATES the prebuilt runtime archives (`cargo make rt` produces them) and
+# refuses stale ones. It is a dependency so that `build.rs` receives `DEP_NEON_RT_ROOT`
+# (the archives' path) — which `tests/backend_run.rs` needs to link a *sanitized* runtime.
 # Declared here rather than under `[build-dependencies]` because cargo publishes a
 # `links` package's metadata to the build scripts of its normal dependents only.
 neon-runtime = { path = "../runtime" }

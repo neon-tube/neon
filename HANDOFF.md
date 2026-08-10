@@ -49,17 +49,18 @@ fiber-local ("pinned") resources are unshipped until a type needs one.
   cross-context scenarios stand on fiber-object identities.
 - **llhttp**: MERGED (bcea3e0) — CMake FetchContent, pinned `release/v9.4.3` by sha256,
   gated behind NEON_RT_TESTS so `cargo build` never fetches; smoke test in the C suite.
-- **Toolchain redesign** (user-requested): a full build-graph map, ranked smells, and a
-  recommended redesign (cc-crate compile of the runtime from build.rs; CMake retreats to
-  tests/models/MSVC; shared flag files; 6-step migration) was produced by a Plan agent —
-  the report is in the session transcript and should be re-summarized to the user before
-  implementing. NOTE: it recommends vendoring llhttp's generated C over FetchContent for
-  cargo-path hermeticity, which CONTRADICTS the user's explicit FetchContent instruction —
-  surface that tension, don't silently pick.
+- **Toolchain**: REDESIGNED AND LANDED (the user ruled for the PEERS model, orchestrator
+  load-bearing). `docs/design/toolchain.md` is the record: cargo-make sequences cmake and
+  cargo (`Makefile.toml` is the menu), `tools/{rt,bundle,dist}.sh` are the steps,
+  `runtime/build.rs` is a stale-refusing locator, `cli/build.rs` is deleted, GNU flags
+  live in `runtime/flags/` (CMake + smoke + a cli unit test read them), CI's Linux jobs
+  call recipes, Dockerfile/install.sh call the scripts. Drive everything via
+  `cargo make <task>`; after one `cargo make rt`, bare cargo works for Rust-only loops.
 
 ## Tracked next tasks
 
-1. Toolchain redesign (llhttp merged; see tension note above).
+1. `std::http` on llhttp (the natural next feature; llhttp reaching runtime C is a
+   deliberate vendoring decision when it happens — docs/design/toolchain.md, last bullet).
 2. Known checker gaps found while testing, worth fixing:
    - `expr is T as x` fails on nullable runtime records and on any `T | null` with a
      qualified generic (`is` on a BINDING works — see `resource_through_channel.neon`'s

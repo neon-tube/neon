@@ -35,19 +35,20 @@ jobs:
       - name: Cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Build release
-        run: cargo build --release --locked
+      - name: Install cargo-make
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-make
 
-      # `cargo build` already staged include/, lib/, stdlib/ next to the binaries. Assemble
-      # a prefix: bin/ beside them, which is what `Sysroot::find` resolves from bin/neon's
-      # parent. (`neon-lsp` ships from its own repo now, so it is not bundled here.)
-      - name: Stage prefix
+      # The menu end to end: rt (archives) -> cargo build --release -> bundle -> dist.
+      # tools/dist.sh is the one definition of the install layout, shared with the
+      # Dockerfile. (`neon-lsp` ships from its own repo now, so it is not bundled here.)
+      - name: Build and stage prefix
         run: |
           set -eux
           prefix=neon-x86_64-linux
-          mkdir -p "$prefix/bin"
-          cp target/release/neon "$prefix/bin/"
-          cp -r target/release/include target/release/lib target/release/stdlib "$prefix/"
+          cargo make dist
+          mv target/dist "$prefix"
           tar -czf "$prefix.tar.gz" "$prefix"
 
       # A shipped toolchain that only breaks when a user runs it is worse than a failed
