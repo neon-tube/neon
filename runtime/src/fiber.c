@@ -121,6 +121,8 @@ static void neon_fiber_switch(neon_fiber* cur, neon_fiber* next, bool exiting) {
 #if NEON_ASAN
     __sanitizer_start_switch_fiber(exiting ? NULL : &cur->fake_stack, next->stack_bottom,
                                    next->stack_size);
+#else
+    (void)exiting; // only ASan's fake-stack bookkeeping cares
 #endif
     t_current = next;
     neon_current_arena = next->arena; // route neon_alloc/free to the fiber we're entering

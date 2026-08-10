@@ -142,14 +142,6 @@ void neon_fiber_lang_runtime_threads(int64_t threads, neon_closure body);
 // `fiber::spawn(body)` — enqueue `body` as a fiber under the running scheduler.
 void neon_fiber_lang_spawn(neon_closure body);
 
-// `fiber::spawn_with(body, arg)` — a capture-free body plus one argument, deep-copied to the
-// shared heap so it may cross into the new fiber. `shim` is emitted per argument repr (only
-// codegen knows the C type the closure call needs): it loads the value from `arg` and calls
-// the closure with it by value.
-typedef void (*neon_spawn_shim)(neon_closure f, const void* arg);
-void neon_fiber_lang_spawn_with(neon_closure body, const void* arg, const neon_witness* w,
-                                neon_spawn_shim shim);
-
 // ---- safepoint preemption (src/fiber_sched.c) ----
 //
 // Cooperative scheduling starves on a fiber that never yields. Codegen emits a call to

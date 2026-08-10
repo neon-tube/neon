@@ -14,7 +14,7 @@ fn main() {
     let outside = sys::io_engine();
     // A real engine, and the same one a running fiber sees.
     io::println("engine is real: #{outside == :io_uring or outside == :epoll}");
-    fiber::runtime(() => {
+    fiber::runtime_on(1, () => {
         io::println("engine agrees inside: #{sys::io_engine() == outside}");
     });
 }

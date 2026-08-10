@@ -15,7 +15,7 @@ fn compute_name() -> str {
 fn square() -> i64 { 21 * 2 }
 
 fn main() {
-    fiber::runtime(() => {
+    fiber::runtime_on(1, () => {
         let a = task::spawn(compute_name);
         let b = task::spawn(square);
         io::println("spawned both");

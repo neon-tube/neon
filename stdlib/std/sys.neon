@@ -7,6 +7,11 @@
 //         io::println("io engine: #{sys::io_engine()}");
 //     }
 
+/// How many hardware threads this process may actually run on — affinity-aware, so a
+/// container or a `taskset` that restricts the process is honoured rather than ignored.
+/// At least 1. This is what `fiber::runtime` sizes its scheduler to by default.
+@native("neon_os_cpu_count") fn core_count() -> i64
+
 /// Whether this build has fibers. True on x86-64 SysV Unix, where the swap gadget and the
 /// scheduler are compiled in; false elsewhere, and there `std::fiber`'s functions are not
 /// available to call.

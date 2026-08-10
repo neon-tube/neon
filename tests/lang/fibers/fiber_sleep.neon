@@ -19,7 +19,7 @@ fn quick() {
 
 fn main() {
     let began = time::monotonic();
-    fiber::runtime(() => {
+    fiber::runtime_on(1, () => {
         fiber::spawn(slow);  // queued first, wakes last
         fiber::spawn(quick);
         io::println("boss: spawned both");

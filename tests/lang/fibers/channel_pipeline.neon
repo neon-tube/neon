@@ -28,10 +28,10 @@ fn consumer(ch: channel::Channel[str]) {
 }
 
 fn main() {
-    fiber::runtime(() => {
+    fiber::runtime_on(1, () => {
         let ch: channel::Channel[str] = channel::new();
-        fiber::spawn_with(consumer, ch);  // parks first
-        fiber::spawn_with(producer, ch);  // wakes it, then buffers, then closes
+        fiber::spawn(() => consumer(ch));  // parks first
+        fiber::spawn(() => producer(ch));  // wakes it, then buffers, then closes
     });
     io::println("done");
 }

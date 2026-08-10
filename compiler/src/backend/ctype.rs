@@ -170,10 +170,9 @@ impl TypeTable {
                     t.intern_env_drop(env);
                 }
             }
-            // `fiber::spawn_with` crosses its argument by address with a witness, keyed by
-            // the body closure's parameter repr. `register` already interned it for every
-            // boxable repr; this covers the one it skips (`any`), whose witness the arm
-            // still needs.
+            // A task's result crosses by address with a witness, keyed by the body
+            // closure's RETURN repr. `register` already interned it for every boxable
+            // repr; this covers the one it skips (`any`), whose witness the arm needs.
             for b in &f.blocks {
                 for inst in &b.insts {
                     let crate::ir::ssa::Op::Native { symbol, args } = &inst.op else {
@@ -186,15 +185,6 @@ impl TypeTable {
                         t.fiber_program = true;
                     }
                     match symbol.as_str() {
-                        "neon_fiber_lang_spawn_with" => {
-                            if let Repr::Closure { params, .. } =
-                                t.resolve(f.value_repr(args[0])).clone()
-                            {
-                                if params.len() == 1 {
-                                    t.intern_witness(&params[0]);
-                                }
-                            }
-                        }
                         // A task's result witness is keyed by the body's return repr.
                         "neon_task_lang_spawn" => {
                             if let Repr::Closure { params, ret, .. } =

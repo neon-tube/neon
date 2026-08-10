@@ -26,7 +26,7 @@ fn pong() {
 
 fn main() {
     let label = "captured at the root";
-    fiber::runtime(() => {
+    fiber::runtime_on(1, () => {
         io::println(label);  // a capture made at the fiber::runtime call site — allowed
         fiber::spawn(ping);
         fiber::spawn(pong);

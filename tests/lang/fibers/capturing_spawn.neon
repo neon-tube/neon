@@ -11,7 +11,7 @@ use std::io;
 use std::string;
 
 fn main() {
-    fiber::runtime(() => {
+    fiber::runtime_on(1, () => {
         let ch: channel::Channel[str] = channel::new();
         let greeting = string::concat("hello from ", "a capture");
         fiber::spawn(() => {

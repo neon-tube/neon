@@ -1,3 +1,7 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE // sched_getaffinity, for neon_os_cpu_count
+#endif
+
 // The process interface: the arguments the OS handed the program, its environment, and
 // the way out. `std::os` assembles these pieces — the natives hand over one value at a
 // time because building a `List[str]` needs an element witness only compiled code has
@@ -15,6 +19,11 @@
 // COPIED — `getenv`'s buffer has no such promise.
 
 #include "libneon_rt.h"
+
+#if defined(__linux__)
+#include <sched.h>
+#endif
+#include <unistd.h>
 
 #include "internal.h"
 #include "platform.h"
@@ -268,4 +277,29 @@ uint64_t neon_sys_io_engine(void) {
 #else
     return neon_sys_atom("none");
 #endif
+}
+
+// The number of hardware threads available to this process — what `fiber::runtime` sizes
+// its scheduler to by default. The AFFINITY count, not the machine's, so a container or a
+// `taskset` that restricts us is honoured rather than ignored (a scheduler with more seats
+// than it may run on just adds contention). Falls back to the online count, then to 1: a
+// wrong answer here should cost a little parallelism, never a failure to start.
+int64_t neon_os_cpu_count(void) {
+#if defined(__linux__)
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    if (sched_getaffinity(0, sizeof(set), &set) == 0) {
+        int n = CPU_COUNT(&set);
+        if (n > 0) {
+            return n;
+        }
+    }
+#endif
+#if defined(_SC_NPROCESSORS_ONLN)
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    if (n > 0) {
+        return (int64_t)n;
+    }
+#endif
+    return 1;
 }

@@ -9,7 +9,7 @@ use std::fiber;
 use std::io;
 
 fn main() {
-    fiber::runtime(() => {
+    fiber::runtime_on(1, () => {
         // Backpressure: capacity 1, so the producer's second send PARKS until the consumer
         // drains — the prints interleave strictly instead of the producer running ahead.
         let ch: channel::Channel[i64] = channel::bounded(1);

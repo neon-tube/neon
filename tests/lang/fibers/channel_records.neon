@@ -28,10 +28,10 @@ fn worker(p: Ports) {
 }
 
 fn main() {
-    fiber::runtime(() => {
+    fiber::runtime_on(1, () => {
         let jobs: channel::Channel[Job] = channel::new();
         let replies: channel::Channel[str] = channel::new();
-        fiber::spawn_with(worker, Ports { jobs: jobs, replies: replies });
+        fiber::spawn(() => worker(Ports { jobs: jobs, replies: replies }));
         // A map that has seen a delete carries a tombstone; the deep copy must skip it and
         // still carry the live entries — the ctrl-byte discipline, exercised.
         let env = map::new() |> map::set("mode", "fast") |> map::set("junk", "x");

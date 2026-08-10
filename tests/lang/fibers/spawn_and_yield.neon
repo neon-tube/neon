@@ -14,7 +14,7 @@ fn worker() {
 }
 
 fn main() {
-    fiber::runtime(() => {
+    fiber::runtime_on(1, () => {
         io::println("boss: begin");
         fiber::spawn(worker);  // a named function used as a `() -> ()` value
         fiber::spawn(() => {

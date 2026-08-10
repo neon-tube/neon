@@ -23,7 +23,7 @@ fn survivor() {
 }
 
 fn main() {
-    fiber::runtime(() => {
+    fiber::runtime_on(1, () => {
         fiber::spawn(doomed);
         fiber::spawn(survivor);
     });

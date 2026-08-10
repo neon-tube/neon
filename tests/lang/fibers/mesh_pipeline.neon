@@ -8,7 +8,7 @@ use std::string;
 // order is forced by the DATA (each stage consumes in channel order), so it is
 // deterministic no matter how the seats interleave.
 fn main() {
-    fiber::runtime_threads(2, () => {
+    fiber::runtime_on(2, () => {
         let raw: channel::Channel[i64] = channel::new();
         let cooked: channel::Channel[str] = channel::new();
         fiber::spawn(() => {

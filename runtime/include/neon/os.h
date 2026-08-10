@@ -36,6 +36,9 @@ neon_str neon_io_read_all_stdin(void);
 
 // ---- runtime introspection (std::sys) ----
 
+// Hardware threads available to this process (affinity-aware), at least 1.
+int64_t neon_os_cpu_count(void);
+
 // Whether this build has the fiber machinery compiled in (x86-64 SysV Unix today).
 bool neon_sys_has_fibers(void);
 

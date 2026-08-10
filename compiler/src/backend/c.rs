@@ -626,12 +626,10 @@ fn is_list_builder(symbol: &str) -> bool {
             | "neon_resource_new"
             // The channel constructor takes the element witness; a send passes the element
             // by address (a `T | null`-returning recv is statement-shaped and handled
-            // before this gate). `spawn_with`'s argument crosses by address with its
-            // witness and a per-repr call shim.
+            // before this gate).
             | "neon_channel_new"
             | "neon_channel_new_bounded"
             | "neon_channel_send"
-            | "neon_fiber_lang_spawn_with"
             // A task's result crosses by witness + a per-repr shim, like a spawn argument
             // in the other direction (await is statement-shaped, handled before this gate).
             | "neon_task_lang_spawn"
@@ -646,12 +644,6 @@ fn chan_elem(types: &TypeTable, f: &Func, v: Value) -> Repr {
         Repr::Runtime { args, .. } if args.len() == 1 => args[0].clone(),
         r => ice(r, "channel operation on a non-channel"),
     }
-}
-
-/// The per-repr `fiber::spawn_with` shim name: the only code that knows the argument's C
-/// type and so the only code that can pass it to the body closure by value.
-fn spawn_shim_name(types: &TypeTable, t: &Repr) -> String {
-    format!("nspawn_{}", types.witness_ref(t).trim_start_matches('&'))
 }
 
 /// The per-repr `task::spawn` shim name: calls the zero-arg body and writes the result —
@@ -1004,24 +996,6 @@ fn emit_list_builder(
             "neon_channel_send({}, {});",
             var(args[0]),
             addr_of(types, f, args[1], &e)
-        );
-        return;
-    }
-    // spawn_with returns nothing. The argument's canonical repr is the BODY CLOSURE's
-    // parameter (the argument itself may be narrower); its witness carries the deep copy
-    // that moves it to the shared heap, and the shim is the per-repr call adapter.
-    if symbol == "neon_fiber_lang_spawn_with" {
-        let t = match types.resolve(f.value_repr(args[0])) {
-            Repr::Closure { params, .. } if params.len() == 1 => params[0].clone(),
-            r => ice(r, "spawn_with body is not a one-argument closure"),
-        };
-        let _ = writeln!(
-            out,
-            "neon_fiber_lang_spawn_with({}, {}, {}, {});",
-            var(args[0]),
-            addr_of(types, f, args[1], &t),
-            types.witness_ref(&t),
-            spawn_shim_name(types, &t)
         );
         return;
     }
@@ -2027,11 +2001,10 @@ fn emit_boxed_copy_defs(out: &mut String, types: &TypeTable) {
     }
 }
 
-/// One `fiber::spawn_with` call shim per argument repr used in the program: load the value
-/// from its cell bytes and call the body closure with it BY VALUE — only this emitted code
-/// knows the C type that call needs. The map-updater pattern, for a spawn.
+/// One `task::spawn` call shim per RESULT repr in the program: call the zero-argument body
+/// closure and write its result — whose C type only this emitted code knows — into the
+/// task's slot. The map-updater pattern, for a task.
 fn emit_spawn_shims(out: &mut String, types: &TypeTable, program: &Program) {
-    let mut args_seen: std::collections::BTreeMap<String, Repr> = std::collections::BTreeMap::new();
     let mut rets_seen: std::collections::BTreeMap<String, Repr> = std::collections::BTreeMap::new();
     for f in &program.funcs {
         for b in &f.blocks {
@@ -2039,34 +2012,14 @@ fn emit_spawn_shims(out: &mut String, types: &TypeTable, program: &Program) {
                 let Op::Native { symbol, args } = &inst.op else {
                     continue;
                 };
-                match symbol.as_str() {
-                    "neon_fiber_lang_spawn_with" => {
-                        let t = match types.resolve(f.value_repr(args[0])) {
-                            Repr::Closure { params, .. } if params.len() == 1 => params[0].clone(),
-                            r => ice(r, "spawn_with body is not a one-argument closure"),
-                        };
-                        args_seen.insert(spawn_shim_name(types, &t), t);
-                    }
-                    "neon_task_lang_spawn" => {
-                        let t = task_ret(types, f, args[0]);
-                        rets_seen.insert(task_shim_name(types, &t), t);
-                    }
-                    _ => {}
+                if symbol != "neon_task_lang_spawn" {
+                    continue;
                 }
+                let t = task_ret(types, f, args[0]);
+                rets_seen.insert(task_shim_name(types, &t), t);
             }
         }
     }
-    for (name, t) in &args_seen {
-        let tc = types.c_type(t);
-        let _ = writeln!(
-            out,
-            // `{tc} const*`, not `const {tc}*`: for a pointer element the prefix form
-            // would qualify the POINTEE and the load would discard const — the same
-            // qualifier-position rule the witness eq casts follow.
-            "static void {name}(neon_closure f, const void* in) {{ {tc} v = *({tc} const*)in; ((void(*)(neon_header*, {tc}))f.fn)(f.env, v); }}",
-        );
-    }
-    // The task shim runs the other direction: call the zero-arg body, write its result out.
     for (name, t) in &rets_seen {
         let tc = types.c_type(t);
         let _ = writeln!(
@@ -2074,7 +2027,7 @@ fn emit_spawn_shims(out: &mut String, types: &TypeTable, program: &Program) {
             "static void {name}(neon_closure f, void* out) {{ *({tc}*)out = (({tc}(*)(neon_header*))f.fn)(f.env); }}",
         );
     }
-    if !args_seen.is_empty() || !rets_seen.is_empty() {
+    if !rets_seen.is_empty() {
         out.push('\n');
     }
 }

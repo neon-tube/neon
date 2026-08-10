@@ -1,8 +1,8 @@
 // Channels: how fibers talk (docs/design/fibers.md). A channel carries VALUES between
 // fibers — each send deep-copies the value to the shared heap, so what the receiver gets
 // owes nothing to the sender's own memory and outlives the sender entirely. The channel
-// itself is a shared handle: pass it to a spawned fiber (`fiber::spawn_with`) and both
-// sides speak through the same one.
+// itself is a shared handle: a spawned fiber that captures one speaks through the same
+// channel, not a copy of it.
 //
 //     fn consumer(ch: Channel[i64]) {
 //         while channel::recv(ch) is i64 as n {
@@ -13,7 +13,7 @@
 //     fn main() {
 //         fiber::runtime(() => {
 //             let ch: Channel[i64] = channel::new();
-//             fiber::spawn_with(consumer, ch);
+//             fiber::spawn(() => consumer(ch));
 //             channel::send(ch, 1);
 //             channel::send(ch, 2);
 //             channel::close(ch);

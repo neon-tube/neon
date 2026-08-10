@@ -1,53 +1,41 @@
-// Sockets — TCP and UDP.
+// Sockets — `net::tcp` and `net::udp`.
 //
-// The point of this module, and the reason it exists on top of fibers: **an ordinary
-// blocking call is the concurrent one.** `net::read` blocks its caller and nothing else. On
-// a fiber that means the fiber parks and its thread goes on serving every other connection;
-// on `main` it means an ordinary blocking read. There is no `async`, no colour, and no
-// second copy of the API for the concurrent case — the same four lines are a toy client and
-// the inner loop of a server.
+// The point of this module, and the reason it sits on top of fibers: **an ordinary blocking
+// call is the concurrent one.** `tcp::read` blocks its caller and nothing else. On a fiber
+// that means the fiber parks and its thread goes on serving every other connection; on
+// `main` it means an ordinary blocking read. There is no `async`, no colour, and no second
+// copy of the API for the concurrent case — the same few lines are a toy client and the
+// inner loop of a server.
 //
-//     fn handle(c: net::TcpStream) {
-//         let msg = try! net::read(c, 4096);
-//         try! net::write(c, "you said: #{msg}");
-//         try! net::close(c);
+//     fn echo(c: tcp::Stream) {
+//         let msg = try! tcp::read(c, 4096);
+//         while msg != "" {
+//             try! tcp::write(c, msg);
+//             msg = try! tcp::read(c, 4096);
+//         };
 //     }
 //
 //     fn main() {
-//         let l = try! net::listen("127.0.0.1:8080");
-//         fiber::runtime_threads(4, () => { try! net::serve(l, handle) });
+//         let l = try! tcp::listen(":8080");
+//         fiber::runtime(() => { try! tcp::serve(l, echo) });
 //     }
 //
-// That server handles connections concurrently across four OS threads, and nothing in
-// `handle` knows it.
+// That server handles connections concurrently across every core, and nothing in `echo`
+// knows it.
 //
 // An ADDRESS is text: `host:port`, with an IPv6 host in brackets — `"[::1]:8080"` — so the
 // colon before the port is unambiguous. A name works wherever a literal does (resolution is
-// `getaddrinfo`), and an empty host in `listen` means every interface: `":8080"`. Bind port
-// `0` and ask `local_addr` to learn which port you got, which is how a test avoids fighting
-// over a fixed one.
+// `getaddrinfo`), an empty host means every interface (`":8080"`), and port `0` takes any
+// free port, which `local_addr` then reports — how a test avoids fighting over a fixed one.
 //
-// A handle is a `Resource`, so a socket closes when the last reference dies even if a
-// `throw` skipped the explicit `close` — and if a fiber CRASHES holding one, the teardown
-// walk runs the cleanup. Use-after-close is a diagnosable error rather than a read of a
-// descriptor number that has since been reused.
+// A handle is a `Resource`: the socket closes when the last reference dies even if a `throw`
+// skipped the explicit `close`, and if a fiber CRASHES holding one the teardown walk closes
+// it. Use-after-close is a diagnosable error rather than a read of a descriptor number that
+// has since been reused.
 
 use std::fiber;
 use std::resource;
 use std::io::IoError;
-
-/// A listening socket.
-sealed record TcpListener { r: resource::Resource[i64, IoError] }
-
-/// One connection.
-sealed record TcpStream { r: resource::Resource[i64, IoError] }
-
-/// A datagram socket. Connectionless: every send names its destination, every receive
-/// reports its sender.
-sealed record UdpSocket { r: resource::Resource[i64, IoError] }
-
-/// Which half of a connection to shut down.
-type Half = :read | :write | :both
 
 internal mod raw {
     @native("neon_net_listen") fn listen(addr: str, backlog: i64) -> i64
@@ -66,250 +54,255 @@ internal mod raw {
     /// The datagram, the sender's address, and the status.
     @native("neon_net_udp_recv_from") fn udp_recv_from(fd: i64, max: i64) -> (str, str, i64)
     @native("neon_io_strerror") fn strerror(code: i64) -> str
-}
 
-fn fail(code: i64, what: str) throws IoError -> null {
-    throw IoError { message: "#{what}: #{raw::strerror(code)}" };
-}
-
-// ---- guards ----
-//
-// Each handle carries the descriptor in a `Resource` whose cleanup closes it. Built here in
-// one place so no path can produce a handle that closes differently — or not at all.
-
-internal mod guard {
-    fn stream(fd: i64) -> TcpStream {
-        TcpStream { r: resource::new(fd, (d: i64) => { raw::close(d); null }) }
-    }
-    fn listener(fd: i64) -> TcpListener {
-        TcpListener { r: resource::new(fd, (d: i64) => { raw::close(d); null }) }
-    }
-    fn socket(fd: i64) -> UdpSocket {
-        UdpSocket { r: resource::new(fd, (d: i64) => { raw::close(d); null }) }
+    fn fail(code: i64, what: str) throws IoError -> null {
+        throw IoError { message: "#{what}: #{strerror(code)}" };
     }
 }
 
-fn listener_fd(l: TcpListener) throws IoError -> i64 {
-    try resource::get(l.r) catch (e) { throw IoError { message: "this listener is closed" } }
-}
+/// Connection-oriented sockets.
+mod tcp {
+    /// A listening socket.
+    sealed record Listener { r: resource::Resource[i64, IoError] }
 
-fn stream_fd(s: TcpStream) throws IoError -> i64 {
-    try resource::get(s.r) catch (e) { throw IoError { message: "this socket is closed" } }
-}
+    /// One connection.
+    sealed record Stream { r: resource::Resource[i64, IoError] }
 
-fn socket_fd(u: UdpSocket) throws IoError -> i64 {
-    try resource::get(u.r) catch (e) { throw IoError { message: "this socket is closed" } }
-}
+    /// Which half of a connection to shut down.
+    type Half = :read | :write | :both
 
-// ---- TCP ----
+    // The guards live in one place so no path can produce a handle that closes differently
+    // — or not at all.
+    internal mod guard {
+        fn listener(fd: i64) -> Listener {
+            Listener { r: resource::new(fd, (d: i64) => { raw::close(d); null }) }
+        }
+        fn stream(fd: i64) -> Stream {
+            Stream { r: resource::new(fd, (d: i64) => { raw::close(d); null }) }
+        }
+    }
 
-/// Bind and listen. `":8080"` listens on every interface; `"127.0.0.1:0"` takes any free
-/// port, which `local_addr` will then report.
-fn listen(addr: str) throws IoError -> TcpListener {
-    let fd = raw::listen(addr, 128);
-    if fd < 0 {
-        try fail(fd, "cannot listen on `#{addr}`");
-    };
-    guard::listener(fd)
-}
+    fn listener_fd(l: Listener) throws IoError -> i64 {
+        try resource::get(l.r) catch (e) {
+            throw IoError { message: "this listener is closed" }
+        }
+    }
 
-/// Wait for a connection. Blocks this fiber, not the thread.
-fn accept(l: TcpListener) throws IoError -> TcpStream {
-    let (fd, peer) = raw::accept(try listener_fd(l));
-    if fd < 0 {
-        try fail(fd, "cannot accept");
-    };
-    guard::stream(fd)
-}
+    fn stream_fd(s: Stream) throws IoError -> i64 {
+        try resource::get(s.r) catch (e) {
+            throw IoError { message: "this socket is closed" }
+        }
+    }
 
-/// As `accept`, also reporting who connected.
-fn accept_from(l: TcpListener) throws IoError -> (TcpStream, str) {
-    let (fd, peer) = raw::accept(try listener_fd(l));
-    if fd < 0 {
-        try fail(fd, "cannot accept");
-    };
-    (guard::stream(fd), peer)
-}
-
-/// Connect, waiting for the handshake.
-fn connect(addr: str) throws IoError -> TcpStream {
-    let fd = raw::connect(addr);
-    if fd < 0 {
-        try fail(fd, "cannot connect to `#{addr}`");
-    };
-    guard::stream(fd)
-}
-
-/// Up to `max` bytes, waiting until some arrive. An EMPTY result means the peer closed its
-/// end — the loop condition for reading a stream to its end:
-///
-///     let chunk = try net::read(s, 4096);
-///     while chunk != "" { ...; chunk = try net::read(s, 4096); }
-fn read(s: TcpStream, max: i64) throws IoError -> str {
-    let (data, code) = raw::read(try stream_fd(s), max);
-    if code < 0 {
-        try fail(code, "cannot read");
-    };
-    data
-}
-
-/// Every byte, waiting whenever the socket buffer fills. A stream socket may accept a write
-/// only partially; this loops until it is all out, so a short write is never the caller's
-/// problem.
-fn write(s: TcpStream, data: str) throws IoError -> null {
-    let code = raw::write(try stream_fd(s), [data]);
-    if code < 0 {
-        try fail(code, "cannot write");
-    };
-    null
-}
-
-/// As `write`, for several pieces at once — they reach the kernel without being
-/// concatenated first.
-fn write_all(s: TcpStream, parts: List[str]) throws IoError -> null {
-    let code = raw::write(try stream_fd(s), parts);
-    if code < 0 {
-        try fail(code, "cannot write");
-    };
-    null
-}
-
-/// Close now rather than when the handle dies. Optional — the guard closes it either way —
-/// and closing twice is a no-op.
-fn close(s: TcpStream) throws IoError -> null {
-    try resource::release(s.r);
-    null
-}
-
-fn close_listener(l: TcpListener) throws IoError -> null {
-    try resource::release(l.r);
-    null
-}
-
-/// Half-close: `:write` says "I have sent everything" while leaving this side able to read
-/// the reply, which is how a request/response exchange over a stream ends without ambiguity.
-fn shutdown(s: TcpStream, half: Half) throws IoError -> null {
-    let how = if half == :read { 0 } else if half == :write { 1 } else { 2 };
-    let code = raw::shutdown(try stream_fd(s), how);
-    if code < 0 {
-        try fail(code, "cannot shut down");
-    };
-    null
-}
-
-/// The address this socket is bound to — how a listener on port `0` learns its port.
-fn local_addr(l: TcpListener) throws IoError -> str {
-    let (addr, code) = raw::local_addr(try listener_fd(l));
-    if code < 0 {
-        try fail(code, "cannot read the local address");
-    };
-    addr
-}
-
-fn stream_local_addr(s: TcpStream) throws IoError -> str {
-    let (addr, code) = raw::local_addr(try stream_fd(s));
-    if code < 0 {
-        try fail(code, "cannot read the local address");
-    };
-    addr
-}
-
-/// Nagle off: send small writes immediately instead of waiting to coalesce them. What a
-/// request/response protocol wants; a bulk transfer is better off without it.
-fn set_nodelay(s: TcpStream, on: bool) throws IoError -> null {
-    let code = raw::set_nodelay(try stream_fd(s), on);
-    if code < 0 {
-        try fail(code, "cannot set nodelay");
-    };
-    null
-}
-
-// ---- serving ----
-
-/// Accept forever, running `handler` on its own fiber per connection. The shape of every
-/// server: one fiber per connection, so a slow client blocks only itself, and under
-/// `fiber::runtime_threads` the connections spread across threads.
-///
-/// `handler` must be a NAMED function (or a capture-free lambda) — it crosses to each new
-/// fiber, and a closure carrying captured state cannot. Give a handler its state through a
-/// channel it also receives, or make the state a module-level `const`.
-///
-/// The descriptor is handed over as a number and re-wrapped INSIDE the new fiber, so the
-/// guard that closes it belongs to the fiber that uses it: if that fiber crashes, its
-/// teardown closes the connection. Returns only on an accept error.
-/// Never returns normally: it accepts until the listener fails, and reports that failure by
-/// throwing. `never` is the honest return type — a caller cannot write code after it that
-/// runs, and the checker knows.
-fn serve(l: TcpListener, handler: (TcpStream) -> ()) throws IoError -> never {
-    try serve_n(l, handler, -1);
-    throw IoError { message: "unreachable: serve_n returned with an unbounded count" }
-}
-
-/// As `serve`, stopping after `count` connections — a negative count means forever, which
-/// is what `serve` passes. Bounded serving is what a test wants (accept exactly what it
-/// will connect, then let the runtime drain), and what a program wants when the number of
-/// clients is known.
-fn serve_n(l: TcpListener, handler: (TcpStream) -> (), count: i64) throws IoError -> null {
-    let fd = try listener_fd(l);
-    let served = 0;
-    while count < 0 or served < count {
-        let (conn, peer) = raw::accept(fd);
-        if conn < 0 {
-            try fail(conn, "cannot accept");
+    /// Bind and listen. `":8080"` listens on every interface; `"127.0.0.1:0"` takes any free
+    /// port, which `local_addr` will then report.
+    fn listen(addr: str) throws IoError -> Listener {
+        let fd = raw::listen(addr, 128);
+        if fd < 0 {
+            try raw::fail(fd, "cannot listen on `#{addr}`");
         };
-        // The descriptor crosses as a NUMBER and the guard is built inside the new fiber, so
-        // the resource that closes this connection belongs to the fiber that uses it — if
-        // that fiber crashes, its teardown closes the socket.
-        fiber::spawn_with((pair: (i64, (TcpStream) -> ())) => {
-            let (d, h) = pair;
-            h(guard::stream(d));
-        }, (conn, handler));
-        served = served + 1;
-    };
-    null
+        guard::listener(fd)
+    }
+
+    /// Wait for a connection. Blocks this fiber, not the thread.
+    fn accept(l: Listener) throws IoError -> Stream {
+        let (fd, peer) = raw::accept(try listener_fd(l));
+        if fd < 0 {
+            try raw::fail(fd, "cannot accept");
+        };
+        guard::stream(fd)
+    }
+
+    /// As `accept`, also reporting who connected.
+    fn accept_from(l: Listener) throws IoError -> (Stream, str) {
+        let (fd, peer) = raw::accept(try listener_fd(l));
+        if fd < 0 {
+            try raw::fail(fd, "cannot accept");
+        };
+        (guard::stream(fd), peer)
+    }
+
+    /// Connect, waiting for the handshake.
+    fn connect(addr: str) throws IoError -> Stream {
+        let fd = raw::connect(addr);
+        if fd < 0 {
+            try raw::fail(fd, "cannot connect to `#{addr}`");
+        };
+        guard::stream(fd)
+    }
+
+    /// Up to `max` bytes, waiting until some arrive. An EMPTY result means the peer closed
+    /// its end — the loop condition for reading a stream to its end:
+    ///
+    ///     let chunk = try tcp::read(s, 4096);
+    ///     while chunk != "" { ...; chunk = try tcp::read(s, 4096); }
+    fn read(s: Stream, max: i64) throws IoError -> str {
+        let (data, code) = raw::read(try stream_fd(s), max);
+        if code < 0 {
+            try raw::fail(code, "cannot read");
+        };
+        data
+    }
+
+    /// Every byte, waiting whenever the socket buffer fills. A stream socket may accept a
+    /// write only partially; this loops until it is all out, so a short write is never the
+    /// caller's problem.
+    fn write(s: Stream, data: str) throws IoError -> null {
+        let code = raw::write(try stream_fd(s), [data]);
+        if code < 0 {
+            try raw::fail(code, "cannot write");
+        };
+        null
+    }
+
+    /// As `write`, for several pieces at once — they reach the kernel without being
+    /// concatenated first.
+    fn write_all(s: Stream, parts: List[str]) throws IoError -> null {
+        let code = raw::write(try stream_fd(s), parts);
+        if code < 0 {
+            try raw::fail(code, "cannot write");
+        };
+        null
+    }
+
+    /// Close now rather than when the handle dies. Optional — the guard closes it either
+    /// way — and closing twice is a no-op.
+    fn close(s: Stream) throws IoError -> null {
+        try resource::release(s.r);
+        null
+    }
+
+    fn close_listener(l: Listener) throws IoError -> null {
+        try resource::release(l.r);
+        null
+    }
+
+    /// Half-close: `:write` says "I have sent everything" while leaving this side able to
+    /// read the reply, which is how a request/response exchange over a stream ends without
+    /// ambiguity.
+    fn shutdown(s: Stream, half: Half) throws IoError -> null {
+        let how = if half == :read { 0 } else if half == :write { 1 } else { 2 };
+        let code = raw::shutdown(try stream_fd(s), how);
+        if code < 0 {
+            try raw::fail(code, "cannot shut down");
+        };
+        null
+    }
+
+    /// The address a listener is bound to — how one on port `0` learns its port.
+    fn local_addr(l: Listener) throws IoError -> str {
+        let (addr, code) = raw::local_addr(try listener_fd(l));
+        if code < 0 {
+            try raw::fail(code, "cannot read the local address");
+        };
+        addr
+    }
+
+    /// The local address of a connection.
+    fn stream_addr(s: Stream) throws IoError -> str {
+        let (addr, code) = raw::local_addr(try stream_fd(s));
+        if code < 0 {
+            try raw::fail(code, "cannot read the local address");
+        };
+        addr
+    }
+
+    /// Nagle off: send small writes immediately instead of waiting to coalesce them. What a
+    /// request/response protocol wants; a bulk transfer is better off without it.
+    fn set_nodelay(s: Stream, on: bool) throws IoError -> null {
+        let code = raw::set_nodelay(try stream_fd(s), on);
+        if code < 0 {
+            try raw::fail(code, "cannot set nodelay");
+        };
+        null
+    }
+
+    /// Accept forever, running `handler` on its own fiber per connection — the shape of
+    /// every server, so that a slow client blocks only itself. Returns only by throwing,
+    /// which is why its return type is `never`.
+    ///
+    /// Two things this does that a hand-written accept loop currently cannot, and they are
+    /// the reason it exists rather than being an example in this comment:
+    ///
+    ///   * `handler` must be a NAMED function or a capture-free lambda, because it crosses
+    ///     to each new fiber. A handler needing state should receive it over a channel.
+    ///   * the descriptor is handed over as a NUMBER and the guard rebuilt inside the new
+    ///     fiber, so the resource that closes a connection belongs to the fiber that uses
+    ///     it — a crashed handler still closes its socket. A `Stream` cannot itself cross
+    ///     fibers (it holds a Resource, and resources do not cross yet), which is exactly
+    ///     the limitation this works around; when resources become movable this becomes an
+    ///     ordinary loop anyone can write, and `serve` becomes a three-line convenience.
+    fn serve(l: Listener, handler: (Stream) -> ()) throws IoError -> never {
+        let fd = try listener_fd(l);
+        while true {
+            let (conn, peer) = raw::accept(fd);
+            if conn < 0 {
+                try raw::fail(conn, "cannot accept");
+            };
+            fiber::spawn(() => { handler(guard::stream(conn)); });
+        };
+        throw IoError { message: "unreachable: the accept loop ended without failing" }
+    }
 }
 
-// ---- UDP ----
+/// Datagram sockets. Connectionless: every send names its destination, every receive
+/// reports its sender.
+mod udp {
+    sealed record Socket { r: resource::Resource[i64, IoError] }
 
-/// Bind a datagram socket. `":9000"` binds every interface; `"127.0.0.1:0"` takes any port.
-fn udp_bind(addr: str) throws IoError -> UdpSocket {
-    let fd = raw::udp_bind(addr);
-    if fd < 0 {
-        try fail(fd, "cannot bind `#{addr}`");
-    };
-    guard::socket(fd)
-}
+    internal mod guard {
+        fn socket(fd: i64) -> Socket {
+            Socket { r: resource::new(fd, (d: i64) => { raw::close(d); null }) }
+        }
+    }
 
-/// One datagram to `addr`. Returns the bytes sent — a datagram goes whole or not at all,
-/// so there is no partial-send loop to write.
-fn send_to(u: UdpSocket, addr: str, data: str) throws IoError -> i64 {
-    let n = raw::udp_send_to(try socket_fd(u), addr, data);
-    if n < 0 {
-        try fail(n, "cannot send to `#{addr}`");
-    };
-    n
-}
+    fn socket_fd(u: Socket) throws IoError -> i64 {
+        try resource::get(u.r) catch (e) {
+            throw IoError { message: "this socket is closed" }
+        }
+    }
 
-/// One datagram and its sender's address, waiting for one to arrive. A datagram longer than
-/// `max` is TRUNCATED and the rest discarded — that is UDP's semantics, so size the buffer
-/// for the largest message the protocol allows.
-fn recv_from(u: UdpSocket, max: i64) throws IoError -> (str, str) {
-    let (data, peer, code) = raw::udp_recv_from(try socket_fd(u), max);
-    if code < 0 {
-        try fail(code, "cannot receive");
-    };
-    (data, peer)
-}
+    /// Bind a datagram socket. `":9000"` binds every interface; `"127.0.0.1:0"` takes any
+    /// free port.
+    fn bind(addr: str) throws IoError -> Socket {
+        let fd = raw::udp_bind(addr);
+        if fd < 0 {
+            try raw::fail(fd, "cannot bind `#{addr}`");
+        };
+        guard::socket(fd)
+    }
 
-fn close_udp(u: UdpSocket) throws IoError -> null {
-    try resource::release(u.r);
-    null
-}
+    /// One datagram to `addr`. Returns the bytes sent — a datagram goes whole or not at
+    /// all, so there is no partial-send loop to write.
+    fn send_to(u: Socket, addr: str, data: str) throws IoError -> i64 {
+        let n = raw::udp_send_to(try socket_fd(u), addr, data);
+        if n < 0 {
+            try raw::fail(n, "cannot send to `#{addr}`");
+        };
+        n
+    }
 
-fn udp_local_addr(u: UdpSocket) throws IoError -> str {
-    let (addr, code) = raw::local_addr(try socket_fd(u));
-    if code < 0 {
-        try fail(code, "cannot read the local address");
-    };
-    addr
+    /// One datagram and its sender's address, waiting for one to arrive. A datagram longer
+    /// than `max` is TRUNCATED and the rest discarded — that is UDP's semantics, so size the
+    /// buffer for the largest message the protocol allows.
+    fn recv_from(u: Socket, max: i64) throws IoError -> (str, str) {
+        let (data, peer, code) = raw::udp_recv_from(try socket_fd(u), max);
+        if code < 0 {
+            try raw::fail(code, "cannot receive");
+        };
+        (data, peer)
+    }
+
+    fn close(u: Socket) throws IoError -> null {
+        try resource::release(u.r);
+        null
+    }
+
+    fn local_addr(u: Socket) throws IoError -> str {
+        let (addr, code) = raw::local_addr(try socket_fd(u));
+        if code < 0 {
+            try raw::fail(code, "cannot read the local address");
+        };
+        addr
+    }
 }

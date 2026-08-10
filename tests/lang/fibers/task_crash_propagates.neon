@@ -13,7 +13,7 @@ fn crashes() -> i64 {
 }
 
 fn main() {
-    fiber::runtime(() => {
+    fiber::runtime_on(1, () => {
         let t = task::spawn(crashes);
         fiber::spawn(() => {
             io::println("#{task::await(t)}");  // dies HERE, cleanly

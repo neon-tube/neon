@@ -21,7 +21,7 @@ fn sibling() {
 }
 
 fn main() {
-    fiber::runtime(() => {
+    fiber::runtime_on(1, () => {
         fiber::spawn(spinner);
         fiber::spawn(sibling);
     });
