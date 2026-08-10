@@ -35,6 +35,11 @@ pub struct TypeTable {
     list_convs: RefCell<BTreeMap<String, (Repr, Repr)>>,
     /// The same, for `Map`, keyed by shim name and holding `(src, tgt)` map reprs.
     map_convs: RefCell<BTreeMap<String, (Repr, Repr)>>,
+    /// Whether this program touches the fiber runtime at all (any `neon_fiber_*`,
+    /// `neon_channel_*` or `neon_task_lang_*` native). Loop back-edges emit a preemption
+    /// safepoint only when it does, so a program with no fibers is byte-identical to what
+    /// it was before fibers existed.
+    pub fiber_program: bool,
     /// Every recursive type, paired with its unfolding. A back-edge names a type without
     /// describing it, so laying one out or refcounting it means resolving through here.
     recursive: HashMap<TyId, Repr>,
@@ -144,6 +149,7 @@ impl TypeTable {
             key_witness_defs: Vec::new(),
             list_convs: RefCell::new(BTreeMap::new()),
             map_convs: RefCell::new(BTreeMap::new()),
+            fiber_program: false,
         };
         for f in &program.funcs {
             t.register(&f.ret);
@@ -173,6 +179,12 @@ impl TypeTable {
                     let crate::ir::ssa::Op::Native { symbol, args } = &inst.op else {
                         continue;
                     };
+                    if symbol.starts_with("neon_fiber_")
+                        || symbol.starts_with("neon_channel_")
+                        || symbol.starts_with("neon_task_lang_")
+                    {
+                        t.fiber_program = true;
+                    }
                     match symbol.as_str() {
                         "neon_fiber_lang_spawn_with" => {
                             if let Repr::Closure { params, .. } =

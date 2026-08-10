@@ -1,0 +1,29 @@
+// Timer-driven preemption through emitted safepoints: the spinner is queued FIRST and never
+// yields voluntarily — its loop just counts. Without preemption it would run to completion
+// before the sibling ever printed; with the 10ms timer and the safepoint at the loop's
+// back-edge, it is preempted within its first quantum and the sibling's line lands first.
+// The margin is wide (the loop runs hundreds of quanta, more under sanitizers), so the
+// order is stable.
+
+use std::fiber;
+use std::io;
+
+fn spinner() {
+    let i = 0;
+    while i < 200000000 {
+        i = i + 1;
+    }
+    io::println("spinner: done");
+}
+
+fn sibling() {
+    io::println("sibling: ran");
+}
+
+fn main() {
+    fiber::runtime(() => {
+        fiber::spawn(spinner);
+        fiber::spawn(sibling);
+    });
+    io::println("done");
+}

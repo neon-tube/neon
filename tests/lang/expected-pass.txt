@@ -165,6 +165,7 @@ errors/uncaught_at_top_level.neon
 fibers/channel_pipeline.neon
 fibers/channel_records.neon
 fibers/interleave_and_capture.neon
+fibers/preemption.neon
 fibers/spawn_and_yield.neon
 fibers/task_await.neon
 functions/declaration.neon

@@ -344,7 +344,7 @@ fn emit_block(out: &mut String, types: &TypeTable, f: &Func, b: &Block) {
     for inst in &b.insts {
         emit_inst(out, types, f, inst);
     }
-    emit_term(out, types, f, &b.term);
+    emit_term(out, types, f, b.id.0, &b.term);
 }
 
 /// Emit one instruction. Most ops are a single expression assigned to their result; the
@@ -2052,7 +2052,7 @@ fn emit_witness_fn(
 /// which tag of the result union they inject into. A `throw` in a function that declares
 /// no `throws` has no such union to return through, so it can only panic — that is an
 /// error escaping `main`, not an unhandled case.
-fn emit_term(out: &mut String, types: &TypeTable, f: &Func, term: &Term) {
+fn emit_term(out: &mut String, types: &TypeTable, f: &Func, cur: u32, term: &Term) {
     match term {
         // A throwing function returns a tagged result: variant 0 is the value, 1 the error.
         Term::Ret(v) if f.throws.is_some() => {
@@ -2091,23 +2091,23 @@ fn emit_term(out: &mut String, types: &TypeTable, f: &Func, term: &Term) {
             "codegen: `Term::Throw` in a function with no throws slot; \
              `throw_or_escape` cannot produce this"
         ),
-        Term::Jump(t) => emit_jump(out, types, f, t),
+        Term::Jump(t) => emit_jump(out, types, f, cur, t),
         Term::Branch { cond, then, els } => {
             let _ = writeln!(out, "if ({}) {{", var(*cond));
-            emit_jump(out, types, f, then);
+            emit_jump(out, types, f, cur, then);
             out.push_str("} else {\n");
-            emit_jump(out, types, f, els);
+            emit_jump(out, types, f, cur, els);
             out.push_str("}\n");
         }
         Term::Switch { on, arms, default } => {
             let _ = writeln!(out, "switch ({}) {{", var(*on));
             for (k, t) in arms {
                 let _ = writeln!(out, "case {}: {{", switch_key(k));
-                emit_jump(out, types, f, t);
+                emit_jump(out, types, f, cur, t);
                 out.push_str("}\n");
             }
             out.push_str("default: {\n");
-            emit_jump(out, types, f, default);
+            emit_jump(out, types, f, cur, default);
             out.push_str("}\n    }\n");
         }
         Term::Unreachable => out.push_str("neon_unreachable();\n"),
@@ -2116,7 +2116,14 @@ fn emit_term(out: &mut String, types: &TypeTable, f: &Func, term: &Term) {
 
 /// A jump: assign the target block's parameters from the arguments (coercing each into the
 /// parameter's repr), then `goto`.
-fn emit_jump(out: &mut String, types: &TypeTable, f: &Func, t: &Target) {
+///
+/// A BACKWARD jump (target at or before the current block) is a loop back-edge, and in a
+/// fiber program it carries a preemption safepoint: the cheap flag check that lets the
+/// timer stop a hot loop from starving every other fiber (docs/design/fibers.md). Only in a
+/// fiber program — one that touches no fiber native emits exactly what it always did, so
+/// non-fiber programs pay nothing and stay byte-identical. Block ids are emitted in order,
+/// which is what makes "at or before" the back-edge test.
+fn emit_jump(out: &mut String, types: &TypeTable, f: &Func, cur: u32, t: &Target) {
     let params = &f.block(t.to).params;
     for (&p, &a) in params.iter().zip(&t.args) {
         if p != a {
@@ -2127,6 +2134,9 @@ fn emit_jump(out: &mut String, types: &TypeTable, f: &Func, t: &Target) {
                 coerce(types, f, a, f.value_repr(p))
             );
         }
+    }
+    if types.fiber_program && t.to.0 <= cur {
+        out.push_str("neon_fiber_safepoint();\n");
     }
     let _ = writeln!(out, "goto block{};", t.to.0);
 }
