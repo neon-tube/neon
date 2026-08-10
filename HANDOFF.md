@@ -1,0 +1,76 @@
+# Neon — handoff
+
+Repo: `/home/kibb/projects/neon-tube/neon` (Rust → C compiler + C runtime), branch `main`.
+
+## Standing rules
+
+- **No `Co-Authored-By` trailers** in any commit, in any neon-tube repo.
+- **No `mut`** — the language has no such keyword. `let` rebinds; the optimiser earns mutation.
+- **No `-> null`** (ruled 2026-08-10): never explicitly return null, and null must not be the
+  implicit return type. The existing stdlib violates this everywhere a throwing function
+  returns; the sweep is a tracked task (see below), do not add new violations.
+- `cargo fmt` is fine to run; the repo is rustfmt-clean.
+- **`neon_retain`/`neon_release` admit no additions.** Measured 26–44% regressions for every
+  attempted branch. The resource ownership design (below) was shaped by this: batons cost
+  zero atomics; the body's concurrent count is touched only at ref birth/death.
+
+## State: resource ownership SHIPPED (commit db981ba)
+
+Resources are **owned identities**. Design and mechanics: `docs/design/fibers.md`
+§"Resources: owned identities and the baton" (current, built-state). The one-paragraph
+version: body/ref split (the channel pattern), exactly one OWNING ref whose death runs
+cleanup, the baton moves at three visible edges — `move () => ...` (new closure-head
+keyword), `channel::send` (throw ⇒ not sent), task return — and every misuse is a named
+catchable error (`NotOwnerError`, `ReleasedError`, `ClosedError`; the send/close traps are
+gone). `tcp::serve` is an ordinary loop; the raw-fd laundering is deleted. Compile errors:
+plain resource capture at a spawn/runtime site ("needs `move`"), `move` with nothing to
+move. Fixed in passing: crashed-fiber env leak, task-await slab leak (await now restages),
+`neon_channel_send`'s discarded result.
+
+Green: 315 corpus trials (4 new fiber tests), 590 unit, 190 C tests under both
+`NEON_IO=io_uring` and `NEON_IO=epoll`.
+
+How it was decided, for the record: dup-on-copy and global sharing were considered and
+rejected (silent write-interleaving; release races; nondeterministic cleanup). The model is
+Erlang's controlling-process with the baton pass automated at the three edges. Deliberate
+judgment calls a future session should not relitigate casually: non-owner `release`/`take`
+are silent no-ops (double-release precedent; preserves `Resource[T, never]`'s no-`try`
+release); `move` is closure-head, whole-closure, self-scoping (values copy regardless);
+fiber-local ("pinned") resources are unshipped until a type needs one.
+
+## In flight
+
+- **CBMC resource models**: an agent is reworking the five `resource-*` models for the
+  body/ref ABI and adding `a-transfer-leaves-exactly-one-owning-ref`, mutation-validated,
+  committing under `runtime/models/` only. If its commit is absent, check for a report.
+- **llhttp**: vendored via CMake FetchContent (pinned `release/v9.4.3`, sha256) on worktree
+  branch `worktree-agent-a76e584a10fe9b8f7`, commit `075b477` — based on pre-fibers main;
+  merge is two small edits to `runtime/CMakeLists.txt` + one test file. NOT yet merged.
+- **Toolchain redesign** (user-requested): a full build-graph map, ranked smells, and a
+  recommended redesign (cc-crate compile of the runtime from build.rs; CMake retreats to
+  tests/models/MSVC; shared flag files; 6-step migration) was produced by a Plan agent —
+  the report is in the session transcript and should be re-summarized to the user before
+  implementing. NOTE: it recommends vendoring llhttp's generated C over FetchContent for
+  cargo-path hermeticity, which CONTRADICTS the user's explicit FetchContent instruction —
+  surface that tension, don't silently pick.
+
+## Tracked next tasks
+
+1. **null-as-unit sweep** (user ruling, above): grammar for arrowless `throws E` meaning
+   unit; `Union([Unit, E])` tagged results; migrate every `-> null` signature in the stdlib
+   and corpus.
+2. Toolchain redesign (after llhttp merge; see tension note).
+3. Known checker gaps found while testing, worth fixing: `expr is T as x` fails on
+   nullable runtime records and on any `T | null` with a qualified generic (`is` on a
+   BINDING works — see `resource_through_channel.neon`'s comment); the error message is the
+   nonsensical "a `bool` can never be a `#error`".
+
+## Residual design notes (documented, deliberate)
+
+- Composite mid-copy trap on a buffered send can orphan a staged owning ref → fd
+  leak-on-crash. Requires a resource next to an unsendable sibling in one record. Known,
+  narrow, documented in the design section.
+- `is` narrowing gap above; `Resource` equality is per-ref (two refs to one body compare
+  unequal) — same standing quirk channels have.
+- `neon check` stops before lowering, so the `move` diagnostics only fire on build/run
+  paths (post-mono errors, Rust-style).

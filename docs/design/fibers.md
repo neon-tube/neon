@@ -5,9 +5,22 @@ are implemented and tested on the `fibers` branch. This document describes what 
 **is**; the last section is an honest list of what it is **not** yet. Where this file and a
 module comment disagree, the module comment is nearer the code and this file is the bug.
 
-Verified continuously by: 186 C unit tests under ASan/UBSan/LSan and 309 backend trials (a
+Verified continuously by: 190 C unit tests under ASan/UBSan/LSan and 315 backend trials (a
 corpus program compiled, linked against the sanitized runtime, run, and diffed), **each run
-against both IO engines**; 15 of those corpus programs are fiber programs.
+against both IO engines**; 20 of those corpus programs are fiber programs.
+
+## The model, as a user meets it
+
+A fiber is a lightweight thread; spawn thousands, the runtime schedules them across cores.
+Each fiber has its own memory — values crossing between fibers are deep copies, so there
+are no data races and no locks to write. Channels are how fibers talk: `recv` blocks the
+fiber and returns `null` once the channel is closed and drained; `send` throws a catchable
+`ClosedError`, and a send that threw did not send. Resources (files, sockets) are the one
+thing that does not copy: each has exactly **one owner fiber**, and ownership moves in
+exactly three visible ways — a `move` lambda, a channel send, a task return. After giving a
+resource away, the old binding is a stale name that throws `NotOwnerError`; a crashed fiber's
+resources are cleaned up in its teardown, and a resource abandoned inside a dropped channel
+is closed by the channel. Every mistake is a named, catchable error.
 
 ## The constraint everything answers to
 
@@ -148,7 +161,9 @@ through a `copy` operation on the value witness that codegen emits per repr:
   heap parts; unions switch on the tag; boxed records get per-type functions, forward-declared
   so mutually recursive shapes terminate);
 - **channels and tasks** — identity: retain the body, mint a fresh ref (see **Handles**);
-- **closures and resources** — a **trapping** copy, never NULL. Loudness over corruption.
+- **resources** — identity **plus ownership**: mint a fresh ref, and at a transfer edge the
+  baton moves with it (see **Resources: owned identities** below);
+- **closures** — a **trapping** copy when they capture, never NULL. Loudness over corruption.
 
 Deep copy is always *correct* in an immutable language: two identical immutable values are
 indistinguishable, so duplicating is semantically invisible. It can only be bigger or slower,
@@ -170,7 +185,65 @@ A **capturing** lambda crosses too: its environment is deep-copied through the *
 table*, which maps an environment's `drop` function (the runtime's only handle on its shape)
 to a generated copy. The drop-pointer-as-type-id trick, in its second use after teardown.
 
-## The surface
+## Resources: owned identities and the baton
+
+A resource is the one value that does not copy — there is only one file descriptor — and
+for a while that made it second-class: it could not cross fibers at all, and `tcp::serve`
+had to launder descriptors through integers to hand connections out. What is built instead
+makes the resource an **identity with an owner**, and the server loop a thing any user
+writes:
+
+```neon
+while true {
+    let c = try tcp::accept(l);
+    fiber::spawn(move () => handler(c));
+}
+```
+
+**The shape.** `Resource[T, E]` is the channel split again (see **Handles**): a shared
+**body** — payload, cleanup closure, armed flag, and an `owner` fiber — plus per-holder
+arena-resident **refs**, of which exactly one is the **owning ref**. Crossing any boundary
+mints a ref, uniformly; the identity travels freely. The **baton** — the right to use the
+resource and the duty to clean it up — moves only at three edges, each visible in source:
+
+1. a **`move` lambda** (`fiber::spawn(move () => handler(c))`) — the new closure-head
+   keyword, whose env copy is a transfer;
+2. a **channel send** — with the guarantee that a send which throws `ClosedError` did NOT
+   send, so the baton stayed;
+3. a **task return** — `await`'s restage claims it for the awaiter.
+
+A transfer demotes the source ref, marks the minted ref owning, and leaves the body
+**unowned**; the far side's first use claims it. Every write to `owner` happens on the
+fiber holding the unique owning ref, with visibility riding the same publish edge the value
+crossed on — so ownership costs **zero atomics**, like everything else here. The body's own
+count is concurrent exactly at ref birth/death, the channel-body discipline.
+
+**Failure is a name, not a trap.** Using a resource from a fiber that does not own it
+throws `NotOwnerError`; using one whose cleanup ran throws `ReleasedError`; both are
+catchable. `release`/`take` by a non-owner are no-ops by the double-release precedent — a
+moved-away handle owes no cleanup from here — which keeps `release` throwing only `E` and
+preserves `Resource[T, never]`'s no-`try` release. The compiler rejects the mistake it can
+see statically: a plain (non-`move`) literal lambda capturing a resource at a
+spawn/task/runtime site is a compile error suggesting `move`, and a `move` lambda with no
+resource to move is an error too. What the compiler cannot see (a resource behind `any`, a
+closure arriving through a variable) arrives as a non-owning ref and throws at first use —
+the runtime backstop.
+
+**Cleanup is deterministic and exactly-once.** It rides the owning ref: last use under
+ARC (which means a `get` that is a binding's final use runs cleanup *inside* the call,
+after the payload is retained out — the lock-guard ordering `using` documents), scope end,
+explicit `release`, or crash teardown — the arena walk finds the owning ref by
+construction, the crash-locals argument a third time. A resource sent but never received
+sits in the channel with its baton, and the channel's drop closes it: dead letters cannot
+leak. The body lives on the shared heap so it can outlive its creator; its payload is
+copied there at construction, which is also where an unsendable payload or a capturing
+cleanup's environment fails — at `new`, the one line where the author is present.
+
+**`move` is self-scoping.** Values always copy; the keyword affects only resources, so
+`move () => ...` capturing a resource, a list, and a string moves one baton and copies the
+rest. Under the hood a `move` lambda's env forks its identity in the env-copy table (the
+table is keyed by drop pointer, and the transfer bracket lives inside the move env's copy),
+which is why the keyword costs nothing when unused.
 
 ```neon
 // std::fiber
@@ -291,10 +364,6 @@ Everything below is deliberate scope, not oversight. Each is independent of the 
 
 ### Semantics and API
 
-- **Move-only Resources.** The design called for a Resource to *move* across a send, gated by
-  a runtime `rc == 1` check. What exists instead is stricter and simpler: a value containing a
-  Resource (or a closure) **traps** at the send with a message naming the limit. Moving is the
-  feature; the trap is the honest placeholder.
 - **`select`.** Waiting on several channels at once. Needs an API decision first (a
   `select`-expression versus a builder), and the runtime side is a multi-channel waiter
   registration — the waiter lists already support the shape.
@@ -308,7 +377,13 @@ Everything below is deliberate scope, not oversight. Each is independent of the 
   operation (`recv_timeout` is the one timed op).
 - **Fiber-local storage.** Not designed. Arenas make it cheap if it is ever wanted.
 - **One awaiter per task.** A second `await` traps. Multi-await would need the result to be
-  copied rather than moved out.
+  copied rather than restaged out once.
+- **Fiber-local resources.** A resource whose baton must never leave its creating fiber
+  (a future mutex guard, a transaction). Deliberately unshipped until the first such type
+  exists; the design notes weigh a construction-time flag against a second nominal type.
+- **Split reader/writer.** Single ownership forbids one fiber reading a socket while
+  another writes it. The escape hatch, if ever needed, is an explicit `tcp::split` doing an
+  OS-level `dup` — opt-in sharing, loudly named.
 
 ### Performance, all profile-gated
 
@@ -335,15 +410,13 @@ None of these has a benchmark asking for it; that is the bar for starting one.
   on every other target the sources are not compiled and `std::sys::has_fibers()` answers
   false.
 - **IOCP (Windows) and kqueue (BSD/macOS)** backends behind the same two seams.
-- **Networking.** There is no `std::net`, so the sockets a completion engine most wants to
-  serve do not exist yet. This is the largest single gap between "fibers work" and "fibers are
-  useful for the thing fibers are for".
 
 ### Verification
 
-- **No CBMC model of the scheduler.** The arena has two; the concurrency does not, and the
-  mesh's invariants (idempotent admission, the park/wake race, deadlock detection) are the
-  kind of thing a model checker is good at.
+- **Scheduler models cover three invariants** (ring FIFO across a wrapping growth,
+  rendezvous handover, admission-bit idempotence); the deadline race and the language
+  channel are documented as intractable under CBMC in the models' SCOPE sections. The
+  park/wake race under genuine concurrency remains unmodelled.
 - **No fiber benchmark.** `bench/` has no concurrency program, so there is no standing number
   for spawn cost, channel throughput, or mesh scaling — only correctness tests.
 

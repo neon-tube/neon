@@ -1,7 +1,14 @@
 # Design: resources and cleanup
 
-Status: **implemented** (2026-07-19). `std::resource` is a real stdlib module,
-`std::fs` is built on it, and `tests/lang/resources/` pins the behaviour.
+Status: **implemented** (2026-07-19); **extended to owned identities** (2026-08-10). A
+resource is now a shared BODY plus per-holder REFS with a single owning ref — the baton —
+so resources cross fibers (a `move` lambda, a channel send, a task return) with
+deterministic exactly-once cleanup and named errors (`NotOwnerError`) for stale handles.
+The runtime shape and the ownership argument live in `docs/design/fibers.md` §"Resources:
+owned identities and the baton"; everything below about the cleanup model (disarm-then-act,
+the error channel on the arrow, `using`) still holds, now against the body, with cleanup
+running at the OWNING ref's death. Where this file's mechanics disagree with
+`runtime/include/neon/resource.h`, the header is nearer the code and this file is the bug.
 
 This file is the *argument*. The module's own header
 (`stdlib/std/resource.neon`) is the current, deliberately-written reference for the
