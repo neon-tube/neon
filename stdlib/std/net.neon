@@ -1,4 +1,4 @@
-// Sockets — `net::tcp` and `net::udp`.
+// Sockets — `net::tcp`, `net::udp` and `net::tls`.
 //
 // The point of this module, and the reason it sits on top of fibers: **an ordinary blocking
 // call is the concurrent one.** `tcp::read` blocks its caller and nothing else. On a fiber
@@ -37,6 +37,13 @@ use std::fiber;
 use std::resource;
 use std::io::IoError;
 
+/// A failure in the TLS layer itself — a handshake that would not complete, a certificate
+/// that would not verify, a missing trust store, a broken record stream. Plain socket
+/// failures stay `IoError`; the split matters because a TlsError usually means the OTHER
+/// side (or the operator's certificates) needs fixing, not the network.
+record TlsError { message: str }
+impl Error for TlsError { fn message(v: TlsError) -> str { v.message } }
+
 internal mod raw {
     @native("neon_net_listen") fn listen(addr: str, backlog: i64) -> i64
     /// The connected descriptor, and the peer's address: the tuple's tail is a C
@@ -54,6 +61,20 @@ internal mod raw {
     /// The datagram, the sender's address, and the status.
     @native("neon_net_udp_recv_from") fn udp_recv_from(fd: i64, max: i64) -> (str, str, i64)
     @native("neon_io_strerror") fn strerror(code: i64) -> str
+
+    /// The TLS natives (runtime/src/tls.c). The handshake three own the descriptor they
+    /// are handed — failure closes it — and report failure as a pre-rendered message in
+    /// the tuple's tail, because the interesting causes (an unverifiable certificate, a
+    /// missing trust store) are not errnos and their detail is only readable inside the
+    /// native. Read and write return mbedTLS codes; `tls_strerror` renders those.
+    @native("neon_tls_client") fn tls_client(fd: i64, host: str, verify: bool) -> (i64, str)
+    @native("neon_tls_listen_config") fn tls_listen_config(cert: str, key: str) -> (i64, str)
+    @native("neon_tls_accept") fn tls_accept(cfg: i64, fd: i64) -> (i64, str)
+    @native("neon_tls_read") fn tls_read(h: i64, max: i64) -> (str, i64)
+    @native("neon_tls_write") fn tls_write(h: i64, data: str) -> i64
+    @native("neon_tls_close") fn tls_close(h: i64) -> i64
+    @native("neon_tls_config_free") fn tls_config_free(cfg: i64) -> i64
+    @native("neon_tls_strerror") fn tls_strerror(code: i64) -> str
 
     fn fail(code: i64, what: str) throws IoError {
         throw IoError { message: "#{what}: #{strerror(code)}" };
@@ -285,6 +306,158 @@ mod udp {
 
     fn local_addr(u: Socket) throws IoError -> str {
         let (addr, code) = raw::local_addr(try socket_fd(u));
+        if code < 0 {
+            try raw::fail(code, "cannot read the local address");
+        };
+        addr
+    }
+}
+
+/// Encrypted streams — TLS over `tcp`, mbedTLS underneath (runtime/src/tls.c). The same
+/// blocking-is-concurrent story as everything above: a handshake or a read parks its
+/// fiber, not its thread, because mbedTLS's transport callbacks wait on the very seam
+/// `tcp::read` waits on. Certificates are VERIFIED BY DEFAULT — full chain against the
+/// OS trust store, hostname included — and the opt-out is a separate function with
+/// `insecure` in its name, so a grep finds every place a program decided not to check.
+mod tls {
+    /// A listening socket plus the certificate chain and private key it answers with.
+    sealed record Listener {
+        l: resource::Resource[i64, IoError],
+        cfg: resource::Resource[i64, IoError],
+    }
+
+    /// One encrypted connection. Reads hand back decrypted bytes; writes encrypt. The
+    /// handle is a resource exactly like `tcp::Stream` — cleanup (close_notify, free,
+    /// close) runs when the owning ref dies, crash included, and it crosses fibers by
+    /// `move` like any other owned identity.
+    sealed record Stream { r: resource::Resource[i64, IoError] }
+
+    internal mod guard {
+        fn stream(h: i64) -> Stream {
+            Stream { r: resource::new(h, (d: i64) => { raw::tls_close(d); }) }
+        }
+        fn listener(fd: i64, cfg: i64) -> Listener {
+            Listener {
+                l: resource::new(fd, (d: i64) => { raw::close(d); }),
+                cfg: resource::new(cfg, (c: i64) => { raw::tls_config_free(c); }),
+            }
+        }
+    }
+
+    fn listener_fd(l: Listener) throws IoError -> i64 {
+        try resource::get(l.l) catch (e) {
+            throw IoError { message: "this listener is closed" }
+        }
+    }
+
+    fn listener_cfg(l: Listener) throws IoError -> i64 {
+        try resource::get(l.cfg) catch (e) {
+            throw IoError { message: "this listener is closed" }
+        }
+    }
+
+    fn stream_handle(s: Stream) throws IoError -> i64 {
+        try resource::get(s.r) catch (e) {
+            throw IoError { message: "this stream is closed" }
+        }
+    }
+
+    /// Connect and handshake, verifying the peer's certificate chain against the OS trust
+    /// store and its name against `host`. `host` is also what SNI announces, and it is a
+    /// separate argument because `addr` may be a raw IP while the certificate names a
+    /// domain. Failure to verify — or to find a trust store at all — is a `TlsError`,
+    /// never a silent downgrade.
+    fn connect(addr: str, host: str) throws IoError | TlsError -> Stream {
+        let fd = raw::connect(addr);
+        if fd < 0 {
+            try raw::fail(fd, "cannot connect to `#{addr}`");
+        };
+        let (h, msg) = raw::tls_client(fd, host, true);
+        if h < 0 {
+            throw TlsError { message: msg };
+        };
+        guard::stream(h)
+    }
+
+    /// As `connect`, but WITHOUT verifying who is on the other end — the connection is
+    /// encrypted against a passive reader and nothing more; an active peer can be anyone.
+    /// For self-signed development certificates and tests. The name is the warning.
+    fn connect_insecure(addr: str, host: str) throws IoError | TlsError -> Stream {
+        let fd = raw::connect(addr);
+        if fd < 0 {
+            try raw::fail(fd, "cannot connect to `#{addr}`");
+        };
+        let (h, msg) = raw::tls_client(fd, host, false);
+        if h < 0 {
+            throw TlsError { message: msg };
+        };
+        guard::stream(h)
+    }
+
+    /// Bind and listen, answering handshakes with the certificate chain and private key
+    /// in the two PEM files. Both are read and parsed HERE, so a bad path or a garbled
+    /// key fails at the line the operator wrote it on, not at the first client.
+    fn listen(addr: str, cert_pem_path: str, key_pem_path: str) throws IoError | TlsError -> Listener {
+        let (cfg, msg) = raw::tls_listen_config(cert_pem_path, key_pem_path);
+        if cfg < 0 {
+            throw TlsError { message: msg };
+        };
+        let fd = raw::listen(addr, 128);
+        if fd < 0 {
+            raw::tls_config_free(cfg);
+            try raw::fail(fd, "cannot listen on `#{addr}`");
+        };
+        guard::listener(fd, cfg)
+    }
+
+    /// Wait for a connection and complete the server-side handshake. Blocks this fiber,
+    /// not the thread. A client that fails its handshake (a scanner, a plain-HTTP
+    /// misdial) throws — an accept loop that should survive those catches the TlsError
+    /// and goes around again.
+    fn accept(l: Listener) throws IoError | TlsError -> Stream {
+        let (fd, peer) = raw::accept(try listener_fd(l));
+        if fd < 0 {
+            try raw::fail(fd, "cannot accept");
+        };
+        let (h, msg) = raw::tls_accept(try listener_cfg(l), fd);
+        if h < 0 {
+            throw TlsError { message: msg };
+        };
+        guard::stream(h)
+    }
+
+    /// Up to `max` decrypted bytes, waiting until some arrive. An empty result means the
+    /// peer closed — `tcp::read`'s contract, one layer up.
+    fn read(s: Stream, max: i64) throws IoError | TlsError -> str {
+        let (data, code) = raw::tls_read(try stream_handle(s), max);
+        if code < 0 {
+            throw TlsError { message: "cannot read: #{raw::tls_strerror(code)}" };
+        };
+        data
+    }
+
+    /// Every byte, encrypted, waiting whenever the socket buffer fills.
+    fn write(s: Stream, data: str) throws IoError | TlsError {
+        let code = raw::tls_write(try stream_handle(s), data);
+        if code < 0 {
+            throw TlsError { message: "cannot write: #{raw::tls_strerror(code)}" };
+        };
+    }
+
+    /// Close now — close_notify to the peer, then the descriptor — rather than when the
+    /// handle dies. Optional, and closing twice is a no-op.
+    fn close(s: Stream) throws IoError {
+        try resource::release(s.r);
+    }
+
+    fn close_listener(l: Listener) throws IoError {
+        try resource::release(l.l);
+        try resource::release(l.cfg);
+    }
+
+    /// The address a listener is bound to — how one on port `0` learns its port.
+    fn local_addr(l: Listener) throws IoError -> str {
+        let (addr, code) = raw::local_addr(try listener_fd(l));
         if code < 0 {
             try raw::fail(code, "cannot read the local address");
         };

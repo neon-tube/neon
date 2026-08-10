@@ -9,12 +9,14 @@
 //     // client
 //     let resp = try http::client::get("http://127.0.0.1:8080/hello");
 //
-// Plain HTTP only: nothing in this toolchain does TLS, and pretending otherwise with a
-// vendored cipher suite would be worse than saying so. Bodies are fully buffered both
-// ways (streaming is a later shape), requests are served one at a time per connection
-// (a pipelined client's extra bytes are carried to the next parse, never dropped), and
-// chunked transfer-encoding is DECODED on receipt — llhttp does it — while responses are
-// always sent with Content-Length.
+// https is `net::tls` under the same message logic: the client speaks it for `https://`
+// URLs (verified against the OS trust store, port 443 by default), and a server that
+// holds certificates serves it via `server::serve_tls`. Everything between the socket
+// and the parse is shared — `Conn` below is the one seam where transport is decided.
+// Bodies are fully buffered both ways (streaming is a later shape), requests are served
+// one at a time per connection (a pipelined client's extra bytes are carried to the next
+// parse, never dropped), and chunked transfer-encoding is DECODED on receipt — llhttp
+// does it — while responses are always sent with Content-Length.
 //
 // The server's `handler` crosses to each connection's fiber, so it must be a NAMED
 // function or a capture-free lambda — `tcp::serve`'s rule, for the same reason. State
@@ -27,7 +29,8 @@ use std::net;
 use std::string;
 
 /// A parse or protocol failure — malformed bytes, a connection closing mid-message, a URL
-/// this module cannot speak (https). IO failures stay `IoError`.
+/// scheme this module cannot speak. IO failures stay `IoError`; TLS failures (a
+/// certificate that would not verify) stay `net::TlsError`.
 record HttpError { message: str }
 impl Error for HttpError { fn message(v: HttpError) -> str { v.message } }
 
@@ -55,13 +58,40 @@ internal mod raw {
     @native("neon_http_parser_reset") fn reset(p: Parser)
 }
 
-// ---- shared: reading one message off a stream ----
+// ---- shared: the transport seam, and reading one message off a stream ----
+
+/// The one place transport is decided. Everything HTTP does between the socket and the
+/// parser — read_message, the serialisers, a connection's whole life — is written against
+/// this union, so plain and TLS connections share every line of message logic and differ
+/// only in the three dispatchers below.
+type Conn = net::tcp::Stream | net::tls::Stream
+
+fn conn_read(c: Conn, max: i64) throws IoError | net::TlsError -> str {
+    match c {
+        is net::tcp::Stream => try net::tcp::read(c, max),
+        is net::tls::Stream => try net::tls::read(c, max),
+    }
+}
+
+fn conn_write(c: Conn, data: str) throws IoError | net::TlsError {
+    match c {
+        is net::tcp::Stream => try net::tcp::write(c, data),
+        is net::tls::Stream => try net::tls::write(c, data),
+    };
+}
+
+fn conn_close(c: Conn) throws IoError {
+    match c {
+        is net::tcp::Stream => try net::tcp::close(c),
+        is net::tls::Stream => try net::tls::close(c),
+    };
+}
 
 /// Feed bytes until the parser completes a message. `pending` is what a previous parse
 /// left unconsumed (a pipelined follow-up); the return is what THIS parse leaves. EOF
 /// mid-message is an error unless `finish` says the message legally ends at EOF (a
 /// response body delimited by connection close).
-fn read_message(c: net::tcp::Stream, p: Parser, pending: str) throws HttpError | IoError -> str {
+fn read_message(c: Conn, p: Parser, pending: str) throws HttpError | IoError | net::TlsError -> str {
     let buf = pending;
     while true {
         if buf != "" {
@@ -74,7 +104,7 @@ fn read_message(c: net::tcp::Stream, p: Parser, pending: str) throws HttpError |
             };
             buf = "";
         } else {
-            let data = try net::tcp::read(c, 65536);
+            let data = try conn_read(c, 65536);
             if data == "" {
                 if raw::finish(p) == 1 {
                     return "";
@@ -175,16 +205,35 @@ fn serve(l: net::tcp::Listener, handler: (Request) throws HttpError -> Response)
     throw IoError { message: "unreachable: the accept loop ended without failing" }
 }
 
-/// One connection's whole life. Errors end the connection rather than the server: IO
-/// failures mean the peer is gone (nothing to tell them), parse failures get a best-effort
-/// 400. `try?` softens the goodbye writes — a peer that vanished mid-farewell is fine.
-fn connection(c: net::tcp::Stream, handler: (Request) throws HttpError -> Response) {
+/// As `serve`, over TLS: the listener carries the certificates (`net::tls::listen`), and
+/// each accept completes the handshake before its connection fiber is born. A client that
+/// fails its handshake — a scanner, a plain-HTTP misdial — ends only that accept, not the
+/// server: its TlsError is swallowed here and the loop goes around, which is the same
+/// stance `connection` takes toward one peer's garbage.
+fn serve_tls(l: net::tls::Listener, handler: (Request) throws HttpError -> Response) throws IoError -> never {
+    while true {
+        let c = try net::tls::accept(l) catch (e) {
+            if e is IoError {
+                throw e
+            };
+            continue
+        };
+        fiber::spawn(move () => { connection(c, handler); });
+    };
+    throw IoError { message: "unreachable: the accept loop ended without failing" }
+}
+
+/// One connection's whole life, on either transport. Errors end the connection rather
+/// than the server: IO failures mean the peer is gone (nothing to tell them), parse
+/// failures get a best-effort 400. `try?` softens the goodbye writes — a peer that
+/// vanished mid-farewell is fine.
+fn connection(c: Conn, handler: (Request) throws HttpError -> Response) {
     let p = raw::new(false);
     let pending = "";
     while true {
         let leftover = try read_message(c, p, pending) catch (e) {
-            try? net::tcp::write(c, "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n");
-            try? net::tcp::close(c);
+            try? conn_write(c, "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n");
+            try? conn_close(c);
             return
         };
         pending = leftover;
@@ -199,12 +248,12 @@ fn connection(c: net::tcp::Stream, handler: (Request) throws HttpError -> Respon
             Response { status: 500, headers: [], body: e.message }
         };
         let head = "HTTP/1.1 #{resp.status} #{reason(resp.status)}\r\n";
-        try net::tcp::write(c, string::concat(head, serialize_headers(resp.headers, resp.body))) catch (e) {
-            try? net::tcp::close(c);
+        try conn_write(c, string::concat(head, serialize_headers(resp.headers, resp.body))) catch (e) {
+            try? conn_close(c);
             return
         };
         if !keep {
-            try? net::tcp::close(c);
+            try? conn_close(c);
             return;
         };
         raw::reset(p);
@@ -220,33 +269,41 @@ mod client {
     use std::string;
     use std::url;
 
-/// A URL split at the syscall boundary's shape: an address for `tcp::connect` and a raw
-/// request-target (path + query, still percent-encoded — the wire wants them that way).
-/// RFC 3986 parsing is `std::url`'s; the HTTP judgments (scheme, default port, empty
-/// path means "/") are this module's.
-fn split_url(u: str) throws HttpError -> (str, str) {
+/// A URL split at the syscall boundary's shape: an address for the connect, the raw
+/// request-target (path + query, still percent-encoded — the wire wants them that way),
+/// the bare host (what TLS verifies and SNI announces — the certificate names a host,
+/// never a host:port), and whether the scheme asks for TLS. RFC 3986 parsing is
+/// `std::url`'s; the HTTP judgments (scheme, default port, empty path means "/") are
+/// this module's.
+fn split_url(u: str) throws HttpError -> (str, str, str, bool) {
     let parsed = try url::parse(u) catch (e) {
         throw HttpError { message: e.message };
     };
-    if parsed.scheme != "http" {
-        throw HttpError { message: "only http:// URLs are supported (no TLS yet): `#{u}`" };
+    if parsed.scheme != "http" and parsed.scheme != "https" {
+        throw HttpError { message: "only http:// and https:// URLs are supported: `#{u}`" };
     };
+    let secure = parsed.scheme == "https";
     if parsed.host == "" {
         throw HttpError { message: "no host in `#{u}`" };
     };
-    let port = if parsed.port == -1 { 80 } else { parsed.port };
+    let port = if parsed.port == -1 { if secure { 443 } else { 80 } } else { parsed.port };
     let path = if parsed.path == "" { "/" } else { parsed.path };
     let target = if parsed.query == "" { path } else { "#{path}?#{parsed.query}" };
-    ("#{parsed.host}:#{port}", target)
+    ("#{parsed.host}:#{port}", target, parsed.host, secure)
 }
 
-/// One request, one connection: connect, send, read the full response, close. The
-/// `Connection: close` header means an EOF-delimited body parses too (`finish`).
-fn request(method: str, url: str, headers: List[(str, str)], body: str) throws HttpError | IoError -> Response {
-    let (addr, target) = try split_url(url);
-    let c = try net::tcp::connect(addr);
+/// One request, one connection: connect (with the TLS handshake when the URL says
+/// https), send, read the full response, close. The `Connection: close` header means an
+/// EOF-delimited body parses too (`finish`).
+fn request(method: str, url: str, headers: List[(str, str)], body: str) throws HttpError | IoError | net::TlsError -> Response {
+    let (addr, target, host, secure) = try split_url(url);
+    let c: Conn = if secure {
+        try net::tls::connect(addr, host)
+    } else {
+        try net::tcp::connect(addr)
+    };
     let head = "#{method} #{target} HTTP/1.1\r\nHost: #{addr}\r\nConnection: close\r\n";
-    try net::tcp::write(c, string::concat(head, serialize_headers(headers, body)));
+    try conn_write(c, string::concat(head, serialize_headers(headers, body)));
     let p = raw::new(true);
     try read_message(c, p, "");
     let resp = Response {
@@ -254,15 +311,15 @@ fn request(method: str, url: str, headers: List[(str, str)], body: str) throws H
         headers: collect_headers(p),
         body: raw::body(p),
     };
-    try? net::tcp::close(c);
+    try? conn_close(c);
     resp
 }
 
-fn get(url: str) throws HttpError | IoError -> Response {
+fn get(url: str) throws HttpError | IoError | net::TlsError -> Response {
     try request("GET", url, [], "")
 }
 
-fn post(url: str, body: str) throws HttpError | IoError -> Response {
+fn post(url: str, body: str) throws HttpError | IoError | net::TlsError -> Response {
     try request("POST", url, [], body)
 }
 }

@@ -33,6 +33,7 @@
 #include "neon/resource.h"
 #include "neon/string.h"
 #include "neon/time.h"
+#include "neon/tls.h"
 #include "neon/trap.h"
 
 #endif

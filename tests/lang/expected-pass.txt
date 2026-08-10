@@ -440,4 +440,5 @@ fibers/task_returns_resource.neon
 fibers/dead_letter_cleanup.neon
 fibers/task_crash_releases_moved_resource.neon
 fibers/http_round_trip.neon
+fibers/tls_round_trip.neon
 strings/url_parse.neon

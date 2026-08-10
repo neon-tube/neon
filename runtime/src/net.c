@@ -108,7 +108,9 @@ neon_str neon_net_udp_recv_from(int64_t fd, int64_t max, neon_str* peer, int64_t
 
 // Wait until `fd` is readable (or writable), without stopping this OS thread if we are on a
 // fiber. The hook is armed by the scheduler for the life of a runtime; off it, a plain poll.
-static int neon_net_wait(int fd, bool for_write) {
+// Not static: this is the seam `src/tls.c`'s BIO callbacks block through (declared in
+// internal.h), so an mbedTLS handshake parks a fiber exactly the way a plain read does.
+int neon_net_wait(int fd, bool for_write) {
     if (neon_fiber_readiness_hook != NULL) {
         // 0 = the fiber was parked and is now ready; negative = an error to report;
         // POSITIVE = "not mine" (the caller is the root context, not a fiber), which falls

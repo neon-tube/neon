@@ -1,0 +1,103 @@
+// net::tls end to end, on the fiber runtime: a TLS server stood up from a throwaway
+// self-signed certificate, one strict client REFUSED (verification is the default, and a
+// self-signed peer is exactly what it exists to refuse), one insecure client completing
+// the handshake and a round trip — every handshake byte crossing the same fiber-parking
+// BIO seam the plain sockets use. The accept loop catches the failed handshake the strict
+// client leaves behind and goes around, which is the shape a real TLS server needs anyway
+// (`http::server::serve_tls` does the same).
+//
+// The certificate is a committed fixture (CN=localhost, valid to 2126), written to /tmp at
+// startup because the natives take file paths — the same fixed-name /tmp precedent as the
+// fs corpus test. `runtime_on(1, ..)` for a deterministic interleaving; port 0 so the test
+// never fights over a number; the golden pins outcomes, never addresses or cipher names.
+
+use std::channel;
+use std::fiber;
+use std::fs;
+use std::io;
+use std::net;
+use std::path;
+use std::string;
+
+fn cert_pem() -> str {
+    string::join([
+        "-----BEGIN CERTIFICATE-----",
+        "MIIBmzCCAUGgAwIBAgIUf/KUFZPT4bPKcDEnCHQl68TEubEwCgYIKoZIzj0EAwIw",
+        "FDESMBAGA1UEAwwJbG9jYWxob3N0MCAXDTI2MDgxMDE5MDAyNloYDzIxMjYwNzE3",
+        "MTkwMDI2WjAUMRIwEAYDVQQDDAlsb2NhbGhvc3QwWTATBgcqhkjOPQIBBggqhkjO",
+        "PQMBBwNCAAQUOrsbrJxd81yaCvtRdK3wG+RMjEvzMYSQc5sUHQilnn8xZE9H8bKp",
+        "zmU4TXF2jyOyMU8+pj8LDtKgYmkSsO2qo28wbTAdBgNVHQ4EFgQU5JwDxe77swcw",
+        "nG+ok6kPI3bZ7aowHwYDVR0jBBgwFoAU5JwDxe77swcwnG+ok6kPI3bZ7aowDwYD",
+        "VR0TAQH/BAUwAwEB/zAaBgNVHREEEzARgglsb2NhbGhvc3SHBH8AAAEwCgYIKoZI",
+        "zj0EAwIDSAAwRQIgQPsQQtz0KtOG8060eCd2JKlG0xnycpBAS4/oGIMNgogCIQCG",
+        "eQPwKUvvXZ/x8XmGHtMrolMwMueBUPZJrvSnwLYDyg==",
+        "-----END CERTIFICATE-----",
+        "",
+    ], "\n")
+}
+
+fn key_pem() -> str {
+    string::join([
+        "-----BEGIN PRIVATE KEY-----",
+        "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgovH2t95/u9U4l4kJ",
+        "iKpiVUcCvvJpJcwDb6DMiM6qzsWhRANCAAQUOrsbrJxd81yaCvtRdK3wG+RMjEvz",
+        "MYSQc5sUHQilnn8xZE9H8bKpzmU4TXF2jyOyMU8+pj8LDtKgYmkSsO2q",
+        "-----END PRIVATE KEY-----",
+        "",
+    ], "\n")
+}
+
+// A strict client against a self-signed server: the handshake must FAIL — this is the
+// verify-by-default policy observed from outside, not a unit detail. It runs first so the
+// accept loop's catch-and-continue is exercised too.
+fn strict_client(addr: str, done: channel::Channel[str]) {
+    let refused = try? net::tls::connect(addr, "localhost");
+    try! channel::send(done, "strict client refused: #{refused == null}");
+}
+
+// The insecure client: encrypted transport, verification knowingly waived — the loud name
+// is the point. One round trip, and the reply is the assertion.
+fn echo_client(addr: str, done: channel::Channel[str]) {
+    let c = try! net::tls::connect_insecure(addr, "localhost");
+    try! net::tls::write(c, "hello over tls");
+    let reply = try! net::tls::read(c, 4096);
+    try! net::tls::close(c);
+    try! channel::send(done, "reply: #{reply}");
+}
+
+fn main() {
+    let cert = path::of("/tmp/neon-tls-corpus-cert.pem");
+    let key = path::of("/tmp/neon-tls-corpus-key.pem");
+    try! fs::write(cert, cert_pem());
+    try! fs::write(key, key_pem());
+
+    let l = try! net::tls::listen("127.0.0.1:0", path::to_str(cert), path::to_str(key));
+    let addr = try! net::tls::local_addr(l);
+    io::println("bound: #{string::starts_with(addr, "127.0.0.1:")}");
+
+    fiber::runtime_on(1, move () => {
+        let done: channel::Channel[str] = channel::new();
+        fiber::spawn(() => strict_client(addr, done));
+        fiber::spawn(() => echo_client(addr, done));
+
+        // Serve until one connection completes: the strict client's aborted handshake
+        // throws out of `accept` and the loop goes around to meet the next connection.
+        let served = 0;
+        while served < 1 {
+            let c = try net::tls::accept(l) catch (e) {
+                continue
+            };
+            let msg = try! net::tls::read(c, 4096);
+            try! net::tls::write(c, string::to_upper(msg));
+            try! net::tls::close(c);
+            served = served + 1;
+        };
+
+        io::println(channel::recv(done) orelse "?");
+        io::println(channel::recv(done) orelse "?");
+    });
+
+    try! fs::remove(cert);
+    try! fs::remove(key);
+    io::println("done");
+}

@@ -26,6 +26,7 @@ set(NEON_RT_SOURCES
     src/encoding.c
     src/map.c
     src/net.c
+    src/tls.c
     src/os.c
     src/process.c
     src/random.c
@@ -87,6 +88,38 @@ if(MSVC)
 else()
     set_source_files_properties(${NEON_RT_URIPARSER_SOURCES} PROPERTIES
         COMPILE_OPTIONS "-w" COMPILE_DEFINITIONS "URI_NO_UNICODE")
+endif()
+
+# mbedTLS: the TLS stack behind `net::tls` (src/tls.c wraps it). 3.6 LTS, deliberately not
+# 4.x — 3.6 is self-contained where 4.x splits the crypto into a second repository, and the
+# release tarball ships every generated file so nothing here depends on mbedTLS's Python
+# toolchain. Same treatment as llhttp and uriparser: pinned tarball, populate-only, sources
+# compiled into the variants with warnings suppressed. Populate-only is load-bearing here,
+# not just habit: mbedTLS's own CMake builds three separate static libraries, and a STATIC
+# `target_link_libraries` records a dependency without merging any objects — while everything
+# downstream (the CLI, the corpus harness, the smoke task) links exactly one
+# `libneon_rt*.a`. The only way TLS is *in the archive* is to compile it in, exactly as the
+# other two vendored parsers are. The default `mbedtls_config.h` is the configuration:
+# TLS 1.2/1.3, X.509, the entropy sources — everything `src/tls.c` needs, nothing probed.
+#
+# `net_sockets.c` is left out: it is mbedTLS's own socket layer (MBEDTLS_NET_C), which
+# `src/tls.c` replaces with BIO callbacks onto `std::net`'s fiber-parking descriptors. It
+# would compile away harmlessly in the archives, but the test binary compiles these sources
+# directly, and on mingw that file's unreferenced Winsock calls would still have to link.
+FetchContent_Declare(
+    mbedtls
+    URL      https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.7/mbedtls-3.6.7.tar.bz2
+    URL_HASH SHA256=a7e8bcbec0e6f761b4af24f25677626b35f762f68eef79c08677a363212d11f6
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    SOURCE_SUBDIR  do-not-build
+)
+FetchContent_MakeAvailable(mbedtls)
+file(GLOB NEON_RT_MBEDTLS_SOURCES ${mbedtls_SOURCE_DIR}/library/*.c)
+list(REMOVE_ITEM NEON_RT_MBEDTLS_SOURCES ${mbedtls_SOURCE_DIR}/library/net_sockets.c)
+if(MSVC)
+    set_source_files_properties(${NEON_RT_MBEDTLS_SOURCES} PROPERTIES COMPILE_OPTIONS "/w")
+else()
+    set_source_files_properties(${NEON_RT_MBEDTLS_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
 endif()
 
 # Fibers (docs/design/fibers.md). The swap gadget is per-ABI assembly; x86-64 System V is the
@@ -248,10 +281,13 @@ unset(CMAKE_REQUIRED_LINK_OPTIONS)
 
 function(neon_rt_variant name)
     add_library(${name} STATIC ${NEON_RT_SOURCES} ${NEON_RT_LLHTTP_SOURCES}
-                ${NEON_RT_URIPARSER_SOURCES})
+                ${NEON_RT_URIPARSER_SOURCES} ${NEON_RT_MBEDTLS_SOURCES})
     target_include_directories(${name} PUBLIC include)
+    # mbedTLS's `library/` is on the path for its own sources (they include "common.h"
+    # sideways); `src/tls.c` uses only the public `include/`.
     target_include_directories(${name} PRIVATE ${llhttp_SOURCE_DIR}/include
-        ${uriparser_SOURCE_DIR}/include ${CMAKE_BINARY_DIR}/uriparser-config)
+        ${uriparser_SOURCE_DIR}/include ${CMAKE_BINARY_DIR}/uriparser-config
+        ${mbedtls_SOURCE_DIR}/include ${mbedtls_SOURCE_DIR}/library)
     # Warnings-as-errors on every variant: the runtime is warning-clean in all three
     # shapes, and a variant that is only ever built in CI is exactly where rot would go
     # unnoticed.
@@ -337,6 +373,7 @@ if(NEON_RT_TESTS)
         ${NEON_RT_SOURCES}
         ${NEON_RT_LLHTTP_SOURCES}
         ${NEON_RT_URIPARSER_SOURCES}
+        ${NEON_RT_MBEDTLS_SOURCES}
         ${tinyunit_SOURCE_DIR}/tinyunit.c
         tests/init.c
         tests/arith_test.c
@@ -358,6 +395,7 @@ if(NEON_RT_TESTS)
         tests/llhttp_test.c
         tests/http_test.c
         tests/url_test.c
+        tests/tls_test.c
     )
     # The fiber tests only build where the swap gadget does.
     if(NEON_RT_HAS_FIBERS)
@@ -368,7 +406,7 @@ if(NEON_RT_TESTS)
     endif()
     # The rich assertion and TEST macros use GNU C (__auto_type, constructors, _Generic).
     set_target_properties(neon_rt_tests PROPERTIES C_STANDARD 11 C_EXTENSIONS ON)
-    target_include_directories(neon_rt_tests PRIVATE include src ${tinyunit_SOURCE_DIR} ${llhttp_SOURCE_DIR}/include ${uriparser_SOURCE_DIR}/include ${CMAKE_BINARY_DIR}/uriparser-config)
+    target_include_directories(neon_rt_tests PRIVATE include src ${tinyunit_SOURCE_DIR} ${llhttp_SOURCE_DIR}/include ${uriparser_SOURCE_DIR}/include ${CMAKE_BINARY_DIR}/uriparser-config ${mbedtls_SOURCE_DIR}/include ${mbedtls_SOURCE_DIR}/library)
     # `std::math` bottoms out in libm, a separate library on Linux. Not on Windows, where
     # the math functions are in the CRT and there is no `m` to find.
     if(NOT WIN32)
@@ -376,6 +414,11 @@ if(NEON_RT_TESTS)
         # still spelled out for older ones and for macOS).
         find_package(Threads REQUIRED)
         target_link_libraries(neon_rt_tests PRIVATE m Threads::Threads)
+    else()
+        # mbedTLS's entropy source on Windows is BCryptGenRandom. The sources are compiled
+        # straight into this binary, so the exe carries the reference even though the TLS
+        # natives are ENOSYS stubs there (src/tls.c's Windows branch).
+        target_link_libraries(neon_rt_tests PRIVATE bcrypt)
     endif()
 
     # Sanitizers on the whole test binary — the runtime sources and tinyunit compiled in with

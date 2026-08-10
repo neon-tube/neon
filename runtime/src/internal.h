@@ -92,6 +92,14 @@ extern _Thread_local void (*neon_fiber_pidwait_hook)(int64_t pid);
 // an ordinary poll(2) — which is why sockets work identically outside a fiber.
 extern _Thread_local int (*neon_fiber_readiness_hook)(int fd, bool for_write);
 
+// The readiness wait itself, defined in net.c's POSIX half: park the calling fiber (via the
+// hook above) or poll(2) off-runtime, until `fd` is readable/writable. 0 on readiness, a
+// negative errno on failure. The one non-inline extern here, on purpose: tls.c's BIO
+// callbacks must block through the SAME wait the sockets do, and duplicating the
+// hook-then-poll dance in a second file is how the two would drift. Unavailable on Windows
+// (net.c's stub half), where nothing references it.
+int neon_net_wait(int fd, bool for_write);
+
 // The trap→fiber bridge. While a fiber runs, the scheduler arms this per-thread hook; a trap
 // (bounds, arithmetic, uncaught error) then calls it INSTEAD of ending the process — the hook
 // switches control back to the scheduler, killing just that fiber (docs/design/fibers.md's
