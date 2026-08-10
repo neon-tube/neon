@@ -262,6 +262,30 @@ if(NEON_RT_TESTS)
     )
     FetchContent_MakeAvailable(tinyunit)
 
+    # llhttp, pinned to an exact release tarball by URL and content hash so the pull is
+    # reproducible — the release/* tags carry the pre-generated C parser, so nothing here
+    # depends on llhttp's TypeScript toolchain. Unlike tinyunit this uses the project's own
+    # CMakeLists: it defines an `llhttp_static` target whose usage requirements carry the
+    # include directory, and the test binary links it below.
+    FetchContent_Declare(
+        llhttp
+        URL      https://github.com/nodejs/llhttp/archive/refs/tags/release/v9.4.3.tar.gz
+        URL_HASH SHA256=1eb813c7437b31a87496a1cd3ed79f00746720f5e7e29c79b42c02cb69f36c39
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    )
+    # A function so the set()s reach llhttp's add_subdirectory and nothing else: llhttp's
+    # CMakeLists rejects build types outside its own allowlist ("None", which the archive
+    # and Windows-test configures use, is one), and its shared/static options default the
+    # wrong way round for linking into one test binary. Variables set in this scope are
+    # inherited by the subdirectory FetchContent adds, and die with the function.
+    function(neon_rt_fetch_llhttp)
+        set(CMAKE_BUILD_TYPE RelWithDebInfo)
+        set(LLHTTP_BUILD_SHARED_LIBS OFF)
+        set(LLHTTP_BUILD_STATIC_LIBS ON)
+        FetchContent_MakeAvailable(llhttp)
+    endfunction()
+    neon_rt_fetch_llhttp()
+
     add_executable(neon_rt_tests
         ${NEON_RT_SOURCES}
         ${tinyunit_SOURCE_DIR}/tinyunit.c
@@ -282,6 +306,7 @@ if(NEON_RT_TESTS)
         tests/os_test.c
         tests/random_test.c
         tests/process_test.c
+        tests/llhttp_test.c
     )
     # The fiber tests only build where the swap gadget does.
     if(NEON_RT_HAS_FIBERS)
@@ -301,6 +326,8 @@ if(NEON_RT_TESTS)
         find_package(Threads REQUIRED)
         target_link_libraries(neon_rt_tests PRIVATE m Threads::Threads)
     endif()
+    # `llhttp_test.c` picks its header up from this target's usage requirements.
+    target_link_libraries(neon_rt_tests PRIVATE llhttp_static)
 
     # Sanitizers on the whole test binary — the runtime sources and tinyunit compiled in with
     # it — so a memory or UB bug in the runtime is caught here, not only in the corpus.
