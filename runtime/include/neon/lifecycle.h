@@ -44,4 +44,14 @@ void neon_wcopy_unsendable(const void* src, void* dst);
 void* neon_send_routing_begin(void);
 void neon_send_routing_end(void* saved);
 
+
+// Atomic retain/release for HANDLE objects (channels, tasks) — the only counts touched
+// concurrently across scheduler threads. Emitted by codegen at handle-repr sites and used
+// by the runtime's own handle code; the plain pair stays non-atomic for everything else.
+void neon_retain_shared(neon_header* h);
+void neon_release_shared(neon_header* h);
+
+// Route allocations to the slab WITH the SHARED flag (concurrent-rc objects: the handle
+// structs themselves). Staging copies use neon_send_routing_begin (plain slab) instead.
+void* neon_shared_routing_begin(void);
 #endif

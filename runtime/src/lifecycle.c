@@ -64,6 +64,29 @@ void neon_release(neon_header* h) {
     }
 }
 
+// The HANDLE pair: channels and tasks are the only objects whose count is touched by more
+// than one live holder across scheduler threads, and every site that retains or releases
+// one knows the repr at emission time — codegen emits these calls for handle reprs, the
+// runtime's own handle sites call them directly, and the generic pair above never learns
+// atomics exist (it measured 33-44% when taught; see the comment there).
+void neon_retain_shared(neon_header* h) {
+    if (h == NULL) {
+        return;
+    }
+    __atomic_fetch_add(&h->rc, 1, __ATOMIC_RELAXED);
+}
+
+void neon_release_shared(neon_header* h) {
+    if (h == NULL) {
+        return;
+    }
+    // Release ordering so the dropping thread sees every write made under the references
+    // it reclaims; acquire pairs on the zero transition.
+    if (__atomic_sub_fetch(&h->rc, 1, __ATOMIC_ACQ_REL) == 0) {
+        h->drop(h);
+    }
+}
+
 // ---- the allocator ----
 //
 // Small heap objects come from a segregated-free-list slab, not straight from `malloc`.
@@ -255,7 +278,19 @@ void neon_wcopy_unsendable(const void* src, void* dst) {
 #ifndef NEON_CBMC
 void* neon_send_routing_begin(void) {
     neon_arena* saved = neon_current_arena;
-    neon_current_arena = NEON_SHARED_ARENA; // allocations land on the slab, flagged SHARED
+    // Plain slab, NO shared flag: staging copies (a buffered send, a spawn argument, an env
+    // copy, a task result) have SEQUENTIAL ownership — the producer creates, the container
+    // owns, exactly one consumer takes over — so their counts are never touched by two
+    // threads at once and plain rc is sound even under M:N (the channel lock is the
+    // visibility barrier). Only HANDLES need atomic counts; they allocate through
+    // neon_shared_routing_begin below.
+    neon_current_arena = NULL;
+    return saved;
+}
+
+void* neon_shared_routing_begin(void) {
+    neon_arena* saved = neon_current_arena;
+    neon_current_arena = NEON_SHARED_ARENA; // slab + SHARED flag: concurrent-rc objects
     return saved;
 }
 

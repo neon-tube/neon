@@ -3139,6 +3139,14 @@ fn rc_parts_rec(
             func.trim_start_matches("neon_")
         )),
         Repr::Closure { .. } => out.push(format!("{func}({expr}.env)")),
+        // A HANDLE (channel, task) is the one kind of object whose count is touched by
+        // more than one live holder across scheduler threads under M:N — and this is the
+        // one place that statically knows a value is a handle, so it alone emits the
+        // atomic pair. The generic retain/release stay non-atomic for everything else
+        // (teaching them a shared bit measured 33-44% on binary-trees).
+        Repr::Runtime { c_type, .. } if c_type == "neon_channel" || c_type == "neon_task_lang" => {
+            out.push(format!("{func}_shared((neon_header*){expr})"))
+        }
         Repr::List(_) | Repr::Map(_, _) | Repr::Runtime { .. } | Repr::Any => {
             out.push(format!("{func}((neon_header*){expr})"))
         }

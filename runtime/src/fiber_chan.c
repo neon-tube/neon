@@ -7,6 +7,7 @@
 #include "libneon_rt.h"
 
 #include "fiber_internal.h" // a task attaches its reap hook to the body fiber
+#include "internal.h"       // neon_current_arena, for the rendezvous receiver-arena copy
 #include "neon/channel.h"
 
 #include <stdlib.h>
@@ -229,7 +230,7 @@ static void neon_channel_drop(void* p) {
 }
 
 neon_channel* neon_channel_new(const neon_witness* w) {
-    void* saved = neon_send_routing_begin(); // invariant 1: the struct itself is shared
+    void* saved = neon_shared_routing_begin(); // invariant 1: the handle is concurrent-rc
     neon_channel* ch =
         (neon_channel*)neon_alloc(sizeof(neon_channel) - sizeof(neon_header), neon_channel_drop);
     neon_send_routing_end(saved);
@@ -304,7 +305,7 @@ void neon_channel_send(neon_channel* ch, const void* v) {
         neon_fiber_park();
         behind = false; // woken by a receive: the opened slot is ours
         if (me.closed) {
-            neon_release((neon_header*)ch);
+            neon_release_shared((neon_header*)ch);
             neon_trap("channel::send: the channel was closed while this send waited");
         }
     }
@@ -313,6 +314,7 @@ void neon_channel_send(neon_channel* ch, const void* v) {
     // otherwise.
     void* dst;
     neon_channel_waiter* wake = NULL;
+    void* saved;
     if (ch->rhead != NULL) {
         wake = ch->rhead;
         ch->rhead = wake->next;
@@ -320,10 +322,22 @@ void neon_channel_send(neon_channel* ch, const void* v) {
             ch->rtail = NULL;
         }
         dst = wake->slot;
+        // THE RENDEZVOUS FAST PATH: the receiver is parked, so its arena is exclusively
+        // ours for the handoff (parkedness is the lock, even under M:N) — the copy lands
+        // directly in the receiver's own heap, single hop, and every copied object is an
+        // ordinary arena object with a plain count. This is the original design's
+        // "copy into the receiver's arena", and it is what keeps the generic rc path free
+        // of atomics.
+        saved = neon_current_arena;
+        neon_current_arena = wake->fiber->arena;
     } else {
         dst = neon_channel_slot_reserve(ch);
+        // Buffered: stage on the plain slab. Ownership is sequential (sender creates, the
+        // ring owns, exactly one receiver consumes — the channel lock is the visibility
+        // barrier under M:N), so plain rc is sound; the receiver RESTAGES into its own
+        // arena at recv.
+        saved = neon_send_routing_begin();
     }
-    void* saved = neon_send_routing_begin();
     if (ch->w->copy) {
         ch->w->copy(v, dst);
     } else {
@@ -344,14 +358,26 @@ void neon_channel_send(neon_channel* ch, const void* v) {
     if (ch->w->release) {
         ch->w->release((void*)v);
     }
-    neon_release((neon_header*)ch);
+    neon_release_shared((neon_header*)ch);
 }
 
 bool neon_channel_recv(neon_channel* ch, void* out) {
     bool got;
     if (ch->len > 0) {
         size_t sz = ch->w->size;
-        memcpy(out, ch->buf + ch->head * sz, sz);
+        // Restage: deep-copy the staged value into the RECEIVER's own arena (the ambient
+        // routing — we are the running receiver), then release the staging copy. Two hops
+        // for a buffered value, one for a rendezvous; the price of a generic rc path with
+        // no atomics in it.
+        void* slot = ch->buf + ch->head * sz;
+        if (ch->w->copy) {
+            ch->w->copy(slot, out);
+        } else {
+            memcpy(out, slot, sz);
+        }
+        if (ch->w->release) {
+            ch->w->release(slot);
+        }
         ch->head = (ch->head + 1) % ch->cap;
         ch->len--;
         if (ch->shead != NULL) {
@@ -379,7 +405,7 @@ bool neon_channel_recv(neon_channel* ch, void* out) {
     }
     // Invariant 3: the handle reference is released only now, after any park — the channel
     // cannot die under a waiter that still names it.
-    neon_release((neon_header*)ch);
+    neon_release_shared((neon_header*)ch);
     return got;
 }
 
@@ -403,14 +429,14 @@ void neon_channel_close(neon_channel* ch) {
         ch->shead = NULL;
         ch->stail = NULL;
     }
-    neon_release((neon_header*)ch);
+    neon_release_shared((neon_header*)ch);
 }
 
 // Whether the channel has been closed. A drained-ness probe belongs to recv (its null);
 // this answers "will more values ever arrive" for a receiver whose recv came back empty.
 bool neon_channel_is_closed(neon_channel* ch) {
     bool c = ch->closed;
-    neon_release((neon_header*)ch);
+    neon_release_shared((neon_header*)ch);
     return c;
 }
 
@@ -448,7 +474,7 @@ bool neon_channel_recv_timeout(neon_channel* ch, void* out, int64_t millis) {
         }
         got = false;
     }
-    neon_release((neon_header*)ch);
+    neon_release_shared((neon_header*)ch);
     return got;
 }
 
@@ -457,7 +483,7 @@ bool neon_channel_recv_timeout(neon_channel* ch, void* out, int64_t millis) {
 // never a deep copy of the channel's contents.
 void neon_wcopy_channel(const void* src, void* dst) {
     neon_channel* ch = *(neon_channel* const*)src;
-    neon_retain((neon_header*)ch);
+    neon_retain_shared((neon_header*)ch); // a handle's count is concurrent: atomic always
     *(neon_channel**)dst = ch;
 }
 
@@ -545,7 +571,7 @@ static void neon_task_lang_reaped(void* arg, bool crashed) {
             neon_fiber_wake(a);
         }
     }
-    neon_release((neon_header*)t);
+    neon_release_shared((neon_header*)t);
 }
 
 neon_task_lang* neon_task_lang_spawn(neon_closure body, const neon_witness* w,
@@ -555,7 +581,7 @@ neon_task_lang* neon_task_lang_spawn(neon_closure body, const neon_witness* w,
     if (body.env != NULL && (body.env->flags & NEON_ALLOC_ARENA)) {
         body.env = neon_env_copy_to_shared(body.env);
     }
-    void* saved = neon_send_routing_begin(); // the handle is shared, like a channel
+    void* saved = neon_shared_routing_begin(); // the handle is concurrent-rc, like a channel
     neon_task_lang* t = (neon_task_lang*)neon_alloc(
         sizeof(neon_task_lang) - sizeof(neon_header) + w->size, neon_task_lang_drop);
     neon_send_routing_end(saved);
@@ -568,7 +594,7 @@ neon_task_lang* neon_task_lang_spawn(neon_closure body, const neon_witness* w,
     if (cell == NULL) {
         neon_trap("out of memory");
     }
-    neon_retain((neon_header*)t); // the body fiber's reference, released by the reap hook
+    neon_retain_shared((neon_header*)t); // the body fiber's reference, released by the reap hook
     cell->task = t;
     cell->body = body;
     cell->shim = shim;
@@ -586,7 +612,7 @@ void neon_task_lang_await(neon_task_lang* t, void* out) {
     if (t->failed) {
         // Propagate: the awaited work died, so the await dies too — in a fiber that is a
         // clean kill (crash isolation), and failures travel along await edges.
-        neon_release((neon_header*)t);
+        neon_release_shared((neon_header*)t);
         neon_trap("task::await: the awaited task crashed");
     }
     if (t->taken) {
@@ -594,13 +620,13 @@ void neon_task_lang_await(neon_task_lang* t, void* out) {
     }
     memcpy(out, (const void*)(t + 1), t->w->size);
     t->taken = true; // the result MOVED out; ownership is the awaiter's now
-    neon_release((neon_header*)t);
+    neon_release_shared((neon_header*)t);
 }
 
 // The witness `copy` for a task-handle slot: a task is a shared-heap identity, exactly as a
 // channel is — crossing fibers is a retain and a pointer copy.
 void neon_wcopy_task(const void* src, void* dst) {
     neon_task_lang* t = *(neon_task_lang* const*)src;
-    neon_retain((neon_header*)t);
+    neon_retain_shared((neon_header*)t); // a handle's count is concurrent: atomic always
     *(neon_task_lang**)dst = t;
 }
