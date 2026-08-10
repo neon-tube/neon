@@ -20,11 +20,10 @@
 //         });
 //     }
 //
-// `spawn` takes any `() -> ()` — a named function or a lambda. A lambda that CAPTURES
-// values while running inside a fiber cannot cross to the new fiber yet (the captured
-// values live in the spawning fiber's own heap) and traps with a message saying so; a named
-// function or a capture-free lambda always works, and captures made outside the runtime (at
-// the `fiber::runtime` call site itself) are fine.
+// `spawn` takes any `() -> ()` — a named function or a lambda, capturing or not. Captured
+// values cross to the new fiber by DEEP COPY (each capture follows the sendability rules —
+// see std::channel; a captured resource traps with a message saying so), and a captured
+// channel is the same channel on both sides, which is how fibers usually meet.
 
 /// Run `body` as the first fiber and pump the scheduler until every fiber — `body` and
 /// everything it transitively spawned — has finished. Call it once, from outside; nesting a
@@ -39,13 +38,13 @@
 /// Traps outside a fiber.
 @native("neon_fiber_sched_yield") fn yield()
 
-/// Spawn `body` with one argument, deep-copied so it may cross into the new fiber — the
-/// way DATA reaches a spawned fiber. The body itself must still be a named function or a
-/// capture-free lambda; the argument carries what a capture cannot:
+/// Spawn `body` with one argument, deep-copied so it may cross into the new fiber. The
+/// named-function form reads well when the worker is a standing function:
 ///
 ///     fiber::spawn_with(consumer, ch);              // hand a channel to a worker
 ///     fiber::spawn_with((n: i64) => work(n), 42);
 ///
 /// Anything sendable crosses (see std::channel's list); a closure or resource in the
-/// argument traps with a message saying so.
+/// argument traps with a message saying so. (A capturing lambda works here too — its
+/// captures deep-copy exactly as `spawn`'s do.)
 @native("neon_fiber_lang_spawn_with") fn spawn_with[T](body: (T) -> (), arg: T)

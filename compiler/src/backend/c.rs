@@ -81,6 +81,7 @@ fn emit_with(program: &Program, entry: Entry) -> String {
     emit_key_witnesses(&mut out, &types);
     emit_env_drops(&mut out, &types);
     emit_boxed_copy_defs(&mut out, &types);
+    emit_env_copies(&mut out, &types);
 
     // Forward declarations, so call order does not matter.
     for f in &program.funcs {
@@ -1407,6 +1408,61 @@ fn emit_env_drops(out: &mut String, types: &TypeTable) {
     }
     if !types.env_drops().is_empty() {
         out.push('\n');
+    }
+}
+
+/// Emit a deep copy per closure-environment shape, plus the table mapping each shape's
+/// DROP function to its copy — the runtime's only handle on a closure's type at spawn time
+/// is `env->drop`, and this table is what turns it back into "how to copy these captures".
+/// The same drop-pointer-as-type-id trick the teardown walk leans on. Fiber programs only;
+/// the table symbol is weak-defaulted empty in the runtime for the C test binary, and a
+/// program that never touches fibers neither emits nor links any of it.
+fn emit_env_copies(out: &mut String, types: &TypeTable) {
+    if !types.fiber_program {
+        return;
+    }
+    let drops = types.env_drops();
+    for (name, repr) in drops {
+        let ty = types.c_type(repr);
+        let mut stmts = Vec::new();
+        copy_stmts(types, repr, "(*s)", "(*d)", &mut stmts);
+        let over = if stmts.is_empty() {
+            String::new()
+        } else {
+            format!(" {};", stmts.join("; "))
+        };
+        // Allocate with the SAME drop the closure constructor uses, bitcopy, then overwrite
+        // heap parts with independent copies — the boxed-record copy's shape exactly.
+        let _ = writeln!(
+            out,
+            "static neon_header* {name}_ecopy(const neon_header* src) {{ \
+             {ty} const* s = ({ty} const*)(src + 1); \
+             neon_header* h = neon_alloc(sizeof({ty}), {name}); \
+             {ty}* d = ({ty}*)(h + 1); *d = *s;{over} return h; }}",
+        );
+    }
+    let entries: Vec<String> = drops
+        .iter()
+        .map(|(name, _)| format!("{{ {name}, {name}_ecopy }}"))
+        .collect();
+    // Strong definitions overriding the runtime's weak empty defaults. Pointer + count,
+    // never an extern array: the types must be identical on both sides for the linker (and
+    // LTO in particular) to interpose cleanly.
+    if entries.is_empty() {
+        let _ = writeln!(
+            out,
+            "const neon_env_copy_entry* neon_env_copy_entries = 0;\n\
+             size_t neon_env_copy_count = 0;\n"
+        );
+    } else {
+        let _ = writeln!(
+            out,
+            "static const neon_env_copy_entry neon_env_copies_[] = {{ {} }};\n\
+             const neon_env_copy_entry* neon_env_copy_entries = neon_env_copies_;\n\
+             size_t neon_env_copy_count = {};\n",
+            entries.join(", "),
+            entries.len()
+        );
     }
 }
 

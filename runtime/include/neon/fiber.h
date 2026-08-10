@@ -99,6 +99,26 @@ void neon_fiber_wake(neon_fiber* f);
 // fiber's arena (capturing lambdas built inside a fiber) until copy-on-send exists; named
 // functions and capture-free lambdas have a NULL environment and always work.
 
+// The env-copy table: per closure-environment shape, the shape's DROP function (the
+// runtime's only handle on a closure's type at spawn time) mapped to a deep copy of its
+// captures. Emitted by codegen into every fiber program; weak-defaulted empty in the
+// runtime so the C test binary links. This is what lets a CAPTURING closure cross to a
+// spawned fiber: the environment is deep-copied to the shared heap like any sent value.
+typedef struct {
+    void (*drop)(void*);
+    neon_header* (*copy)(const neon_header* env);
+} neon_env_copy_entry;
+// Pointer + count rather than an extern array: the strong (program) and weak (runtime
+// default) definitions must have IDENTICAL types, and an array's length is part of its
+// type — mismatched bounds are exactly the kind of thing LTO refuses to interpose.
+extern const neon_env_copy_entry* neon_env_copy_entries;
+extern size_t neon_env_copy_count;
+
+// Deep-copy an ARENA-resident closure environment to the shared heap via the table,
+// releasing the original (in the caller's context) and returning the copy. Traps if the
+// shape is not in the table — a compiler bug, not a user error.
+neon_header* neon_env_copy_to_shared(neon_header* env);
+
 // `fiber::runtime(body)` — run `body` as the first fiber, pump until the whole tree is done.
 void neon_fiber_lang_runtime(neon_closure body);
 

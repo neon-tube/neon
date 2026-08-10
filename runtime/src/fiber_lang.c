@@ -47,6 +47,37 @@ static neon_fiber_cell* neon_fiber_cell_new(neon_closure body) {
     return cell;
 }
 
+// The env-copy table's weak defaults: every fiber PROGRAM emits the strong definition
+// (codegen's emit_env_copies); these exist so the C test binary — runtime linked without a
+// generated program — still links. Weak is fine here: the fiber sources are ELF-only
+// (x86-64 SysV gate), where weak symbols are a given.
+__attribute__((weak)) const neon_env_copy_entry* neon_env_copy_entries = 0;
+__attribute__((weak)) size_t neon_env_copy_count = 0;
+
+neon_header* neon_env_copy_to_shared(neon_header* env) {
+    for (size_t i = 0; i < neon_env_copy_count; i++) {
+        if (neon_env_copy_entries[i].drop == env->drop) {
+            void* saved = neon_send_routing_begin();
+            neon_header* c = neon_env_copy_entries[i].copy(env);
+            neon_send_routing_end(saved);
+            neon_release(env); // the reference the spawn consumed, in the caller's context
+            return c;
+        }
+    }
+    neon_trap("fiber spawn: closure environment has no registered copy (compiler bug)");
+}
+
+// A capturing closure crossing to a new fiber: an arena-resident environment is deep-copied
+// to the shared heap (captures and all, the sendability rules applying to each — a captured
+// resource or closure traps with the unsendable message); a slab or NULL environment is
+// already safe and passes through.
+static neon_closure neon_fiber_body_cross(neon_closure body) {
+    if (body.env != NULL && (body.env->flags & NEON_ALLOC_ARENA)) {
+        body.env = neon_env_copy_to_shared(body.env);
+    }
+    return body;
+}
+
 // `fiber::runtime(body)` — the lazy entry. Called on the root context (nesting traps in the
 // scheduler), so `body`'s environment is slab-allocated and safe to hand to the first fiber.
 void neon_fiber_lang_runtime(neon_closure body) {
@@ -55,14 +86,7 @@ void neon_fiber_lang_runtime(neon_closure body) {
 
 // `fiber::spawn(body)` — enqueue a fiber under the running scheduler.
 void neon_fiber_lang_spawn(neon_closure body) {
-    if (body.env != NULL && (body.env->flags & NEON_ALLOC_ARENA)) {
-        // See THE ARENA RULE above: this closure captures values that live in the spawning
-        // fiber's arena, and nothing yet copies them out. Refuse loudly.
-        neon_trap(
-            "fiber::spawn: the body captures values from the spawning fiber, which cannot "
-            "cross fibers yet — pass a named function or a capture-free lambda");
-    }
-    neon_fiber_spawn(neon_fiber_run_closure, neon_fiber_cell_new(body));
+    neon_fiber_spawn(neon_fiber_run_closure, neon_fiber_cell_new(neon_fiber_body_cross(body)));
 }
 
 // ---- fiber::spawn_with(body, arg) ----
@@ -99,12 +123,7 @@ static void neon_fiber_run_spawn_with(void* arg) {
 
 void neon_fiber_lang_spawn_with(neon_closure body, const void* arg, const neon_witness* w,
                                 neon_spawn_shim shim) {
-    if (body.env != NULL && (body.env->flags & NEON_ALLOC_ARENA)) {
-        neon_trap(
-            "fiber::spawn_with: the body captures values from the spawning fiber, which "
-            "cannot cross fibers yet — pass a named function or a capture-free lambda, and "
-            "hand data over as the argument");
-    }
+    body = neon_fiber_body_cross(body);
     neon_spawn_cell* cell = malloc(sizeof(neon_spawn_cell) + w->size);
     if (cell == NULL) {
         neon_trap("out of memory");

@@ -421,10 +421,10 @@ static void neon_task_lang_body(void* arg) {
 
 neon_task_lang* neon_task_lang_spawn(neon_closure body, const neon_witness* w,
                                      neon_task_shim shim) {
+    // A capturing body crosses like any spawn's: an arena environment is deep-copied to
+    // the shared heap through the env-copy table.
     if (body.env != NULL && (body.env->flags & NEON_ALLOC_ARENA)) {
-        neon_trap(
-            "task::spawn: the body captures values from the spawning fiber, which cannot "
-            "cross fibers yet — pass a named function or a capture-free lambda");
+        body.env = neon_env_copy_to_shared(body.env);
     }
     void* saved = neon_send_routing_begin(); // the handle is shared, like a channel
     neon_task_lang* t = (neon_task_lang*)neon_alloc(
