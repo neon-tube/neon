@@ -295,6 +295,27 @@ per slice.
    (io_uring, the file-offload pool, IOCP/kqueue) and the timer that drives preemption swap in
    behind `neon_fiber_io_wait`/`neon_fiber_safepoint` without changing anything above them.
 
-**Not yet started: the language surface.** Everything above is the C runtime. `fiber::spawn`,
-`Channel`, `Task[T]`, `await`, and the send-site value copy are codegen + stdlib work — the
-next body of effort, on top of a runtime that is built and tested.
+**The language surface: BUILT** (2026-08-10). `use std::fiber` / `std::channel` / `std::task`
+give `fiber::runtime/spawn/spawn_with/yield`, `Channel[T]` with `new/send/recv/close`, and
+`Task[T]` with `spawn/await` — all `@native` + `@runtime` stdlib declarations over the
+runtime above, with codegen assistance only where a generic value crosses the ABI:
+
+- **Copy-on-send is the witness's `copy` operation** — deep-relocate one value, allocating
+  through the ambient routing, which the send path points at the shared slab. Emitted per
+  repr: NULL for scalars, runtime helpers for str/list/map/any/channel-handle (retain —
+  a channel in a message is the same channel on both sides), generated walkers for
+  composites and boxed records, and a TRAPPING copy for closures and resources — the
+  sendability rule enforced at the exact moment it would otherwise corrupt.
+- **Data reaches a spawned fiber via `fiber::spawn_with(body, arg)`** (deep-copied arg,
+  per-repr call shim). A capturing lambda still cannot cross — the spawn guard traps with
+  a message saying what to do — until the env-copy table (the drop-pointer-keyed registry
+  sketched by the teardown walk) makes captures sendable. That is the remaining sugar.
+- **Preemption is live end to end**: the 10ms ITIMER_VIRTUAL sets the flag, codegen emits
+  `neon_fiber_safepoint()` at every loop back-edge — in fiber programs only; a non-fiber
+  program's C is byte-identical, so benchmarks pay nothing.
+
+Six corpus programs pin it under the sanitized runtime: spawn/yield FIFO, round-robin
+interleave, a parked receiver woken by a send with producer-built strings outliving their
+fiber, records with str+list+map fields and a reply channel travelling inside the spawn
+argument, task await both parked and already-done, and a never-yielding spinner preempted
+by the timer.
