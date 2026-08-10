@@ -146,12 +146,21 @@ typedef void* neon_value;
 // has no structural order (a union -- ordering one would need an invented rank between its
 // arms); the checker rejects ordering such a list, so a non-NULL `cmp` is the caller's
 // precondition, not something to test at run time.
+// `copy` deep-relocates one element: read the value at `src`, build an independent copy of
+// it — fresh allocations for every heap part, made through `neon_alloc` so the AMBIENT
+// routing decides where they land — and write it to `dst`. NULL when a `memcpy` of `size`
+// bytes IS an independent copy (scalar-only elements). This is what lets a value cross
+// fibers: the send path routes allocation to the shared heap, runs `copy`, and the result
+// owes nothing to the sender's arena. A type that cannot cross (a closure, a resource)
+// gets a copy that traps, never NULL — silence would corrupt, loudness names the limit.
+// Trailing member on purpose: an initializer that stops at `cmp` leaves it NULL.
 typedef struct neon_witness {
     size_t size;
     void (*retain)(void* elem);
     void (*release)(void* elem);
     bool (*eq)(const void* a, const void* b);
     int (*cmp)(const void* a, const void* b);
+    void (*copy)(const void* src, void* dst);
 } neon_witness;
 
 // What a *hashed* container additionally needs of its key type. Layered rather than folded

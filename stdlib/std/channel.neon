@@ -1,0 +1,52 @@
+// Channels: how fibers talk (docs/design/fibers.md). A channel carries VALUES between
+// fibers — each send deep-copies the value to the shared heap, so what the receiver gets
+// owes nothing to the sender's own memory and outlives the sender entirely. The channel
+// itself is a shared handle: pass it to a spawned fiber (`fiber::spawn_with`) and both
+// sides speak through the same one.
+//
+//     fn consumer(ch: Channel[i64]) {
+//         while channel::recv(ch) is i64 as n {
+//             io::println("got #{n}");
+//         }
+//     }
+//
+//     fn main() {
+//         fiber::runtime(() => {
+//             let ch: Channel[i64] = channel::new();
+//             fiber::spawn_with(consumer, ch);
+//             channel::send(ch, 1);
+//             channel::send(ch, 2);
+//             channel::close(ch);
+//         });
+//     }
+//
+// Sends never block (the buffer grows); a receive blocks the calling FIBER — not the
+// thread — until a value arrives, and returns `null` once the channel is closed and
+// drained, which is how a consumer loop ends. Closing is the sender's statement that it is
+// done: sending after it traps.
+//
+// What can cross: anything except a closure or a resource — scalars, strings, lists, maps,
+// records, unions, boxed `any`, and channels themselves (a channel in a message is the
+// same channel on both sides, not a copy). A value containing a closure or resource traps
+// at the send with a message saying so.
+
+/// The channel type: a shared, refcounted handle. Two bindings to one channel are the same
+/// channel; equality is identity.
+@runtime("neon_channel") sealed opaque record Channel[T] {}
+
+/// A fresh open channel.
+@native("neon_channel_new") fn new[T]() -> Channel[T]
+
+/// Send `v`: deep-copy it to the shared heap, hand it to a waiting receiver (waking it) or
+/// buffer it. Never blocks. Traps if the channel is closed.
+@native("neon_channel_send") fn send[T](ch: Channel[T], v: T)
+
+/// Receive the next value, blocking this fiber while the channel is open and empty.
+/// Returns `null` only once the channel is both closed and drained:
+///
+///     while channel::recv(ch) is i64 as n { ... }
+@native("neon_channel_recv") fn recv[T](ch: Channel[T]) -> T | null
+
+/// Close the channel: every parked receiver wakes with `null`, later receives drain the
+/// buffer then return `null`, and later sends trap. Idempotent.
+@native("neon_channel_close") fn close[T](ch: Channel[T])

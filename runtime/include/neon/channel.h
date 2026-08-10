@@ -13,6 +13,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "neon/core.h" // neon_witness, for the language channel
+
 // ---- channels ----
 
 typedef struct neon_chan neon_chan;
@@ -36,6 +38,36 @@ void neon_chan_close(neon_chan* ch);
 
 // Free a channel. It must have no parked receivers (close and let them drain first).
 void neon_chan_free(neon_chan* ch);
+
+// ---- the language channel (`std::channel`'s Channel[T], src/fiber_chan.c) ----
+//
+// Carries VALUES in slots of the element witness's size, deep-copied to the shared heap on
+// send so they owe nothing to the sender's arena. The struct is shared-heap allocated and
+// refcounted (its first field is a neon_header); every op consumes the handle reference it
+// is passed, per the runtime-wide native convention.
+
+typedef struct neon_channel neon_channel;
+
+// A fresh open channel for elements described by `w`. The caller owns the returned handle.
+neon_channel* neon_channel_new(const neon_witness* w);
+
+// Deep-copy the value at `v` into the channel (straight into a parked receiver's slot when
+// one waits), release the original, wake the receiver. Traps on a closed channel. Consumes
+// the `ch` reference and the value.
+void neon_channel_send(neon_channel* ch, const void* v);
+
+// Receive into `out`: true with a value (owned by the caller), false only once the channel
+// is closed AND drained. Parks the calling fiber while open and empty. Consumes the `ch`
+// reference (after any park).
+bool neon_channel_recv(neon_channel* ch, void* out);
+
+// Close: wake every parked receiver empty-handed; later receives drain then return false.
+// Idempotent. Consumes the `ch` reference.
+void neon_channel_close(neon_channel* ch);
+
+// The witness `copy` for a channel-handle slot: retain + pointer copy (a channel is a
+// shared-heap identity). Used by emitted witness tables when a Channel crosses fibers.
+void neon_wcopy_channel(const void* src, void* dst);
 
 // ---- Task[T] / await ----
 

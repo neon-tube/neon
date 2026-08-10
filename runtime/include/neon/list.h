@@ -84,4 +84,9 @@ neon_list* neon_list_concat(neon_list* a, neon_list* b);    // consumes both
 int neon_list_cmp(const neon_list* a, const neon_list* b);  // borrows both; -1/0/1
 bool neon_list_eq(const neon_list* a, const neon_list* b);  // borrows both
 
+
+// The witness `copy` for a list slot: a fresh list with every element deep-copied through
+// the element witness. Used by emitted witness tables.
+void neon_wcopy_list(const void* src, void* dst);
+
 #endif

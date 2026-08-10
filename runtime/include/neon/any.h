@@ -33,4 +33,9 @@ static inline void* neon_box_payload(neon_value v) {
     return (void*)((neon_box*)v + 1);
 }
 
+
+// The witness `copy` for a boxed `any` slot: a fresh box, payload deep-copied through the
+// payload's witness. Used by emitted witness tables.
+void neon_wcopy_any(const void* src, void* dst);
+
 #endif

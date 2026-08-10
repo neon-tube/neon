@@ -206,3 +206,27 @@ __attribute__((destructor)) static void neon_slab_teardown(void) {
 #endif
 
 #endif
+
+// ---- sendability helpers (see neon/core.h's witness `copy` contract) ----
+
+void neon_wcopy_unsendable(const void* src, void* dst) {
+    (void)src;
+    (void)dst;
+    neon_trap("this value cannot be sent between fibers (closures and resources do not cross)");
+}
+
+#ifndef NEON_CBMC
+void* neon_send_routing_begin(void) {
+    neon_arena* saved = neon_current_arena;
+    neon_current_arena = NULL; // every allocation until end lands in the shared slab
+    return saved;
+}
+
+void neon_send_routing_end(void* saved) {
+    neon_current_arena = (neon_arena*)saved;
+}
+#else
+// The models never build the fiber sources and have no current arena to route around.
+void* neon_send_routing_begin(void) { return NULL; }
+void neon_send_routing_end(void* saved) { (void)saved; }
+#endif

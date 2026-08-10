@@ -38,3 +38,14 @@
 /// Yield cooperatively: the scheduler runs the other ready fibers, then this one again.
 /// Traps outside a fiber.
 @native("neon_fiber_sched_yield") fn yield()
+
+/// Spawn `body` with one argument, deep-copied so it may cross into the new fiber — the
+/// way DATA reaches a spawned fiber. The body itself must still be a named function or a
+/// capture-free lambda; the argument carries what a capture cannot:
+///
+///     fiber::spawn_with(consumer, ch);              // hand a channel to a worker
+///     fiber::spawn_with((n: i64) => work(n), 42);
+///
+/// Anything sendable crosses (see std::channel's list); a closure or resource in the
+/// argument traps with a message saying so.
+@native("neon_fiber_lang_spawn_with") fn spawn_with[T](body: (T) -> (), arg: T)

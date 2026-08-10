@@ -53,4 +53,9 @@ neon_str neon_f64_to_string(double x);
 neon_str neon_bool_to_string(bool b);
 neon_str neon_str_to_string(neon_str s);
 
+
+// The witness `copy` for a str slot (see neon/core.h): literals pass through, owned bytes
+// are reallocated via the ambient routing. Used by emitted witness tables.
+void neon_wcopy_str(const void* src, void* dst);
+
 #endif

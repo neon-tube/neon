@@ -74,9 +74,13 @@ fn emit_with(program: &Program, entry: Entry) -> String {
     types.emit_defs(&mut out);
     // Before the witnesses: an element witness for a boxed record calls into these.
     emit_boxed_eq(&mut out, &types);
+    // Copies are declared before the witness wrappers that call them, defined after the
+    // env drops whose symbols they allocate with.
+    emit_boxed_copy_decls(&mut out, &types);
     emit_witnesses(&mut out, &types);
     emit_key_witnesses(&mut out, &types);
     emit_env_drops(&mut out, &types);
+    emit_boxed_copy_defs(&mut out, &types);
 
     // Forward declarations, so call order does not matter.
     for f in &program.funcs {
@@ -92,6 +96,7 @@ fn emit_with(program: &Program, entry: Entry) -> String {
     emit_thunks(&mut out, &types, program);
     emit_resource_drops(&mut out, &types, program);
     emit_map_updaters(&mut out, &types, program);
+    emit_spawn_shims(&mut out, &types, program);
 
     // Function bodies go to their own buffer: emitting one is what REQUESTS a list
     // conversion shim, and the shims have to be declared above the bodies that call them.
@@ -373,6 +378,26 @@ fn emit_inst(out: &mut String, types: &TypeTable, f: &Func, inst: &crate::ir::ss
             index,
             covered,
         } => emit_index(out, types, f, inst.result, *base, *index, *covered),
+        // A receive fills a temporary of the channel's element type and reports whether a
+        // value arrived; the Neon result is `T | null`, so the two outcomes are coerced
+        // into it here — the runtime cannot build that union, only this emitter knows it.
+        Op::Native { symbol, args } if symbol == "neon_channel_recv" => {
+            let Some(r) = inst.result else {
+                return;
+            };
+            let e = chan_elem(types, f, args[0]);
+            let ec = types.c_type(&e);
+            let res = f.value_repr(r).clone();
+            let got = coerce_expr(types, "_crv", &e, &res);
+            let none = coerce_expr(types, "((neon_unit){0})", &Repr::Null, &res);
+            let _ = writeln!(
+                out,
+                "{{ {ec} _crv; if (neon_channel_recv({}, &_crv)) {{ {} = {got}; }} else {{ {} = {none}; }} }}",
+                var(args[0]),
+                var(r),
+                var(r),
+            );
+        }
         Op::Native { symbol, args } if is_list_builder(symbol) => {
             emit_list_builder(out, types, f, inst.result, symbol, args)
         }
@@ -571,7 +596,30 @@ fn is_list_builder(symbol: &str) -> bool {
             | "neon_map_keys"
             | "neon_map_values"
             | "neon_resource_new"
+            // The channel constructor takes the element witness; a send passes the element
+            // by address (a `T | null`-returning recv is statement-shaped and handled
+            // before this gate). `spawn_with`'s argument crosses by address with its
+            // witness and a per-repr call shim.
+            | "neon_channel_new"
+            | "neon_channel_send"
+            | "neon_fiber_lang_spawn_with"
     )
+}
+
+/// The element repr of a channel value: `Channel[T]` is `Repr::Runtime` with `T` as its one
+/// argument. Ices on anything else — the checker typed the operand, so a non-channel here is
+/// an emitter bug, not a case.
+fn chan_elem(types: &TypeTable, f: &Func, v: Value) -> Repr {
+    match types.resolve(f.value_repr(v)) {
+        Repr::Runtime { args, .. } if args.len() == 1 => args[0].clone(),
+        r => ice(r, "channel operation on a non-channel"),
+    }
+}
+
+/// The per-repr `fiber::spawn_with` shim name: the only code that knows the argument's C
+/// type and so the only code that can pass it to the body closure by value.
+fn spawn_shim_name(types: &TypeTable, t: &Repr) -> String {
+    format!("nspawn_{}", types.witness_ref(t).trim_start_matches('&'))
 }
 
 /// The cleanup closure's shape: its payload parameter, what it throws, and what it
@@ -899,6 +947,37 @@ fn emit_list_builder(
         );
         return;
     }
+    // A send returns nothing; its element repr comes from the channel argument. The value
+    // crosses by address, coerced to the channel's element repr first — the same rule as a
+    // list slot, and for the same reason.
+    if symbol == "neon_channel_send" {
+        let e = chan_elem(types, f, args[0]);
+        let _ = writeln!(
+            out,
+            "neon_channel_send({}, {});",
+            var(args[0]),
+            addr_of(types, f, args[1], &e)
+        );
+        return;
+    }
+    // spawn_with returns nothing. The argument's canonical repr is the BODY CLOSURE's
+    // parameter (the argument itself may be narrower); its witness carries the deep copy
+    // that moves it to the shared heap, and the shim is the per-repr call adapter.
+    if symbol == "neon_fiber_lang_spawn_with" {
+        let t = match types.resolve(f.value_repr(args[0])) {
+            Repr::Closure { params, .. } if params.len() == 1 => params[0].clone(),
+            r => ice(r, "spawn_with body is not a one-argument closure"),
+        };
+        let _ = writeln!(
+            out,
+            "neon_fiber_lang_spawn_with({}, {}, {}, {});",
+            var(args[0]),
+            addr_of(types, f, args[1], &t),
+            types.witness_ref(&t),
+            spawn_shim_name(types, &t)
+        );
+        return;
+    }
     if symbol == "neon_list_set_inplace" {
         let Repr::List(e) = f.value_repr(args[0]) else {
             unreachable!("codegen: in-place write on a non-list")
@@ -986,6 +1065,11 @@ fn emit_list_builder(
                 var(args[1]),
                 resource_drop_name(types, &t, &e)
             )
+        }
+        // The channel stores its element witness at construction, exactly as a list does.
+        "neon_channel_new" => {
+            let e = chan_elem(types, f, r);
+            format!("neon_channel_new({})", types.witness_ref(&e))
         }
         "neon_list_new" => format!("neon_list_new({})", w()),
         "neon_list_new_with_capacity" => {
@@ -1652,11 +1736,195 @@ fn emit_boxed_eq(out: &mut String, types: &TypeTable) {
 /// A null function pointer stands for "nothing to do": an element with no counted parts
 /// gets no retain or release, and an unordered one gets no `cmp`, so the runtime skips the
 /// work instead of calling a function that does nothing.
+/// The deep-copy statements for one repr, `src` into `dst` (both C lvalue expressions of
+/// the repr's C type, `dst` raw non-owning memory already holding a bitcopy of `src`).
+/// Scalars need nothing — the bitcopy was the copy; heap parts are overwritten with
+/// independent copies through the runtime `neon_wcopy_*` helpers (NULL-tolerant for the
+/// pointer reprs a nullable shares its representation with) and the per-boxed-record copy
+/// functions. A part that cannot cross fibers (a closure, a non-channel runtime handle)
+/// emits the trapping helper — loudness over corruption, the witness `copy` contract.
+///
+/// Terminates on recursive types for the same reason `emit_boxed_eq`'s walk does: every
+/// cycle passes through a `BoxedRec`, which emits a CALL to its per-type function rather
+/// than inlining.
+fn copy_stmts(types: &TypeTable, repr: &Repr, src: &str, dst: &str, out: &mut Vec<String>) {
+    if types.is_boxed(repr) {
+        let (wrapper, _) = types
+            .boxed_shape(repr)
+            .expect("copying a boxed record with no registered wrapper");
+        out.push(format!("{dst} = {wrapper}_copy({src})"));
+        return;
+    }
+    match types.resolve(repr).clone() {
+        Repr::Str => out.push(format!("neon_wcopy_str(&{src}, &{dst})")),
+        Repr::List(_) => out.push(format!("neon_wcopy_list(&{src}, &{dst})")),
+        Repr::Map(_, _) => out.push(format!("neon_wcopy_map(&{src}, &{dst})")),
+        Repr::Any => out.push(format!("neon_wcopy_any(&{src}, &{dst})")),
+        Repr::Runtime { c_type, .. } if c_type == "neon_channel" => {
+            out.push(format!("neon_wcopy_channel(&{src}, &{dst})"))
+        }
+        Repr::Closure { .. } | Repr::Runtime { .. } => out.push(
+            "neon_wcopy_unsendable((const void*)0, (void*)0)".to_string(),
+        ),
+        Repr::Union(variants) => {
+            let mut arms = String::new();
+            for (i, v) in variants.iter().enumerate() {
+                let mut sub = Vec::new();
+                copy_stmts(types, v, &format!("{src}.u._{i}"), &format!("{dst}.u._{i}"), &mut sub);
+                if !sub.is_empty() {
+                    let _ = write!(arms, "case {i}: {}; break; ", sub.join("; "));
+                }
+            }
+            if !arms.is_empty() {
+                out.push(format!("switch ({src}.tag) {{ {arms}default: break; }}"));
+            }
+        }
+        Repr::Nullable(inner) => copy_stmts(types, &inner, src, dst, out),
+        Repr::Record { fields, .. } => {
+            for (n, fr) in &fields {
+                let fname = field_name(n);
+                copy_stmts(
+                    types,
+                    fr,
+                    &format!("{src}.{fname}"),
+                    &format!("{dst}.{fname}"),
+                    out,
+                );
+            }
+        }
+        Repr::Tuple(elems) => {
+            for (i, e) in elems.iter().enumerate() {
+                copy_stmts(types, e, &format!("{src}._{i}"), &format!("{dst}._{i}"), out);
+            }
+        }
+        Repr::I64
+        | Repr::F64
+        | Repr::Bool
+        | Repr::Tag
+        | Repr::Unit
+        | Repr::Null
+        | Repr::Never
+        | Repr::BoxedRec(_)
+        | Repr::Recursive(_) => {}
+        r @ Repr::Var(_) => ice(&r, "copying a type variable"),
+    }
+}
+
+/// The witness `copy` member for a repr: `0` when a bitcopy is independent (scalar-only),
+/// a runtime helper where one repr IS the helper's shape, or a generated wrapper holding
+/// the composite walk. Returns the C expression for the table literal.
+fn witness_copy_ref(out: &mut String, types: &TypeTable, name: &str, repr: &Repr) -> String {
+    match types.resolve(repr) {
+        Repr::Str => return "neon_wcopy_str".into(),
+        Repr::List(_) => return "neon_wcopy_list".into(),
+        Repr::Map(_, _) => return "neon_wcopy_map".into(),
+        Repr::Any => return "neon_wcopy_any".into(),
+        Repr::Runtime { c_type, .. } if c_type == "neon_channel" => {
+            return "neon_wcopy_channel".into()
+        }
+        Repr::Closure { .. } | Repr::Runtime { .. } => return "neon_wcopy_unsendable".into(),
+        _ => {}
+    }
+    let mut stmts = Vec::new();
+    copy_stmts(types, repr, "(*s)", "(*d)", &mut stmts);
+    if stmts.is_empty() {
+        return "0".into();
+    }
+    let ty = types.c_type(repr);
+    let fname = format!("{name}_copy");
+    let _ = writeln!(
+        out,
+        "static void {fname}(const void* ps, void* pd) {{ {ty} const* s = ({ty} const*)ps; {ty}* d = ({ty}*)pd; *d = *s; {}; }}",
+        stmts.join("; ")
+    );
+    fname
+}
+
+/// Forward-declare the per-boxed-record deep copies, before the witness wrappers that call
+/// them; the definitions follow the env drops (whose symbols they allocate with).
+fn emit_boxed_copy_decls(out: &mut String, types: &TypeTable) {
+    let boxed = types.boxed_records();
+    for (name, _) in &boxed {
+        let _ = writeln!(out, "static {name}* {name}_copy(const {name}* s);");
+    }
+    if !boxed.is_empty() {
+        out.push('\n');
+    }
+}
+
+/// The deep copy for each boxed (self-referencing) record: allocate a fresh wrapper with
+/// the SAME drop the constructor uses (so releasing the copy walks the same shape), bitcopy
+/// the value, then overwrite its heap parts with independent copies. NULL passes through —
+/// a boxed field that is `T | null` arrives as a null pointer. Mutual recursion works for
+/// the same reason `emit_boxed_eq`'s does: everything is forward-declared, and the value
+/// graph is a DAG (records are immutable), so the walk terminates.
+fn emit_boxed_copy_defs(out: &mut String, types: &TypeTable) {
+    let boxed = types.boxed_records();
+    for (name, shape) in &boxed {
+        let sty = types.c_type(shape);
+        let mut stmts = Vec::new();
+        copy_stmts(types, shape, "(s->value)", "(d->value)", &mut stmts);
+        let body = if stmts.is_empty() {
+            String::new()
+        } else {
+            format!(" {};", stmts.join("; "))
+        };
+        let _ = writeln!(
+            out,
+            "static {name}* {name}_copy(const {name}* s) {{ if (s == NULL) return NULL; \
+             {name}* d = ({name}*)neon_alloc(sizeof({sty}), {}); d->value = s->value;{body} return d; }}",
+            types.env_drop_ref(shape)
+        );
+    }
+    if !boxed.is_empty() {
+        out.push('\n');
+    }
+}
+
+/// One `fiber::spawn_with` call shim per argument repr used in the program: load the value
+/// from its cell bytes and call the body closure with it BY VALUE — only this emitted code
+/// knows the C type that call needs. The map-updater pattern, for a spawn.
+fn emit_spawn_shims(out: &mut String, types: &TypeTable, program: &Program) {
+    let mut seen: std::collections::BTreeMap<String, Repr> = std::collections::BTreeMap::new();
+    for f in &program.funcs {
+        for b in &f.blocks {
+            for inst in &b.insts {
+                let Op::Native { symbol, args } = &inst.op else {
+                    continue;
+                };
+                if symbol != "neon_fiber_lang_spawn_with" {
+                    continue;
+                }
+                let t = match types.resolve(f.value_repr(args[0])) {
+                    Repr::Closure { params, .. } if params.len() == 1 => params[0].clone(),
+                    r => ice(r, "spawn_with body is not a one-argument closure"),
+                };
+                seen.insert(spawn_shim_name(types, &t), t);
+            }
+        }
+    }
+    if seen.is_empty() {
+        return;
+    }
+    for (name, t) in seen {
+        let tc = types.c_type(&t);
+        let _ = writeln!(
+            out,
+            // `{tc} const*`, not `const {tc}*`: for a pointer element the prefix form
+            // would qualify the POINTEE and the load would discard const — the same
+            // qualifier-position rule the witness eq casts follow.
+            "static void {name}(neon_closure f, const void* in) {{ {tc} v = *({tc} const*)in; ((void(*)(neon_header*, {tc}))f.fn)(f.env, v); }}",
+        );
+    }
+    out.push('\n');
+}
+
 fn emit_witnesses(out: &mut String, types: &TypeTable) {
     for (name, repr) in types.witnesses() {
         let ty = types.c_type(repr);
         let retain = emit_witness_fn(out, types, name, repr, "retain", "neon_retain");
         let release = emit_witness_fn(out, types, name, repr, "release", "neon_release");
+        let copy = witness_copy_ref(out, types, name, repr);
         // Structural comparison, so `==` and `<` on a list can walk its elements. `eq`
         // always exists; `cmp` only for an element that has an order.
         // `{ty} const*`, not `const {ty}*`. The two are the same for a flat repr, but a
@@ -1682,7 +1950,7 @@ fn emit_witnesses(out: &mut String, types: &TypeTable) {
         };
         let _ = writeln!(
             out,
-            "static const neon_witness {name} = {{ sizeof({ty}), {retain}, {release}, {name}_eq, {cmp} }};"
+            "static const neon_witness {name} = {{ sizeof({ty}), {retain}, {release}, {name}_eq, {cmp}, {copy} }};"
         );
     }
     if !types.witnesses().is_empty() {
