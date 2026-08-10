@@ -34,6 +34,27 @@ use std::string;
 record HttpError { message: str }
 impl Error for HttpError { fn message(v: HttpError) -> str { v.message } }
 
+/// A request method. The standard verbs are atoms — typo-proof and self-documenting, so
+/// `:get` cannot be misspelled `"GET "` or lower-cased into a rejection the way a bare
+/// string can. An extension method (WebDAV's PROPFIND, a private verb) rides as a raw
+/// `str`, passed to the wire verbatim because those ARE case-sensitive tokens the library
+/// has no business normalising. The received side (`Request.method`) stays a plain `str`:
+/// it is arbitrary data off the wire, and a server must see an unknown verb as it came.
+type Method = :get | :post | :put | :delete | :head | :options | :patch | str
+
+/// The wire token for a method: the canonical uppercase spelling for a known verb, the
+/// raw string untouched for an extension.
+fn method_token(m: Method) -> str {
+    if m is str { m }
+    else if m == :get { "GET" }
+    else if m == :post { "POST" }
+    else if m == :put { "PUT" }
+    else if m == :delete { "DELETE" }
+    else if m == :head { "HEAD" }
+    else if m == :options { "OPTIONS" }
+    else { "PATCH" }
+}
+
 record Request { method: str, target: str, headers: List[(str, str)], body: str }
 record Response { status: i64, headers: List[(str, str)], body: str }
 
@@ -296,14 +317,14 @@ fn split_url(u: str) throws HttpError -> (str, str, str, bool) {
 /// One request, one connection: connect (with the TLS handshake when the URL says
 /// https), send, read the full response, close. The `Connection: close` header means an
 /// EOF-delimited body parses too (`finish`).
-fn request(method: str, url: str, headers: List[(str, str)], body: str) throws HttpError | IoError | net::TlsError -> Response {
+fn request(method: Method, url: str, headers: List[(str, str)], body: str) throws HttpError | IoError | net::TlsError -> Response {
     let (addr, target, host, secure) = try split_url(url);
     let c: Conn = if secure {
         try net::tls::connect(addr, host)
     } else {
         try net::tcp::connect(addr)
     };
-    let head = "#{method} #{target} HTTP/1.1\r\nHost: #{addr}\r\nConnection: close\r\n";
+    let head = "#{method_token(method)} #{target} HTTP/1.1\r\nHost: #{addr}\r\nConnection: close\r\n";
     try conn_write(c, string::concat(head, serialize_headers(headers, body)));
     let p = raw::new(true);
     try read_message(c, p, "");
@@ -317,11 +338,11 @@ fn request(method: str, url: str, headers: List[(str, str)], body: str) throws H
 }
 
 fn get(url: str) throws HttpError | IoError | net::TlsError -> Response {
-    try request("GET", url, [], "")
+    try request(:get, url, [], "")
 }
 
 fn post(url: str, body: str) throws HttpError | IoError | net::TlsError -> Response {
-    try request("POST", url, [], body)
+    try request(:post, url, [], body)
 }
 
 // ---- the request builder ----
@@ -332,12 +353,12 @@ fn post(url: str, body: str) throws HttpError | IoError | net::TlsError -> Respo
 // rebuilds with one field changed), and `send` is the terminal that actually goes to the
 // network:
 //
-//     let resp = try client::to("https://api.example.com/things")
-//         |> client::method("POST")
+//     let resp = client::to("https://api.example.com/things")
+//         |> client::method(:post)
 //         |> client::header("Authorization", "Bearer #{token}")
 //         |> client::header("Content-Type", "application/json")
 //         |> client::body("{\"name\":\"x\"}")
-//         |> client::send();
+//         |> try! client::send();
 //
 // Headers accumulate in call order and are sent in that order; nothing dedups or
 // normalises them, because a request may legitimately repeat a field and the wire order
@@ -346,18 +367,19 @@ fn post(url: str, body: str) throws HttpError | IoError | net::TlsError -> Respo
 
 record Req {
     url: str,
-    method: str,
+    method: Method,
     headers: List[(str, str)],
     body: str,
 }
 
 /// Begin a request to `url`: GET, no headers, empty body, until the pipe says otherwise.
 fn to(url: str) -> Req {
-    Req { url: url, method: "GET", headers: [], body: "" }
+    Req { url: url, method: :get, headers: [], body: "" }
 }
 
-/// The method (GET by default). Uppercase by convention; nothing forces it.
-fn method(r: Req, m: str) -> Req {
+/// The method: an atom for a standard verb (`:post`, `:put`, ...) or a raw string for an
+/// extension method.
+fn method(r: Req, m: Method) -> Req {
     Req { method: m, ..r }
 }
 

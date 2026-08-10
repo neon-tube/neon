@@ -1826,6 +1826,39 @@ where
                 op.then(operand).repeated(),
                 |lhs, (op, rhs): (BinOp, Expr)| {
                     let span = lhs.span.start..rhs.span.end;
+                    // `a |> try! f()` reads as "pipe into f, then try that" — but the
+                    // pipe's right is parsed as the atom `try! f()`, a Try wrapping a
+                    // call, which the pipe cannot thread into. Rewrite it to
+                    // `try! (a |> f())`: the pipe goes INSIDE the try body, so the try
+                    // wraps the whole piped call (and thus any throw from an earlier
+                    // stage). Pure sugar over what one writes by hand today, and it makes
+                    // the terminal of a builder pipeline read without an outer paren. Any
+                    // try form, catch and all.
+                    if op == BinOp::Pipe {
+                        if let ExprKind::Try { .. } = rhs.kind {
+                            let ExprKind::Try { form, body, catch } = rhs.kind else {
+                                unreachable!("guarded by the match above")
+                            };
+                            let piped = Expr {
+                                kind: ExprKind::Binary {
+                                    op: BinOp::Pipe,
+                                    lhs: Box::new(lhs),
+                                    rhs: body,
+                                },
+                                span: span.clone(),
+                                id: ExprId::UNSET,
+                            };
+                            return Expr {
+                                kind: ExprKind::Try {
+                                    form,
+                                    body: Box::new(piped),
+                                    catch,
+                                },
+                                span,
+                                id: ExprId::UNSET,
+                            };
+                        }
+                    }
                     Expr {
                         kind: ExprKind::Binary {
                             op,

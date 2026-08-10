@@ -17,11 +17,11 @@ fn reflect(req: http::Request) throws http::HttpError -> http::Response {
 }
 
 fn client(addr: str, done: channel::Channel[str]) {
-    let resp = try! (http::client::to("http://#{addr}/thing")
-        |> http::client::method("PUT")
+    let resp = http::client::to("http://#{addr}/thing")
+        |> http::client::method(:put)
         |> http::client::header("X-Token", "sesame")
         |> http::client::body("payload-here")
-        |> http::client::send());
+        |> try! http::client::send();
     try! channel::send(done, "#{resp.status}: #{resp.body}");
 }
 
