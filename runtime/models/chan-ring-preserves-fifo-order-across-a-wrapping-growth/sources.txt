@@ -1,0 +1,5 @@
+# The channel unit under test, plus the refcount pair and the trap that other functions in
+# the same translation unit reach (dropped as unused here, but they must resolve).
+src/fiber_chan.c
+src/lifecycle.c
+src/trap.c

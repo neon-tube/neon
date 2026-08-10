@@ -1,0 +1,4 @@
+# The scheduler: neon_fiber_wake and the run-queue admission behind it. Everything else in
+# the unit (the pump, epoll, io_uring, the preemption timer) is unreachable from this
+# harness and dropped by --drop-unused-functions.
+src/fiber_sched.c
