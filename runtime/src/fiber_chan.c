@@ -10,6 +10,7 @@
 #include "internal.h"       // neon_current_arena, for the rendezvous receiver-arena copy
 #include "neon/channel.h"
 
+#include <pthread.h> // per-channel/per-task locks: the one thing M:N adds here
 #include <stdlib.h>
 
 // A parked receiver, allocated on the blocked fiber's own stack (which stays live while it is
@@ -204,6 +205,7 @@ typedef struct neon_channel_sender {
 
 typedef struct neon_channel {
     neon_header header;
+    pthread_mutex_t mu; // guards ring + waiter lists + closed; never held across a park
     const neon_witness* w;
     char* buf;   // ring of len slots of w->size
     size_t cap;
@@ -219,6 +221,7 @@ typedef struct neon_channel {
 
 static void neon_channel_drop(void* p) {
     neon_channel* ch = (neon_channel*)p;
+    pthread_mutex_destroy(&ch->mu);
     // Undelivered values are released here — shared-heap objects, safe from any context.
     if (ch->w->release) {
         for (size_t i = 0; i < ch->len; i++) {
@@ -245,6 +248,7 @@ neon_channel* neon_channel_new(const neon_witness* w) {
     ch->shead = NULL;
     ch->stail = NULL;
     ch->closed = false;
+    pthread_mutex_init(&ch->mu, NULL);
     return ch;
 }
 
@@ -282,7 +286,9 @@ static void* neon_channel_slot_reserve(neon_channel* ch) {
 }
 
 void neon_channel_send(neon_channel* ch, const void* v) {
+    pthread_mutex_lock(&ch->mu);
     if (ch->closed) {
+        pthread_mutex_unlock(&ch->mu);
         neon_trap("channel::send: send on a closed channel");
     }
     // Backpressure: on a bounded channel a send parks while the ring is full — and, ON
@@ -302,9 +308,12 @@ void neon_channel_send(neon_channel* ch, const void* v) {
             ch->shead = &me;
         }
         ch->stail = &me;
+        pthread_mutex_unlock(&ch->mu);
         neon_fiber_park();
+        pthread_mutex_lock(&ch->mu);
         behind = false; // woken by a receive: the opened slot is ours
         if (me.closed) {
+            pthread_mutex_unlock(&ch->mu);
             neon_release_shared((neon_header*)ch);
             neon_trap("channel::send: the channel was closed while this send waited");
         }
@@ -353,6 +362,7 @@ void neon_channel_send(neon_channel* ch, const void* v) {
     } else {
         ch->len++;
     }
+    pthread_mutex_unlock(&ch->mu);
     // Consume the original value (in the SENDER's context, so an arena element frees into
     // its own arena) and the channel reference.
     if (ch->w->release) {
@@ -363,6 +373,7 @@ void neon_channel_send(neon_channel* ch, const void* v) {
 
 bool neon_channel_recv(neon_channel* ch, void* out) {
     bool got;
+    pthread_mutex_lock(&ch->mu);
     if (ch->len > 0) {
         size_t sz = ch->w->size;
         // Restage: deep-copy the staged value into the RECEIVER's own arena (the ambient
@@ -400,9 +411,13 @@ bool neon_channel_recv(neon_channel* ch, void* out) {
             ch->rhead = &w;
         }
         ch->rtail = &w;
+        pthread_mutex_unlock(&ch->mu);
         neon_fiber_park();
         got = w.delivered;
+        goto out_unlocked;
     }
+    pthread_mutex_unlock(&ch->mu);
+out_unlocked:
     // Invariant 3: the handle reference is released only now, after any park — the channel
     // cannot die under a waiter that still names it.
     neon_release_shared((neon_header*)ch);
@@ -410,6 +425,7 @@ bool neon_channel_recv(neon_channel* ch, void* out) {
 }
 
 void neon_channel_close(neon_channel* ch) {
+    pthread_mutex_lock(&ch->mu);
     if (!ch->closed) {
         ch->closed = true;
         for (neon_channel_waiter* w = ch->rhead; w != NULL;) {
@@ -429,13 +445,16 @@ void neon_channel_close(neon_channel* ch) {
         ch->shead = NULL;
         ch->stail = NULL;
     }
+    pthread_mutex_unlock(&ch->mu);
     neon_release_shared((neon_header*)ch);
 }
 
 // Whether the channel has been closed. A drained-ness probe belongs to recv (its null);
 // this answers "will more values ever arrive" for a receiver whose recv came back empty.
 bool neon_channel_is_closed(neon_channel* ch) {
+    pthread_mutex_lock(&ch->mu);
     bool c = ch->closed;
+    pthread_mutex_unlock(&ch->mu);
     neon_release_shared((neon_header*)ch);
     return c;
 }
@@ -445,7 +464,9 @@ bool neon_channel_is_closed(neon_channel* ch) {
 // the waiter is unlinked HERE — the wake that never came must find nothing to aim at.
 bool neon_channel_recv_timeout(neon_channel* ch, void* out, int64_t millis) {
     bool got;
+    pthread_mutex_lock(&ch->mu);
     if (ch->len > 0 || ch->closed) {
+        pthread_mutex_unlock(&ch->mu);
         return neon_channel_recv(ch, out); // a value or the drained null, no parking needed
     }
     neon_channel_waiter w = {neon_fiber_current(), out, false, NULL};
@@ -455,11 +476,15 @@ bool neon_channel_recv_timeout(neon_channel* ch, void* out, int64_t millis) {
         ch->rhead = &w;
     }
     ch->rtail = &w;
+    pthread_mutex_unlock(&ch->mu);
     if (neon_fiber_park_deadline(millis)) {
         got = w.delivered; // a send (true) or a close (false) won the race
     } else {
-        // The deadline fired: pull our waiter out so a later send cannot deliver into a
-        // frame that has moved on.
+        // The deadline fired. Under the LOCK, either our waiter is still linked — a true
+        // timeout, and unlinking it is our claim — or a send/close claimed it in the race
+        // window and its delivery stands (the wake it also issued dissolves against the
+        // queued bit; the admission the deadline made is the one that ran us).
+        pthread_mutex_lock(&ch->mu);
         neon_channel_waiter** link = &ch->rhead;
         neon_channel_waiter* prev = NULL;
         while (*link != NULL && *link != &w) {
@@ -471,8 +496,11 @@ bool neon_channel_recv_timeout(neon_channel* ch, void* out, int64_t millis) {
             if (ch->rtail == &w) {
                 ch->rtail = prev;
             }
+            got = false;
+        } else {
+            got = w.delivered; // claimed by a send in the window: the value is ours
         }
-        got = false;
+        pthread_mutex_unlock(&ch->mu);
     }
     neon_release_shared((neon_header*)ch);
     return got;
@@ -499,6 +527,7 @@ void neon_wcopy_channel(const void* src, void* dst) {
 
 typedef struct neon_task_lang {
     neon_header header;
+    pthread_mutex_t mu; // guards done/failed/awaiter across completion, reap, await
     const neon_witness* w;
     bool done;
     bool failed;         // the body fiber CRASHED; await propagates rather than parking forever
@@ -519,6 +548,7 @@ typedef struct {
 
 static void neon_task_lang_drop(void* p) {
     neon_task_lang* t = (neon_task_lang*)p;
+    pthread_mutex_destroy(&t->mu);
     if (t->done && !t->taken && t->w->release) {
         t->w->release((void*)(t + 1)); // a result nobody awaited — shared-heap, safe anywhere
     }
@@ -549,10 +579,12 @@ static void neon_task_lang_body(void* arg) {
     if (t->w->release) {
         t->w->release(tmp);
     }
+    pthread_mutex_lock(&t->mu);
     t->done = true; // publish strictly after the copy, as a channel send does
-    if (t->awaiter != NULL) {
-        neon_fiber* a = t->awaiter;
-        t->awaiter = NULL;
+    neon_fiber* a = t->awaiter;
+    t->awaiter = NULL;
+    pthread_mutex_unlock(&t->mu);
+    if (a != NULL) {
         neon_fiber_wake(a);
     }
     // The body's task reference is released by the reap hook, which runs for a crash too —
@@ -563,13 +595,16 @@ static void neon_task_lang_body(void* arg) {
 // the awaiter (whose await then propagates); either way, drop the body's task reference.
 static void neon_task_lang_reaped(void* arg, bool crashed) {
     neon_task_lang* t = (neon_task_lang*)arg;
+    pthread_mutex_lock(&t->mu);
+    neon_fiber* a = NULL;
     if (crashed && !t->done) {
         t->failed = true;
-        if (t->awaiter != NULL) {
-            neon_fiber* a = t->awaiter;
-            t->awaiter = NULL;
-            neon_fiber_wake(a);
-        }
+        a = t->awaiter;
+        t->awaiter = NULL;
+    }
+    pthread_mutex_unlock(&t->mu);
+    if (a != NULL) {
+        neon_fiber_wake(a);
     }
     neon_release_shared((neon_header*)t);
 }
@@ -590,6 +625,7 @@ neon_task_lang* neon_task_lang_spawn(neon_closure body, const neon_witness* w,
     t->failed = false;
     t->taken = false;
     t->awaiter = NULL;
+    pthread_mutex_init(&t->mu, NULL);
     neon_task_cell* cell = malloc(sizeof(neon_task_cell));
     if (cell == NULL) {
         neon_trap("out of memory");
@@ -605,9 +641,13 @@ neon_task_lang* neon_task_lang_spawn(neon_closure body, const neon_witness* w,
 }
 
 void neon_task_lang_await(neon_task_lang* t, void* out) {
+    pthread_mutex_lock(&t->mu);
     if (!t->done && !t->failed) {
         t->awaiter = neon_fiber_current();
+        pthread_mutex_unlock(&t->mu);
         neon_fiber_park(); // woken by the body's completion — or by its crash
+    } else {
+        pthread_mutex_unlock(&t->mu);
     }
     if (t->failed) {
         // Propagate: the awaited work died, so the await dies too — in a fiber that is a

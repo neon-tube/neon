@@ -30,6 +30,12 @@
 /// runtime inside a running fiber traps.
 @native("neon_fiber_lang_runtime") fn runtime(body: () -> ())
 
+/// As `runtime`, with `threads` OS threads scheduling the fibers (this thread is one of
+/// them). Fibers are pinned to a scheduler at spawn, values still cross only by channels
+/// and spawn arguments, and everything that holds on one thread holds on eight. `threads`
+/// of 1 or less is exactly `runtime`.
+@native("neon_fiber_lang_runtime_threads") fn runtime_threads(threads: i64, body: () -> ())
+
 /// Enqueue `body` to run as a new fiber under the running scheduler. Traps if no runtime is
 /// active. The new fiber runs when the scheduler next reaches it, not immediately.
 @native("neon_fiber_lang_spawn") fn spawn(body: () -> ())

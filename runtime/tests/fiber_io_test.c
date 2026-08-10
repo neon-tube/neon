@@ -261,3 +261,88 @@ TEST(read_all_offloads_and_parks_the_fiber) {
     close(off_pipe[0]);
 }
 #endif
+
+// ---- the mesh (M:N) ----
+
+#if defined(__linux__)
+#include <stdatomic.h>
+
+// Two seats, four fibers: every fiber runs (the atomic count proves the remote seats ran
+// theirs), and a channel pipeline crosses the mesh — the consumer and producer land on
+// DIFFERENT seats by round-robin, so every send is a cross-thread handoff.
+static _Atomic int mn_ran;
+static void mn_worker(void* arg) {
+    (void)arg;
+    atomic_fetch_add(&mn_ran, 1);
+}
+static void mn_parent(void* arg) {
+    (void)arg;
+    for (int i = 0; i < 4; i++) {
+        neon_fiber_spawn(mn_worker, NULL);
+    }
+}
+
+TEST(runtime_threads_runs_fibers_on_all_seats) {
+    atomic_store(&mn_ran, 0);
+    neon_fiber_runtime_threads(2, mn_parent, NULL);
+    EXPECT_EQ(atomic_load(&mn_ran), 4);
+}
+
+static neon_channel* mnc_ch;
+static const neon_witness mnc_i64_w = {sizeof(int64_t), NULL, NULL, nt_i64_eq, nt_i64_cmp};
+static long mnc_sum;
+static void mnc_consumer(void* arg) {
+    (void)arg;
+    int64_t v;
+    neon_retain_shared((neon_header*)mnc_ch);
+    while (neon_channel_recv(mnc_ch, &v)) {
+        mnc_sum += v;
+        neon_retain_shared((neon_header*)mnc_ch);
+    }
+}
+static void mnc_producer(void* arg) {
+    (void)arg;
+    for (int64_t i = 1; i <= 100; i++) {
+        neon_retain_shared((neon_header*)mnc_ch);
+        neon_channel_send(mnc_ch, &i);
+    }
+    neon_retain_shared((neon_header*)mnc_ch);
+    neon_channel_close(mnc_ch);
+}
+static void mnc_parent(void* arg) {
+    (void)arg;
+    neon_fiber_spawn(mnc_consumer, NULL); // seat A
+    neon_fiber_spawn(mnc_producer, NULL); // seat B: every handoff crosses threads
+}
+
+TEST(a_channel_crosses_the_mesh) {
+    mnc_ch = neon_channel_new(&mnc_i64_w);
+    mnc_sum = 0;
+    neon_fiber_runtime_threads(2, mnc_parent, NULL);
+    EXPECT_EQ(mnc_sum, 5050L);
+    neon_release_shared((neon_header*)mnc_ch);
+}
+
+// Sleeps on both seats overlap across the mesh exactly as they do on one.
+static _Atomic int mns_done;
+static void mns_sleeper(void* arg) {
+    (void)arg;
+    neon_fiber_sleep(30);
+    atomic_fetch_add(&mns_done, 1);
+}
+static void mns_parent(void* arg) {
+    (void)arg;
+    neon_fiber_spawn(mns_sleeper, NULL);
+    neon_fiber_spawn(mns_sleeper, NULL);
+    neon_fiber_spawn(mns_sleeper, NULL);
+}
+
+TEST(sleeps_overlap_across_the_mesh) {
+    atomic_store(&mns_done, 0);
+    int64_t began = neon_time_monotonic();
+    neon_fiber_runtime_threads(2, mns_parent, NULL);
+    int64_t took = (neon_time_monotonic() - began) / 1000000;
+    EXPECT_EQ(atomic_load(&mns_done), 3);
+    EXPECT(took < 90); // three 30ms sleeps overlapped, not summed
+}
+#endif

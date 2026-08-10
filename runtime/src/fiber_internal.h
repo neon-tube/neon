@@ -11,6 +11,7 @@
 #include "neon/arena.h"
 #include "neon/fiber.h"
 
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -43,6 +44,16 @@ struct neon_fiber {
     // How a task learns its body died: crash propagation's one seam. NULL for plain fibers.
     void (*on_reap)(void* arg, bool crashed);
     void* on_reap_arg;
+    // Set (CAS) by every path that admits this fiber to a run queue — local enqueue,
+    // remote injection — and cleared by the pump after dequeue. What makes a wake
+    // IDEMPOTENT: a deadline firing and a channel delivery racing for the same parked
+    // fiber both try to admit it, and exactly one wins; the loser's wake dissolves. A
+    // stale wake aimed at a fiber that has since yielded merely re-runs it once.
+    _Atomic int queued;
+    // The scheduler this fiber is PINNED to (a neon_sched*, opaque here). Every wake routes
+    // through it; only its thread ever resumes this fiber or touches its arena. NULL for
+    // raw-primitive fibers driven outside a scheduler (the fiber_test.c suite).
+    void* home;
 };
 
 // ---- the scheduler/offload seam (fiber_sched.c <-> fiber_offload.c) ----

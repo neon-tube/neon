@@ -171,6 +171,7 @@ fibers/channel_records.neon
 fibers/fiber_process_io.neon
 fibers/fiber_sleep.neon
 fibers/interleave_and_capture.neon
+fibers/mesh_pipeline.neon
 fibers/preemption.neon
 fibers/spawn_and_yield.neon
 fibers/task_await.neon

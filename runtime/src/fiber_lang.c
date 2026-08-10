@@ -84,6 +84,12 @@ void neon_fiber_lang_runtime(neon_closure body) {
     neon_fiber_runtime(neon_fiber_run_closure, neon_fiber_cell_new(body));
 }
 
+// `fiber::runtime_threads(n, body)` — the M:N entry: n scheduler seats, fibers pinned by
+// spawn's round-robin. n <= 1 is exactly fiber::runtime.
+void neon_fiber_lang_runtime_threads(int64_t threads, neon_closure body) {
+    neon_fiber_runtime_threads(threads, neon_fiber_run_closure, neon_fiber_cell_new(body));
+}
+
 // `fiber::spawn(body)` — enqueue a fiber under the running scheduler.
 void neon_fiber_lang_spawn(neon_closure body) {
     neon_fiber_spawn(neon_fiber_run_closure, neon_fiber_cell_new(neon_fiber_body_cross(body)));

@@ -15,8 +15,10 @@
 
 #include "platform.h" // neon_plat_sleep_ms, for the root-context sleep fallback
 
-#include <signal.h> // sig_atomic_t for the safepoint flag, the preemption timer's handler
-#include <time.h>   // clock_gettime for sleep deadlines
+#include <pthread.h>   // the mesh: per-scheduler lock, worker threads
+#include <signal.h>    // sig_atomic_t for the safepoint flag, the preemption timer's handler
+#include <stdatomic.h> // the mesh's global live/ext/waiting accounting
+#include <time.h>      // clock_gettime for sleep deadlines
 #include <stddef.h>
 #include <string.h> // memset for the timer's sigaction/itimerval setup
 
@@ -32,6 +34,7 @@
 #  define NEON_FIBER_IO 1
 #  include <errno.h>
 #  include <sys/epoll.h>
+#  include <sys/eventfd.h>
 #  include <unistd.h>
 #endif
 
@@ -51,26 +54,62 @@ typedef struct neon_sleeper {
     struct neon_sleeper* next;
 } neon_sleeper;
 
-typedef struct {
-    neon_fiber* head;
+typedef struct neon_sched {
+    neon_fiber* head; // the LOCAL run queue: owner-thread only, lock-free
     neon_fiber* tail;
-    int live;
+    int live;       // M=1 accounting (kept for the single-scheduler entry)
     int io_waiters;
     bool active;
-    neon_sleeper* sleepers; // unordered; scanned for the nearest deadline (N is small)
+    neon_sleeper* sleepers; // under `mu` when the mesh is up: remote wakes unlink here
 #if defined(NEON_FIBER_IO)
     int epfd; // epoll instance, created lazily on the first IO wait; -1 until then
 #endif
+    // ---- the mesh (fibers are PINNED to a home scheduler; these are how the others
+    // reach it) ----
+    pthread_mutex_t mu;      // guards inj + sleepers; never held across a switch
+    neon_fiber* inj_head;    // remote wakes and remote spawns land here...
+    neon_fiber* inj_tail;
+    int doorbell;            // ...and this eventfd (registered in epfd) interrupts an idle wait
+    int id;
 } neon_sched;
 
 static _Thread_local neon_sched t_sched;
+
+// The scheduler registry, live for the duration of one runtime call. Fibers are pinned:
+// spawn round-robins them across schedulers, and every later wake routes to the home.
+#define NEON_MAX_SCHEDS 64
+static neon_sched* g_scheds[NEON_MAX_SCHEDS];
+static int g_nscheds;               // written before workers run, read-only after
+static _Atomic int g_spawn_ctr;     // round-robin placement
+static _Atomic long g_live;         // fibers spawned minus reaped, across the mesh
+static _Atomic long g_ext;          // fibers waiting on the WORLD (sleep, fd, offload)
+static _Atomic int g_waiting;       // schedulers blocked in an indefinite wait
+static _Atomic int g_done;          // set when g_live hits zero: every pump exits
 
 // The preemption timer (defined with the safepoint machinery at the end of this file),
 // armed for exactly the life of the runtime.
 static void neon_fiber_timer_arm(void);
 static void neon_fiber_timer_disarm(void);
+// Remote-arrival drain (defined with wake, later in the file).
+static void neon_sched_drain_inj(void);
 
 static void neon_sched_enqueue(neon_fiber* f) {
+    int zero = 0;
+    if (!atomic_compare_exchange_strong(&f->queued, &zero, 1)) {
+        return; // already admitted by a racing wake; exactly one admission stands
+    }
+    f->q_next = NULL;
+    f->state = NEON_FIBER_READY;
+    if (t_sched.tail != NULL) {
+        t_sched.tail->q_next = f;
+    } else {
+        t_sched.head = f;
+    }
+    t_sched.tail = f;
+}
+
+// Admission that already HOLDS the queued bit (a drained injection entry): push raw.
+static void neon_sched_enqueue_owned(neon_fiber* f) {
     f->q_next = NULL;
     f->state = NEON_FIBER_READY;
     if (t_sched.tail != NULL) {
@@ -89,6 +128,7 @@ static neon_fiber* neon_sched_dequeue(void) {
             t_sched.tail = NULL;
         }
         f->q_next = NULL;
+        atomic_store(&f->queued, 0); // off the queue: wakes may admit it again
     }
     return f;
 }
@@ -104,14 +144,16 @@ static int64_t neon_sched_now_ms(void) {
 static int neon_sched_wake_due(void) {
     int64_t now = neon_sched_now_ms();
     int64_t nearest = -1;
+    pthread_mutex_lock(&t_sched.mu); // remote wakes unlink sleepers concurrently
     neon_sleeper** link = &t_sched.sleepers;
     while (*link != NULL) {
         neon_sleeper* s = *link;
         if (s->deadline_ms <= now) {
             *link = s->next;
             s->expired = true;
+            atomic_fetch_sub(&g_ext, 1);
             // Enqueue directly rather than via neon_fiber_wake, whose sleeper-cancel scan
-            // would walk the list this loop is mid-way through mutating.
+            // would re-take this lock; the local queue is owner-only, so this is safe.
             neon_sched_enqueue(s->fiber);
             continue;
         }
@@ -121,6 +163,7 @@ static int neon_sched_wake_due(void) {
         }
         link = &s->next;
     }
+    pthread_mutex_unlock(&t_sched.mu);
     if (nearest > 2147483647) {
         nearest = 2147483647; // epoll takes an int; a 24-day sleep can re-wait
     }
@@ -137,9 +180,15 @@ void neon_fiber_sleep(int64_t millis) {
     // +1: deadlines are whole milliseconds and `now` truncates, so without the round-up a
     // sleep could come back a fraction of a millisecond EARLY — `sleep` promises at least.
     neon_sleeper s = {neon_fiber_current(), neon_sched_now_ms() + millis + 1, false, NULL};
+    pthread_mutex_lock(&t_sched.mu);
     s.next = t_sched.sleepers;
     t_sched.sleepers = &s;
+    pthread_mutex_unlock(&t_sched.mu);
+    atomic_fetch_add(&g_ext, 1);
     neon_fiber_park();
+    if (!s.expired) {
+        atomic_fetch_sub(&g_ext, 1); // woken externally: wake_due did not account for us
+    }
 }
 
 // Park with a deadline: returns true when an external neon_fiber_wake arrived first, false
@@ -152,11 +201,15 @@ bool neon_fiber_park_deadline(int64_t millis) {
         return false; // an expired deadline before parking: the timeout outcome
     }
     neon_sleeper s = {neon_fiber_current(), neon_sched_now_ms() + millis + 1, false, NULL};
+    pthread_mutex_lock(&t_sched.mu);
     s.next = t_sched.sleepers;
     t_sched.sleepers = &s;
+    pthread_mutex_unlock(&t_sched.mu);
+    atomic_fetch_add(&g_ext, 1);
     neon_fiber_park();
     if (!s.expired) {
         // An external wake won the race; neon_fiber_wake already unlinked the sleeper.
+        atomic_fetch_sub(&g_ext, 1);
         return true;
     }
     return false;
@@ -213,8 +266,14 @@ void neon_sched_epoll_add_tag(int fd, void* tag) {
     }
 }
 
-void neon_sched_io_waiter_begin(void) { t_sched.io_waiters++; }
-void neon_sched_io_waiter_end(void) { t_sched.io_waiters--; }
+void neon_sched_io_waiter_begin(void) {
+    t_sched.io_waiters++;
+    atomic_fetch_add(&g_ext, 1);
+}
+void neon_sched_io_waiter_end(void) {
+    t_sched.io_waiters--;
+    atomic_fetch_sub(&g_ext, 1);
+}
 
 // Block in the kernel until at least one awaited descriptor is ready, then wake every fiber
 // waiting on a ready one. Called only when nothing is runnable, so waiting here cannot starve
@@ -233,97 +292,259 @@ static void neon_sched_poll_io(int timeout_ms) {
             neon_offload_drain(); // completed offloaded syscalls: wake their fibers
             continue;
         }
+        if (evs[i].data.ptr == &t_sched) {
+            // Our doorbell: a remote scheduler pushed an injection or rang shutdown. Clear
+            // it; the pump's next lap drains the queue and re-checks g_done.
+            uint64_t v;
+            ssize_t r = read(t_sched.doorbell, &v, sizeof(v));
+            (void)r;
+            continue;
+        }
         neon_fiber_wake((neon_fiber*)evs[i].data.ptr); // re-admit; the fiber finishes its wait
     }
 }
 #endif
 
-void neon_fiber_runtime(neon_fiber_fn body, void* arg) {
-    if (t_sched.active) {
-        neon_trap("neon_fiber_runtime: a scheduler is already running on this thread");
-    }
+// Open this thread's scheduler: state, hooks, and — when the mesh has more than one seat —
+// an eager epoll + doorbell so remote schedulers can reach it. Registration into the global
+// seat table is the caller's line to cross (it knows the seat index).
+static void neon_sched_open(bool mesh) {
     t_sched.active = true;
     t_sched.live = 0;
     t_sched.io_waiters = 0;
     t_sched.sleepers = NULL;
+    t_sched.inj_head = NULL;
+    t_sched.inj_tail = NULL;
+    t_sched.doorbell = -1;
+    pthread_mutex_init(&t_sched.mu, NULL);
 #if defined(NEON_FIBER_IO)
-    t_sched.epfd = -1; // created lazily on the first IO wait
+    t_sched.epfd = -1; // created lazily on the first IO wait...
+    if (mesh) {
+        neon_sched_ensure_epfd(); // ...but the mesh needs the doorbell listening NOW
+        t_sched.doorbell = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+        if (t_sched.doorbell < 0) {
+            neon_trap("eventfd failed");
+        }
+        neon_sched_epoll_add_tag(t_sched.doorbell, &t_sched);
+    }
+#else
+    (void)mesh;
 #endif
     neon_fiber_sleep_hook = neon_sched_sleep_hook; // time::sleep parks fibers from here on
     neon_offload_arm(); // file reads/writes park fibers via the pool from here on
     neon_fiber_pidwait_hook = neon_sched_pidwait_hook; // process waits park via pidfd
+}
 
-    neon_sched_enqueue(neon_fiber_new(body, arg, 0));
-    t_sched.live++;
-    neon_fiber_timer_arm(); // preemption ticks for the life of the runtime (see below)
+static void neon_sched_close(void) {
+    neon_fiber_sleep_hook = NULL;
+    neon_offload_disarm();
+    neon_fiber_pidwait_hook = NULL;
+#if defined(NEON_FIBER_IO)
+    if (t_sched.doorbell >= 0) {
+        close(t_sched.doorbell);
+        t_sched.doorbell = -1;
+    }
+    if (t_sched.epfd >= 0) {
+        close(t_sched.epfd);
+        t_sched.epfd = -1;
+    }
+#endif
+    pthread_mutex_destroy(&t_sched.mu);
+    t_sched.active = false;
+}
 
-    // The pump. A finished fiber is freed (arena bulk-dropped) and drops the live count; a
-    // yielded one is re-enqueued; a PARKED one (a channel, a Task, or a descriptor) is left
-    // off the queue, still live, for its waker. When nothing is runnable but fibers are parked
-    // on descriptors, wait in the kernel for one to be ready rather than call it a deadlock.
+// Ring every seat's doorbell — how "the last fiber finished" reaches schedulers blocked in
+// an indefinite wait.
+static void neon_sched_ring_all(void) {
+    for (int i = 0; i < g_nscheds; i++) {
+        if (g_scheds[i] != NULL && g_scheds[i]->doorbell >= 0) {
+            uint64_t one = 1;
+            ssize_t w = write(g_scheds[i]->doorbell, &one, sizeof(one));
+            (void)w;
+        }
+    }
+}
+
+// The pump: one per scheduler thread, identical whether the mesh has one seat or many. A
+// finished fiber is reaped (on-reap hook, teardown walk, free) and decrements the GLOBAL
+// live count — whoever reaches zero ends the whole runtime. A parked fiber is left off the
+// queue for its waker; remote arrivals drain from the injection queue each lap. When
+// nothing is runnable: due sleepers wake, and whatever remains waits in the kernel — the
+// nearest deadline, a ready descriptor, the offload pool's doorbell, or another
+// scheduler's ring. A deadlock — every seat idle forever, nothing external pending, fibers
+// still live — is trapped by the LAST seat to go idle, never hung.
+static void neon_sched_pump(void) {
     for (;;) {
+        neon_sched_drain_inj();
         neon_fiber* f = neon_sched_dequeue();
         if (f == NULL) {
-            // Nothing runnable. Wake any due sleepers (which refills the queue); with only
-            // future deadlines and/or descriptor waits outstanding, wait in the kernel for
-            // whichever comes first. epoll with no registered fds is a plain timed wait, so
-            // sleep-only programs ride the same call.
+            if (atomic_load(&g_done)) {
+                break;
+            }
             int timeout = neon_sched_wake_due();
             if (t_sched.head != NULL) {
                 continue; // a sleeper came due and is runnable again
             }
 #if defined(NEON_FIBER_IO)
-            if (t_sched.io_waiters > 0 || timeout >= 0) {
+            bool can_wait = t_sched.io_waiters > 0 || timeout >= 0 || t_sched.doorbell >= 0;
+#else
+            bool can_wait = false;
+#endif
+            if (!can_wait) {
+                // One seat, nothing external, fibers still live: the classic deadlock.
+                if (atomic_load(&g_live) > 0) {
+                    neon_trap("deadlock: all fibers are blocked");
+                }
+                atomic_store(&g_done, 1);
+                break;
+            }
+#if defined(NEON_FIBER_IO)
+            if (timeout < 0) {
+                // Indefinite wait: if every seat is now waiting indefinitely with nothing
+                // external in flight and fibers still live, no wake can ever arrive. The
+                // last seat in says so. (A waker is always a RUNNING fiber or an external
+                // completion; the former means some seat is not here, the latter means
+                // g_ext > 0 — so the check cannot fire while a wake is in flight.)
+                int waiting = atomic_fetch_add(&g_waiting, 1) + 1;
+                if (waiting == (g_nscheds > 0 ? g_nscheds : 1) && atomic_load(&g_ext) == 0 &&
+                    atomic_load(&g_live) > 0 && !atomic_load(&g_done)) {
+                    neon_trap("deadlock: all fibers are blocked");
+                }
+                neon_sched_ensure_epfd();
+                neon_sched_poll_io(-1);
+                atomic_fetch_sub(&g_waiting, 1);
+            } else {
                 neon_sched_ensure_epfd();
                 neon_sched_poll_io(timeout);
-                continue;
             }
+            continue;
 #endif
-            break;
         }
         f->state = NEON_FIBER_RUNNING;
-        // Arm the trap→fiber bridge while a fiber runs (it, or any fiber it nests into, may
-        // trap), and disarm the moment we are back on the root context so that a trap in the
-        // scheduler's own code (an allocation OOM here) stays fatal rather than trying to
-        // "kill a fiber" that is really the root. A crashed fiber comes back through the same
-        // resume return as a finished one, flagged crashed.
+        // Arm the trap→fiber bridge while a fiber runs, and disarm the moment we are back
+        // on the root context so that a trap in the scheduler's own code stays fatal. A
+        // crashed fiber comes back through the same resume return, flagged.
         neon_fiber_trap_handler = neon_fiber_on_trap;
         neon_fiber_resume(f);
         neon_fiber_trap_handler = NULL;
         if (neon_fiber_finished(f)) {
             f->state = NEON_FIBER_DONE;
             if (f->on_reap != NULL) {
-                // Whoever registered (a task) learns how this fiber ended — BEFORE the
-                // free, so the hook may still wake an awaiter parked on the outcome.
                 f->on_reap(f->on_reap_arg, f->crashed);
             }
-            neon_fiber_free(f); // frees a crashed fiber's abandoned stack and its arena too
-            t_sched.live--;
+            neon_fiber_free(f);
+            if (atomic_fetch_sub(&g_live, 1) == 1) {
+                atomic_store(&g_done, 1); // the whole tree finished
+                neon_sched_ring_all();
+            }
         } else if (f->state == NEON_FIBER_BLOCKED) {
-            // parked: not re-enqueued, and still counted live until it is woken and finishes
+            // parked: off the queue, still live, waiting for its waker
         } else {
             neon_sched_enqueue(f);
         }
     }
+}
+
+void neon_fiber_runtime(neon_fiber_fn body, void* arg) {
+    if (t_sched.active) {
+        neon_trap("neon_fiber_runtime: a scheduler is already running on this thread");
+    }
+    atomic_store(&g_live, 0);
+    atomic_store(&g_ext, 0);
+    atomic_store(&g_waiting, 0);
+    atomic_store(&g_done, 0);
+    atomic_store(&g_spawn_ctr, 0);
+    g_nscheds = 1;
+    g_scheds[0] = &t_sched;
+    t_sched.id = 0;
+    neon_sched_open(false);
+
+    neon_fiber* first = neon_fiber_new(body, arg, 0);
+    first->home = &t_sched;
+    atomic_fetch_add(&g_live, 1);
+    neon_sched_enqueue(first);
+    neon_fiber_timer_arm(); // preemption ticks for the life of the runtime (see below)
+
+    neon_sched_pump();
 
     neon_fiber_timer_disarm();
-    neon_fiber_sleep_hook = NULL;
-    neon_offload_disarm();
-    neon_fiber_pidwait_hook = NULL;
+    neon_sched_close();
+    g_scheds[0] = NULL;
+    g_nscheds = 0;
+}
 
-    // The queue emptied with fibers still live AND none parked on a descriptor: every one is
-    // waiting on another that will never run. That is a deadlock, and silence would be a hang.
-    if (t_sched.live > 0) {
-        neon_trap("deadlock: all fibers are blocked");
+// A worker seat: open, announce, pump until the runtime ends, close. The seat index rides
+// in as the argument; announcement is the store into the seat table, which the launcher
+// spins on before the first fiber runs — so placement is stable by the time it matters.
+typedef struct {
+    int id;
+    _Atomic int* ready;
+} neon_sched_seat;
+
+static void* neon_sched_worker_main(void* argp) {
+    neon_sched_seat* seat = (neon_sched_seat*)argp;
+    t_sched.id = seat->id;
+    neon_sched_open(true);
+    g_scheds[seat->id] = &t_sched;
+    atomic_fetch_add(seat->ready, 1);
+    neon_sched_pump();
+    g_scheds[t_sched.id] = NULL;
+    neon_sched_close();
+    return NULL;
+}
+
+// The M:N entry: `threads` schedulers (this thread is seat 0), fibers pinned by spawn's
+// round-robin, the whole mesh draining until the fiber tree is done.
+void neon_fiber_runtime_threads(int64_t threads, neon_fiber_fn body, void* arg) {
+    if (threads <= 1) {
+        neon_fiber_runtime(body, arg);
+        return;
+    }
+    if (t_sched.active) {
+        neon_trap("neon_fiber_runtime: a scheduler is already running on this thread");
+    }
+    if (threads > NEON_MAX_SCHEDS) {
+        threads = NEON_MAX_SCHEDS;
+    }
+    atomic_store(&g_live, 0);
+    atomic_store(&g_ext, 0);
+    atomic_store(&g_waiting, 0);
+    atomic_store(&g_done, 0);
+    atomic_store(&g_spawn_ctr, 0);
+    g_nscheds = (int)threads;
+    t_sched.id = 0;
+    neon_sched_open(true);
+    g_scheds[0] = &t_sched;
+
+    _Atomic int ready = 0;
+    pthread_t tids[NEON_MAX_SCHEDS];
+    neon_sched_seat seats[NEON_MAX_SCHEDS];
+    for (int i = 1; i < (int)threads; i++) {
+        seats[i].id = i;
+        seats[i].ready = &ready;
+        if (pthread_create(&tids[i], NULL, neon_sched_worker_main, &seats[i]) != 0) {
+            neon_trap("scheduler worker thread failed to start");
+        }
+    }
+    while (atomic_load(&ready) != (int)threads - 1) {
+        // spin briefly: workers only initialize state here, no fiber has run yet
     }
 
-#if defined(NEON_FIBER_IO)
-    if (t_sched.epfd >= 0) {
-        close(t_sched.epfd);
-        t_sched.epfd = -1;
+    neon_fiber* first = neon_fiber_new(body, arg, 0);
+    first->home = &t_sched;
+    atomic_fetch_add(&g_live, 1);
+    neon_sched_enqueue(first);
+    neon_fiber_timer_arm();
+
+    neon_sched_pump();
+
+    for (int i = 1; i < (int)threads; i++) {
+        pthread_join(tids[i], NULL);
     }
-#endif
-    t_sched.active = false;
+    neon_fiber_timer_disarm();
+    neon_sched_close();
+    g_scheds[0] = NULL;
+    g_nscheds = 0;
 }
 
 neon_fiber* neon_fiber_spawn(neon_fiber_fn fn, void* arg) {
@@ -331,8 +552,31 @@ neon_fiber* neon_fiber_spawn(neon_fiber_fn fn, void* arg) {
         neon_trap("neon_fiber_spawn: no scheduler — call from inside fiber::runtime");
     }
     neon_fiber* f = neon_fiber_new(fn, arg, 0);
-    neon_sched_enqueue(f);
-    t_sched.live++;
+    atomic_fetch_add(&g_live, 1);
+    // Placement: round-robin over the mesh. With one scheduler this is always "here"; with
+    // more, a remote target gets the fiber through its injection queue — same road a
+    // remote wake takes.
+    int n = g_nscheds > 0 ? g_nscheds : 1;
+    neon_sched* target = n > 1 ? g_scheds[(unsigned)atomic_fetch_add(&g_spawn_ctr, 1) % n]
+                               : &t_sched;
+    f->home = target;
+    if (target == &t_sched) {
+        neon_sched_enqueue(f);
+    } else {
+        pthread_mutex_lock(&target->mu);
+        atomic_store(&f->queued, 1); // fresh fiber: uncontested claim
+        f->q_next = NULL;
+        if (target->inj_tail != NULL) {
+            target->inj_tail->q_next = f;
+        } else {
+            target->inj_head = f;
+        }
+        target->inj_tail = f;
+        pthread_mutex_unlock(&target->mu);
+        uint64_t one = 1;
+        ssize_t w = write(target->doorbell, &one, sizeof(one));
+        (void)w;
+    }
     return f;
 }
 
@@ -356,15 +600,35 @@ void neon_fiber_park(void) {
 }
 
 void neon_fiber_wake(neon_fiber* f) {
-    // Re-admit a parked fiber. Enqueue resets its state to READY. Safe to call from within
-    // another fiber (the common case: a sender waking a blocked receiver) — it runs on the
-    // same thread under the same scheduler, so there is no queue race in the M=1 build.
+    // Route by HOME: fibers are pinned, and only the home's thread touches its local run
+    // queue. A local wake (the waker runs on the same scheduler) is the M=1 fast path; a
+    // remote wake pushes onto the home's locked injection queue and rings its doorbell —
+    // the home drains injections every pump iteration and the doorbell interrupts an idle
+    // wait. The remote push deliberately does NOT touch f->state: the fiber may still be
+    // mid-park on its home thread, and only the home (after the switch completes) may
+    // write it — pinning is what makes the park/wake race unlosable.
     //
-    // If `f` was parked WITH a deadline, cancel the sleeper: a deadline firing later for a
-    // fiber that was woken (and may since have finished, or parked on something else
-    // entirely) would be a wake aimed at whatever that fiber is now — the stale-wake bug
-    // every timed-wait design has to close.
-    neon_sleeper** link = &t_sched.sleepers;
+    // Either way, cancel a pending sleeper first: a deadline firing later for a fiber that
+    // was woken (and may since have finished, or parked on something else entirely) would
+    // be a wake aimed at whatever that fiber is now — the stale-wake bug every timed-wait
+    // design has to close.
+    neon_sched* home = (neon_sched*)f->home;
+    if (home == NULL || home == &t_sched) {
+        pthread_mutex_lock(&t_sched.mu);
+        neon_sleeper** link = &t_sched.sleepers;
+        while (*link != NULL) {
+            if ((*link)->fiber == f) {
+                *link = (*link)->next;
+                break;
+            }
+            link = &(*link)->next;
+        }
+        pthread_mutex_unlock(&t_sched.mu);
+        neon_sched_enqueue(f);
+        return;
+    }
+    pthread_mutex_lock(&home->mu);
+    neon_sleeper** link = &home->sleepers;
     while (*link != NULL) {
         if ((*link)->fiber == f) {
             *link = (*link)->next;
@@ -372,7 +636,39 @@ void neon_fiber_wake(neon_fiber* f) {
         }
         link = &(*link)->next;
     }
-    neon_sched_enqueue(f);
+    int zero = 0;
+    if (!atomic_compare_exchange_strong(&f->queued, &zero, 1)) {
+        pthread_mutex_unlock(&home->mu);
+        return; // a racing admission won; this wake dissolves
+    }
+    f->q_next = NULL;
+    if (home->inj_tail != NULL) {
+        home->inj_tail->q_next = f;
+    } else {
+        home->inj_head = f;
+    }
+    home->inj_tail = f;
+    pthread_mutex_unlock(&home->mu);
+    uint64_t one = 1;
+    ssize_t w = write(home->doorbell, &one, sizeof(one));
+    (void)w;
+}
+
+// Drain remote arrivals into the local queue. Owner-thread only.
+static void neon_sched_drain_inj(void) {
+    if (t_sched.inj_head == NULL) { // racy peek: a miss is caught by the doorbell
+        return;
+    }
+    pthread_mutex_lock(&t_sched.mu);
+    neon_fiber* f = t_sched.inj_head;
+    t_sched.inj_head = NULL;
+    t_sched.inj_tail = NULL;
+    pthread_mutex_unlock(&t_sched.mu);
+    while (f != NULL) {
+        neon_fiber* next = f->q_next;
+        neon_sched_enqueue_owned(f); // the injection push already claimed the queued bit
+        f = next;
+    }
 }
 
 // ---- descriptor waits (the IO seam) ----
@@ -398,9 +694,9 @@ void neon_fiber_io_wait(int fd, uint32_t events) {
     if (epoll_ctl(t_sched.epfd, EPOLL_CTL_ADD, fd, &ev) != 0) {
         neon_trap("epoll_ctl(ADD) failed");
     }
-    t_sched.io_waiters++;
+    neon_sched_io_waiter_begin(); // mirrors into g_ext: the mesh's deadlock check must see us
     neon_fiber_park(); // the pump's epoll_wait wakes us when fd is ready
-    t_sched.io_waiters--;
+    neon_sched_io_waiter_end();
     epoll_ctl(t_sched.epfd, EPOLL_CTL_DEL, fd, NULL); // ONESHOT already disarmed it; tidy up
 }
 

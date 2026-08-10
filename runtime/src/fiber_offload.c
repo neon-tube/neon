@@ -73,7 +73,7 @@ static void* neon_offload_worker(void* arg) {
         neon_ssize got;
         do {
             got = r->op == NEON_OFFLOAD_READ ? neon_plat_read(r->fd, r->buf, r->n)
-                                             : neon_plat_writev(r->fd, r->iov, r->iovn);
+                                             : neon_plat_writev(r->fd, (neon_iovec*)r->iov, r->iovn);
         } while (got < 0 && errno == EINTR);
         r->result = got;
         r->err = got < 0 ? errno : 0;
@@ -157,7 +157,7 @@ static neon_ssize neon_offload_read_hook(int fd, void* buf, size_t n) {
 
 static neon_ssize neon_offload_writev_hook(int fd, const neon_iovec* iov, int n) {
     if (neon_fiber_current()->is_root) {
-        return neon_plat_writev(fd, iov, n);
+        return neon_plat_writev(fd, (neon_iovec*)iov, n);
     }
     neon_offload_req r = {NEON_OFFLOAD_WRITEV, fd, NULL, 0, iov, n, 0, 0, NULL, NULL};
     return neon_offload_run(&r);

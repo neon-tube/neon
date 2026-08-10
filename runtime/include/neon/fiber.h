@@ -71,6 +71,12 @@ void neon_fiber_free(neon_fiber* f);
 // context; nesting it inside a running fiber traps.
 void neon_fiber_runtime(neon_fiber_fn body, void* arg);
 
+// As neon_fiber_runtime, with `threads` scheduler seats (this thread is one of them).
+// Fibers are PINNED: spawn round-robins them across seats and every later wake routes to
+// the home seat, so a fiber's arena is only ever touched by its own thread. threads <= 1
+// is exactly neon_fiber_runtime.
+void neon_fiber_runtime_threads(int64_t threads, neon_fiber_fn body, void* arg);
+
 // From within a running fiber: create a fiber running `fn(arg)` and enqueue it to run later
 // under the same scheduler. Traps if there is no scheduler (i.e. called off-fiber). Returns
 // the created fiber — owned by the scheduler, valid until it is reaped; a caller may attach
@@ -132,6 +138,9 @@ neon_header* neon_env_copy_to_shared(neon_header* env);
 
 // `fiber::runtime(body)` — run `body` as the first fiber, pump until the whole tree is done.
 void neon_fiber_lang_runtime(neon_closure body);
+
+// `fiber::runtime_threads(n, body)` — the M:N entry.
+void neon_fiber_lang_runtime_threads(int64_t threads, neon_closure body);
 
 // `fiber::spawn(body)` — enqueue `body` as a fiber under the running scheduler.
 void neon_fiber_lang_spawn(neon_closure body);
