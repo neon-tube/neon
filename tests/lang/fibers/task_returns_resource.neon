@@ -1,0 +1,25 @@
+// The task-return transfer edge: a task that opens a resource hands it to whoever awaits
+// the result. The awaiter is the owner — its use works, and cleanup runs on its side when
+// the handle dies. This is `let f = task::spawn(() => open(..))` for anything that opens
+// slowly and is used later.
+
+use std::fiber;
+use std::io;
+use std::resource;
+use std::task;
+
+fn main() {
+    fiber::runtime_on(1, () => {
+        let t = task::spawn(() => {
+            resource::new("opened-in-task", (n: str) => {
+                io::println("cleanup #{n}");
+                null
+            })
+        });
+        let r = task::await(t);
+        // `get` is r's LAST use, so the owning ref dies inside the call: payload out,
+        // then cleanup — which is why cleanup prints before the line below does.
+        io::println("awaiter uses #{try! resource::get(r)}");
+    });
+    io::println("done");
+}

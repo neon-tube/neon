@@ -79,6 +79,11 @@ pub enum Token {
     Catch,
     Orelse,
 
+    // Fibers
+    /// `move () => body` — a lambda whose captured resources hand their baton
+    /// to the fiber that runs it (docs/design/fibers.md). Head position only.
+    Move,
+
     // Tests
     Test,
     Bench,
@@ -202,6 +207,7 @@ impl Token {
             "throws" => Token::Throws,
             "throw" => Token::Throw,
             "try" => Token::Try,
+            "move" => Token::Move,
             "catch" => Token::Catch,
             "orelse" => Token::Orelse,
 
@@ -267,6 +273,7 @@ impl fmt::Display for Token {
             Token::Throw => "throw",
             Token::Try => "try",
             Token::Catch => "catch",
+            Token::Move => "move",
             Token::Orelse => "orelse",
             Token::Test => "test",
             Token::Bench => "bench",

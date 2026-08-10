@@ -1,0 +1,8 @@
+sender sees: moved
+send failed: send on a closed channel
+cleanup fd-b
+still ours: fd-b
+cleanup fd-a
+worker got fd-a
+worker: drained
+done

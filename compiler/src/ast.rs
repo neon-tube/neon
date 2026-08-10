@@ -453,10 +453,14 @@ pub enum ExprKind {
     },
     /// `(a, b)`
     Tuple(Vec<Expr>),
-    /// `(x) => e`, `(x: i64) => e`
+    /// `(x) => e`, `(x: i64) => e`, `move () => e`. `is_move` marks the head
+    /// `move`: captured resources hand their baton to the fiber that runs the
+    /// closure. It is not part of the closure's TYPE — it changes what the env
+    /// copy does at a spawn boundary, nothing about calling the value.
     Lambda {
         params: Vec<LambdaParam>,
         body: Box<Expr>,
+        is_move: bool,
     },
     /// `else` is required when the value is consumed; the parser records its
     /// absence rather than substituting null.

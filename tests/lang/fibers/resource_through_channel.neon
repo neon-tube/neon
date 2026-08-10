@@ -1,0 +1,47 @@
+// The channel transfer edge: a resource in a message hands its baton to the receiver.
+// The sender's binding is stale after the send (NotOwnerError, catchable), the worker
+// uses and cleans up what it received, and a send that THROWS did not send — the closed
+// case at the end shows the baton staying home, the guarantee `try channel::send` rides on.
+
+use std::channel;
+use std::fiber;
+use std::io;
+use std::resource;
+
+// A record around the resource: what a real job message looks like, and it exercises the
+// COMPOSITE transfer walk (the record copies, the resource field inside it moves its
+// baton). Also sidesteps `is` on a nullable runtime record, which the checker cannot
+// narrow yet.
+record Job { r: resource::Resource[str, resource::ReleasedError] }
+
+fn worker(jobs: channel::Channel[Job]) {
+    let v = channel::recv(jobs);
+    while v is Job {
+        io::println("worker got #{try! resource::get(v.r)}");
+        // each message's owning ref dies inside its `get` (last use) -> cleanup here
+        v = channel::recv(jobs);
+    }
+    io::println("worker: drained");
+}
+
+fn main() {
+    fiber::runtime_on(1, () => {
+        let jobs: channel::Channel[Job] = channel::new();
+        fiber::spawn(() => worker(jobs));
+
+        let a = Job { r: resource::new("fd-a", (n: str) => { io::println("cleanup #{n}"); null }) };
+        try! channel::send(jobs, a);
+        let stale = try resource::get(a.r) catch (e) { "moved" };
+        io::println("sender sees: #{stale}");
+        channel::close(jobs);
+
+        // A throw means NOT sent: the baton stayed, the resource is still ours to use
+        // and to clean up right here.
+        let b = Job { r: resource::new("fd-b", (n: str) => { io::println("cleanup #{n}"); null }) };
+        try channel::send(jobs, b) catch (e) {
+            io::println("send failed: #{e.message}");
+        };
+        io::println("still ours: #{try! resource::get(b.r)}");
+    });
+    io::println("done");
+}

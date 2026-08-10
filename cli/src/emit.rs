@@ -45,6 +45,7 @@ pub fn to_executable(checked: &Checked, out: &Path, cfg: &BuildConfig) -> Result
         Stage::Final,
         Some(&checked.source),
     );
+    crate::frontend::exit_on_lower_errors(&program, checked);
     link(&c::emit(&program), out, cfg)
 }
 
@@ -66,6 +67,7 @@ pub fn to_test_executable(
         &libs,
         Some(&checked.source),
     );
+    crate::frontend::exit_on_lower_errors(&program, checked);
     link(&c::emit_tests(&program, tests), out, cfg)
 }
 
@@ -86,6 +88,7 @@ pub fn to_bench_executable(
         &libs,
         Some(&checked.source),
     );
+    crate::frontend::exit_on_lower_errors(&program, checked);
     link(&c::emit_benches(&program, benches), out, cfg)
 }
 

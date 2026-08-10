@@ -24,6 +24,11 @@ pub struct Checked {
     /// The stdlib, by module path. Kept because its function *bodies* have to be lowered:
     /// the stdlib is real Neon code now, not only `@native` signatures.
     pub libs: Vec<(Vec<String>, ast::Module)>,
+    /// The raw sources, kept so LOWERING errors (`Program::errors` — the `move` rules,
+    /// which need reprs and so fire after checking) can render exactly like type errors.
+    pub user_path: std::path::PathBuf,
+    pub user_src: String,
+    pub std_sources: Vec<(String, String)>,
 }
 
 /// How a non-root module's source is labelled in a diagnostic: a stdlib file behind its
@@ -239,5 +244,20 @@ pub fn check_project(
         ),
         module,
         libs,
+        user_path: path.to_path_buf(),
+        user_src: src,
+        std_sources: all_sources,
     })
+}
+
+/// Render lowering's own errors (`Program::errors`) and exit, exactly as `check` does for
+/// the checker's. Called by every emit path right after `ir::compile*`.
+pub fn exit_on_lower_errors(program: &neon_compiler::ir::ssa::Program, checked: &Checked) {
+    if program.errors.is_empty() {
+        return;
+    }
+    for e in &program.errors {
+        eprint_type_error(e, &checked.user_path, &checked.user_src, &checked.std_sources);
+    }
+    std::process::exit(1);
 }

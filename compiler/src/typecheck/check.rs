@@ -1908,7 +1908,7 @@ impl Checker<'_> {
 
             ExprKind::Error => self.poison(),
 
-            ExprKind::Lambda { params, body } => self.lambda(module, e, params, body, expected),
+            ExprKind::Lambda { params, body, .. } => self.lambda(module, e, params, body, expected),
 
             ExprKind::RecordLit {
                 path,

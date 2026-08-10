@@ -16,7 +16,7 @@ fn main() {
         fiber::spawn(() => {
             let i = 0;
             while i < 3 {
-                channel::send(ch, i);
+                try! channel::send(ch, i);
                 io::println("sent #{i}");
                 i = i + 1;
             }

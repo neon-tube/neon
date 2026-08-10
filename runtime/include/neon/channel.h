@@ -63,9 +63,11 @@ bool neon_channel_is_closed(neon_channel_ref* ch);
 bool neon_channel_recv_timeout(neon_channel_ref* ch, void* out, int64_t millis);
 
 // Deep-copy the value at `v` into the channel (straight into a parked receiver's slot when
-// one waits), release the original, wake the receiver. Traps on a closed channel. Consumes
-// the `ch` reference and the value.
-void neon_channel_send(neon_channel_ref* ch, const void* v);
+// one waits), release the original, wake the receiver. False when the channel is (or
+// becomes, for a parked bounded send) closed — the copy never ran on that path, so a
+// resource's baton stayed with the caller; std::channel turns it into ClosedError. Always
+// consumes the `ch` reference and the value.
+bool neon_channel_send(neon_channel_ref* ch, const void* v);
 
 // Receive into `out`: true with a value (owned by the caller), false only once the channel
 // is closed AND drained. Parks the calling fiber while open and empty. Consumes the `ch`

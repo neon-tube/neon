@@ -38,3 +38,4 @@ bench/**/*.class
 
 # The bench runner caches per-language results between runs.
 bench/**/.bench_cache.json
+.claude/

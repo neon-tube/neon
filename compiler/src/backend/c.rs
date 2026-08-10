@@ -365,7 +365,7 @@ fn emit_inst(out: &mut String, types: &TypeTable, f: &Func, inst: &crate::ir::ss
                 out,
                 "{} = ({wrapper}*)neon_alloc(sizeof({sty}), {});",
                 var(r),
-                types.env_drop_ref(shape)
+                types.env_drop_ref(shape, false)
             );
             let _ = writeln!(
                 out,
@@ -986,17 +986,26 @@ fn emit_list_builder(
         );
         return;
     }
-    // A send returns nothing; its element repr comes from the channel argument. The value
-    // crosses by address, coerced to the channel's element repr first — the same rule as a
-    // list slot, and for the same reason.
+    // A send reports whether it happened (false = closed; std::channel turns that into
+    // ClosedError); its element repr comes from the channel argument. The value crosses
+    // by address, coerced to the channel's element repr first — the same rule as a list
+    // slot, and for the same reason. Discarding the bool here once left the wrapper's
+    // result UNINITIALIZED, which read as "closed" whenever the stack byte was zero.
     if symbol == "neon_channel_send" {
         let e = chan_elem(types, f, args[0]);
-        let _ = writeln!(
-            out,
-            "neon_channel_send({}, {});",
+        let call = format!(
+            "neon_channel_send({}, {})",
             var(args[0]),
             addr_of(types, f, args[1], &e)
         );
+        match result {
+            Some(r) => {
+                let _ = writeln!(out, "{} = {call};", var(r));
+            }
+            None => {
+                let _ = writeln!(out, "{call};");
+            }
+        }
         return;
     }
     if symbol == "neon_list_set_inplace" {
@@ -1215,17 +1224,21 @@ fn emit_resource_drops(out: &mut String, types: &TypeTable, program: &Program) {
         } else {
             "void".to_string()
         };
+        // This is a REF drop: it fires for every ref of the instantiation, owning or not.
+        // Only the OWNING ref's death runs cleanup — that is the baton — and `take`
+        // disarms first, so the two are exactly-once together. The zeroing inside `take`
+        // still matters: the closure consumes the payload, and the body's own drop
+        // releases whatever is left in the slot, so bytes left behind are released twice.
         let _ = writeln!(out, "static void {name}(void* p) {{");
         let _ = writeln!(out, "    neon_resource* r = (neon_resource*)p;");
         let _ = writeln!(out, "    {tc} pay;");
-        // `neon_resource_take` disarms and moves the payload out, zeroing the source. The
-        // zeroing matters: the closure below consumes the payload, and
-        // `neon_resource_finish` releases whatever is left in the slot, so bytes left
-        // behind are released twice. Keeping that in the runtime beside `disarm` is what
-        // stops the two paths drifting -- they did, and the drop path use-after-freed
-        // every refcounted payload while every `Resource[i64, E]` ran clean.
-        let _ = writeln!(out, "    if (neon_resource_take(r, &pay)) {{");
-        let call = format!("(({retc}(*)(neon_header*, {tc}))r->cleanup.fn)(r->cleanup.env, pay)");
+        let _ = writeln!(
+            out,
+            "    if (r->owning && neon_resource_take(r->body, &pay)) {{"
+        );
+        let call = format!(
+            "(({retc}(*)(neon_header*, {tc}))r->body->cleanup.fn)(r->body->cleanup.env, pay)"
+        );
         if throws {
             let w = types.witness_ref(&tagged);
             let _ = writeln!(out, "        {retc} res = {call};");
@@ -1235,7 +1248,7 @@ fn emit_resource_drops(out: &mut String, types: &TypeTable, program: &Program) {
             let _ = writeln!(out, "        {call};");
         }
         let _ = writeln!(out, "    }}");
-        let _ = writeln!(out, "    neon_resource_finish(r);");
+        let _ = writeln!(out, "    neon_resource_ref_finish(r);");
         let _ = writeln!(out, "}}");
     }
     out.push('\n');
@@ -1368,7 +1381,7 @@ fn emit_make_closure(
     }
     let env = Repr::Tuple(captures.iter().map(|&c| f.value_repr(c).clone()).collect());
     let ty = types.c_type(&env);
-    let drop = types.env_drop_ref(&env);
+    let drop = types.env_drop_ref(&env, types.env_move(func));
     let inits: Vec<String> = captures
         .iter()
         .enumerate()
@@ -1385,7 +1398,7 @@ fn emit_make_closure(
 /// Emit a drop function for each closure environment: release its captured references,
 /// then free the box.
 fn emit_env_drops(out: &mut String, types: &TypeTable) {
-    for (name, repr) in types.env_drops() {
+    for (name, repr, _mv) in types.env_drops() {
         let ty = types.c_type(repr);
         let mut parts = Vec::new();
         rc_parts(types, "neon_release", repr, "(*e)", &mut parts);
@@ -1415,7 +1428,7 @@ fn emit_env_copies(out: &mut String, types: &TypeTable) {
         return;
     }
     let drops = types.env_drops();
-    for (name, repr) in drops {
+    for (name, repr, mv) in drops {
         let ty = types.c_type(repr);
         let mut stmts = Vec::new();
         copy_stmts(types, repr, "(*s)", "(*d)", &mut stmts);
@@ -1424,6 +1437,16 @@ fn emit_env_copies(out: &mut String, types: &TypeTable) {
         } else {
             format!(" {};", stmts.join("; "))
         };
+        // A `move` lambda's env copy IS a transfer edge: the whole overwrite runs inside
+        // the bracket, so any owning resource ref among the captures (directly or behind
+        // `Any`) hands its baton to the copy that rides to the new fiber. A plain env's
+        // copy mints non-owning refs — the runtime backstop for what the static
+        // capture check cannot see.
+        let (tb, te) = if *mv {
+            (" neon_transfer_begin();", " neon_transfer_end();")
+        } else {
+            ("", "")
+        };
         // Allocate with the SAME drop the closure constructor uses, bitcopy, then overwrite
         // heap parts with independent copies — the boxed-record copy's shape exactly.
         let _ = writeln!(
@@ -1431,12 +1454,12 @@ fn emit_env_copies(out: &mut String, types: &TypeTable) {
             "static neon_header* {name}_ecopy(const neon_header* src) {{ \
              {ty} const* s = ({ty} const*)(src + 1); \
              neon_header* h = neon_alloc(sizeof({ty}), {name}); \
-             {ty}* d = ({ty}*)(h + 1); *d = *s;{over} return h; }}",
+             {ty}* d = ({ty}*)(h + 1); *d = *s;{tb}{over}{te} return h; }}",
         );
     }
     let entries: Vec<String> = drops
         .iter()
-        .map(|(name, _)| format!("{{ {name}, {name}_ecopy }}"))
+        .map(|(name, _, _)| format!("{{ {name}, {name}_ecopy }}"))
         .collect();
     // Strong definitions overriding the runtime's weak empty defaults. Pointer + count,
     // never an extern array: the types must be identical on both sides for the linker (and
@@ -1867,6 +1890,12 @@ fn copy_stmts(types: &TypeTable, repr: &Repr, src: &str, dst: &str, out: &mut Ve
         // at a spawn boundary, not a value copy's. The test is on the value, so the runtime
         // helper makes it.
         Repr::Closure { .. } => out.push(format!("neon_wcopy_closure(&{src}, &{dst})")),
+        // A resource crossing mints a fresh REF to the same body — inside a transfer
+        // bracket the owning ref's copy moves the baton (runtime/src/resource.c). This is
+        // what made `serve` a loop any user can write.
+        Repr::Runtime { c_type, .. } if c_type == "neon_resource" => {
+            out.push(format!("neon_wcopy_resource(&{src}, &{dst})"))
+        }
         Repr::Runtime { .. } => {
             out.push("neon_wcopy_unsendable((const void*)0, (void*)0)".to_string())
         }
@@ -1942,6 +1971,9 @@ fn witness_copy_ref(out: &mut String, types: &TypeTable, name: &str, repr: &Repr
             return "neon_wcopy_task".into()
         }
         Repr::Closure { .. } => return "neon_wcopy_closure".into(),
+        Repr::Runtime { c_type, .. } if c_type == "neon_resource" => {
+            return "neon_wcopy_resource".into()
+        }
         Repr::Runtime { .. } => return "neon_wcopy_unsendable".into(),
         _ => {}
     }
@@ -1993,7 +2025,7 @@ fn emit_boxed_copy_defs(out: &mut String, types: &TypeTable) {
             out,
             "static {name}* {name}_copy(const {name}* s) {{ if (s == NULL) return NULL; \
              {name}* d = ({name}*)neon_alloc(sizeof({sty}), {}); d->value = s->value;{body} return d; }}",
-            types.env_drop_ref(shape)
+            types.env_drop_ref(shape, false)
         );
     }
     if !boxed.is_empty() {

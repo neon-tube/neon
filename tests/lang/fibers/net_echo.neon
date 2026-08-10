@@ -35,7 +35,7 @@ fn client(addr: str, done: channel::Channel[str]) {
     try! net::tcp::write(c, "hello");
     let reply = try! net::tcp::read(c, 4096);
     try! net::tcp::close(c);
-    channel::send(done, reply);
+    try! channel::send(done, reply);
 }
 
 fn main() {
@@ -43,7 +43,10 @@ fn main() {
     let addr = try! net::tcp::local_addr(l);
     io::println("bound: #{string::starts_with(addr, "127.0.0.1:")}");
 
-    fiber::runtime_on(1, () => {
+    // `move`: the listener was made on the root context; the runtime body is a fiber
+    // boundary like any other, so the baton crosses explicitly or the fibers inside
+    // would find a root-owned listener they cannot touch.
+    fiber::runtime_on(1, move () => {
         let done: channel::Channel[str] = channel::new();
         let i = 0;
         while i < 3 {

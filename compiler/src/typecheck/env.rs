@@ -62,6 +62,14 @@ pub enum TypeErrorKind {
         name: String,
         suggestion: Option<Suggestion>,
     },
+    /// A lambda handed to `fiber::spawn`/`task::spawn` captures a resource without
+    /// `move`. Raised in LOWERING (it needs reprs), carried out through `Program::errors`.
+    CaptureNeedsMove {
+        name: String,
+    },
+    /// A `move` lambda none of whose captures contain a resource: the keyword would do
+    /// nothing, which always means a misunderstanding — values copy regardless.
+    MoveWithoutResource,
     UnknownProtocol(String),
     /// `impl Ord for X` — a marker is satisfied by a compiler rule, not by an impl.
     /// Accepted silently before this existed: a marker declares no methods, so there is
@@ -724,6 +732,15 @@ impl fmt::Display for TypeError {
                 "cannot rebind '{name}': it is captured from the enclosing scope, and a \
                  closure's captures are immutable inside it"
             ),
+            TypeErrorKind::CaptureNeedsMove { name } => write!(
+                f,
+                "this lambda is spawned on another fiber but captures the resource \
+                 `{name}` without `move`"
+            ),
+            TypeErrorKind::MoveWithoutResource => write!(
+                f,
+                "`move` moves nothing here: no captured value contains a resource"
+            ),
             TypeErrorKind::NotCallable { what, ty } => {
                 write!(
                     f,
@@ -821,6 +838,14 @@ impl TypeError {
             }
             TypeErrorKind::RebindCapture { .. } => {
                 "a closure cannot mutate its environment; use `fold` or recursion".into()
+            }
+            TypeErrorKind::CaptureNeedsMove { name } => format!(
+                "write `move (..) => ..` to hand `{name}` to the new fiber; the old \
+                 binding then reports `sent to another fiber` on use"
+            ),
+            TypeErrorKind::MoveWithoutResource => {
+                "values always copy across fibers; `move` only affects resources — drop it"
+                    .into()
             }
             TypeErrorKind::BareThrowingCall => {
                 "`try` propagates, `try?` softens to null, `try!` aborts".into()

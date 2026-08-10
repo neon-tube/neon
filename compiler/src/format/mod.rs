@@ -1193,7 +1193,10 @@ impl<'a> Fmt<'a> {
                 );
                 self.push(")");
             }
-            ExprKind::Lambda { params, body } => {
+            ExprKind::Lambda { params, body, is_move } => {
+                if *is_move {
+                    self.push("move ");
+                }
                 self.grouped(|s| {
                     s.push("(");
                     for (i, p) in params.iter().enumerate() {

@@ -59,13 +59,18 @@ pub struct TypeTable {
     witness_names: HashMap<String, String>,
     /// `(name, element repr)` for each witness the program needs.
     witness_defs: Vec<(String, Repr)>,
-    /// Structural key → env-drop name, for each non-empty closure environment.
+    /// Structural key → env-drop name, for each non-empty closure environment. The key
+    /// folds in the `move` bit (see `intern_env_drop`).
     env_drop_names: HashMap<String, String>,
-    /// `(name, environment tuple repr)` for each closure-env drop the program needs.
-    env_drop_defs: Vec<(String, Repr)>,
+    /// `(name, environment tuple repr, is_move)` for each closure-env drop the program
+    /// needs.
+    env_drop_defs: Vec<(String, Repr, bool)>,
     /// Lifted lambda names, so a closure of a lambda calls it directly while a closure of
     /// an ordinary function goes through an adapter thunk.
     lambdas: HashSet<String>,
+    /// The subset that are `move` lambdas, so `emit_make_closure` picks the move-forked
+    /// env drop for them.
+    move_lambdas: HashSet<String>,
     /// Function name → its parameter reprs, for coercing arguments at call sites.
     params: HashMap<String, Vec<Repr>>,
     /// Structural key → key-witness name, for each type used as a map key.
@@ -135,6 +140,12 @@ impl TypeTable {
             env_drop_names: HashMap::new(),
             env_drop_defs: Vec::new(),
             lambdas: lambda_names(program),
+            move_lambdas: program
+                .funcs
+                .iter()
+                .filter(|f| f.env_move)
+                .map(|f| f.name.clone())
+                .collect(),
             params: program
                 .funcs
                 .iter()
@@ -167,7 +178,7 @@ impl TypeTable {
             if let Some(env) = &f.env {
                 if matches!(env, Repr::Tuple(fields) if !fields.is_empty()) {
                     t.register(env);
-                    t.intern_env_drop(env);
+                    t.intern_env_drop(env, f.env_move);
                 }
             }
             // A task's result crosses by address with a witness, keyed by the body
@@ -294,7 +305,7 @@ impl TypeTable {
                     // same drop generator serves: release the counted fields, free the
                     // block. `neon_release` calls `drop` unconditionally, so a boxed
                     // record without one segfaults the moment its count reaches zero.
-                    self.intern_env_drop(&shape);
+                    self.intern_env_drop(&shape, false);
                 }
             }
             _ => {}
@@ -372,14 +383,20 @@ impl TypeTable {
     }
 
     /// Assign an env-drop name to a closure-environment repr if it has none yet.
-    fn intern_env_drop(&mut self, r: &Repr) {
-        let k = key_with(r, &self.recursive);
+    ///
+    /// Keyed by (shape, is_move): the runtime resolves the env-COPY table by drop
+    /// pointer, and a `move` lambda's copy is a transfer (it brackets the baton pass), so
+    /// a move env and a plain env of the same shape must carry DIFFERENT drop symbols or
+    /// the table lookup lands on the wrong copy. The two drop bodies are identical; the
+    /// symbol is the identity.
+    fn intern_env_drop(&mut self, r: &Repr, is_move: bool) {
+        let k = env_key(r, &self.recursive, is_move);
         if self.env_drop_names.contains_key(&k) {
             return;
         }
         let name = format!("ned{}", self.env_drop_defs.len());
         self.env_drop_names.insert(k, name.clone());
-        self.env_drop_defs.push((name, r.clone()));
+        self.env_drop_defs.push((name, r.clone(), is_move));
     }
 
     /// The env-drop function name for a closure environment.
@@ -392,16 +409,21 @@ impl TypeTable {
     /// `neon_header` freed without releasing anything it captured — a silent leak of every
     /// counted capture, on the one path (`neon_release` reaching zero) that no test watches.
     /// A drop is also mandatory for a boxed record: `neon_release` calls it unconditionally.
-    pub fn env_drop_ref(&self, r: &Repr) -> String {
-        match self.env_drop_names.get(&key_with(r, &self.recursive)) {
+    pub fn env_drop_ref(&self, r: &Repr, is_move: bool) -> String {
+        match self.env_drop_names.get(&env_key(r, &self.recursive, is_move)) {
             Some(n) => n.clone(),
             None => ice(r, "a closure environment with no interned drop"),
         }
     }
 
-    /// Every closure-env drop the program needs, as `(name, env tuple repr)`.
-    pub fn env_drops(&self) -> &[(String, Repr)] {
+    /// Every closure-env drop the program needs, as `(name, env tuple repr, is_move)`.
+    pub fn env_drops(&self) -> &[(String, Repr, bool)] {
         &self.env_drop_defs
+    }
+
+    /// Whether a lifted lambda is a `move` lambda (its env copy transfers batons).
+    pub fn env_move(&self, name: &str) -> bool {
+        self.move_lambdas.contains(name)
     }
 
     /// Whether a function name is a lifted lambda (already has the closure ABI).
@@ -902,6 +924,16 @@ fn key(r: &Repr) -> String {
 /// unfolding it names — and which one arrives depends on whether the type was reached
 /// below its own root or at a monomorphisation root. Keying both as `Z<ty>` is what makes
 /// them one C struct instead of two the compiler then refuses to assign between.
+/// The env-drop interning key: the structural shape plus the `move` bit. A move env and a
+/// plain env of the same shape are distinct identities (see `intern_env_drop`).
+fn env_key(r: &Repr, rec: &HashMap<TyId, Repr>, is_move: bool) -> String {
+    if is_move {
+        format!("MV|{}", key_with(r, rec))
+    } else {
+        key_with(r, rec)
+    }
+}
+
 fn key_with(r: &Repr, rec: &HashMap<TyId, Repr>) -> String {
     if let Repr::Recursive(ty) = r {
         return format!("Z{}", ty.0);

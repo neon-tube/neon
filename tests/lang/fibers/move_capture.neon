@@ -1,0 +1,28 @@
+// The baton, end to end on the capture edge: a `move` lambda hands a resource to its
+// fiber; the origin's binding goes stale and reports NotOwnerError — a catchable, named
+// error where other languages hand you two writers on one socket — and cleanup runs
+// exactly once, in the fiber that ended up owning it.
+
+use std::fiber;
+use std::io;
+use std::resource;
+
+fn main() {
+    fiber::runtime_on(1, () => {
+        let r = resource::new("sock-9", (name: str) => {
+            io::println("cleanup: #{name}");
+            null
+        });
+        fiber::spawn(move () => {
+            let payload = try! resource::get(r);
+            io::println("worker uses #{payload}");
+        }); // the worker's last use is the get; its owning ref dies here -> cleanup
+        fiber::yield();
+        let stale = try resource::get(r) catch (e) {
+            io::println("origin: #{e.message}");
+            "?"
+        };
+        io::println("origin got: #{stale}");
+    });
+    io::println("done");
+}

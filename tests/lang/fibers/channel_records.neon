@@ -18,7 +18,7 @@ fn worker(p: Ports) {
     let v = channel::recv(p.jobs);
     while v is Job {
         let mode = map::get_or(v.env, "mode", "?");
-        channel::send(
+        try! channel::send(
             p.replies,
             "did #{v.name} (job #{v.id}, #{list::len(v.tags)} tags, mode #{mode})",
         );
@@ -36,8 +36,8 @@ fn main() {
         // still carry the live entries — the ctrl-byte discipline, exercised.
         let env = map::new() |> map::set("mode", "fast") |> map::set("junk", "x");
         let env = map::remove(env, "junk");
-        channel::send(jobs, Job { id: 1, name: "build", tags: ["fast", "hot"], env: env });
-        channel::send(jobs, Job { id: 2, name: "deploy", tags: [], env: map::new() });
+        try! channel::send(jobs, Job { id: 1, name: "build", tags: ["fast", "hot"], env: env });
+        try! channel::send(jobs, Job { id: 2, name: "deploy", tags: [], env: map::new() });
         channel::close(jobs);
         let r = channel::recv(replies);
         while r is str {

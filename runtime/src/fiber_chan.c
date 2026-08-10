@@ -285,11 +285,21 @@ static void* neon_channel_slot_reserve(neon_channel* ch) {
     return ch->buf + ((ch->head + ch->len) % ch->cap) * sz;
 }
 
-static void neon_channel_send_impl(neon_channel* ch, const void* v) {
+// False when the channel is (or becomes) closed — the caller's value is UNTOUCHED on that
+// path, which is the guarantee std::channel's ClosedError rides on: a send that throws did
+// not send, and for a resource that means the baton never left. Both closed exits sit
+// strictly before the copy.
+static bool neon_channel_send_impl(neon_channel* ch, const void* v) {
     pthread_mutex_lock(&ch->mu);
     if (ch->closed) {
         pthread_mutex_unlock(&ch->mu);
-        neon_trap("channel::send: send on a closed channel");
+        // Consume `v` all the same — natives consume their arguments, and the caller
+        // retained before the call for anything it still holds. Releasing a resource ref
+        // here is NOT a transfer: no bracket ran, the caller's own ref keeps the baton.
+        if (ch->w->release) {
+            ch->w->release((void*)v);
+        }
+        return false;
     }
     // Backpressure: on a bounded channel a send parks while the ring is full — and, ON
     // FIRST ENTRY, while earlier senders still wait (FIFO fairness; a late send must not
@@ -314,7 +324,10 @@ static void neon_channel_send_impl(neon_channel* ch, const void* v) {
         behind = false; // woken by a receive: the opened slot is ours
         if (me.closed) {
             pthread_mutex_unlock(&ch->mu);
-            neon_trap("channel::send: the channel was closed while this send waited");
+            if (ch->w->release) { // consume, as above; no transfer happened
+                ch->w->release((void*)v);
+            }
+            return false;
         }
     }
     // Invariant 2: deep-copy into the destination with allocation routed to the shared
@@ -346,11 +359,17 @@ static void neon_channel_send_impl(neon_channel* ch, const void* v) {
         // arena at recv.
         saved = neon_send_routing_begin();
     }
+    // A channel send is a TRANSFER EDGE: any owning resource ref inside the value moves
+    // its baton (neon_wcopy_resource, reached through the witness walk). The bracket wraps
+    // exactly the copy, on this thread, before publication — so a woken receiver can only
+    // ever observe a completed handoff.
+    neon_transfer_begin();
     if (ch->w->copy) {
         ch->w->copy(v, dst);
     } else {
         memcpy(dst, v, ch->w->size);
     }
+    neon_transfer_end();
     neon_send_routing_end(saved);
     // Publish only after the copy completed: the deep copy can trap (an unsendable part
     // inside the value), and the killed sender must not leave a half-written slot visible —
@@ -363,10 +382,12 @@ static void neon_channel_send_impl(neon_channel* ch, const void* v) {
     }
     pthread_mutex_unlock(&ch->mu);
     // Consume the original value (in the SENDER's context, so an arena element frees into
-    // its own arena) and the channel reference.
+    // its own arena) and the channel reference. For a sent resource this releases a
+    // now-demoted ref — its drop is inert, the staged ref carries the baton.
     if (ch->w->release) {
         ch->w->release((void*)v);
     }
+    return true;
 }
 
 static bool neon_channel_recv_impl(neon_channel* ch, void* out) {
@@ -379,11 +400,16 @@ static bool neon_channel_recv_impl(neon_channel* ch, void* out) {
         // for a buffered value, one for a rendezvous; the price of a generic rc path with
         // no atomics in it.
         void* slot = ch->buf + ch->head * sz;
+        // The buffered hop's second half is the same transfer edge: the staged owning ref
+        // demotes, the ref minted here (in OUR arena — ambient routing) takes the baton,
+        // and this fiber's first use claims the body.
+        neon_transfer_begin();
         if (ch->w->copy) {
             ch->w->copy(slot, out);
         } else {
             memcpy(out, slot, sz);
         }
+        neon_transfer_end();
         if (ch->w->release) {
             ch->w->release(slot);
         }
@@ -554,12 +580,16 @@ static void neon_task_lang_body(void* arg) {
     char tmp[t->w->size];
     shim(body, tmp);
     neon_release(body.env);
+    // A task RETURN is a transfer edge: a resource in the result hands its baton to the
+    // staged ref, which await's restage below hands on to the awaiter.
     void* saved = neon_send_routing_begin();
+    neon_transfer_begin();
     if (t->w->copy) {
         t->w->copy(tmp, (void*)(t + 1));
     } else {
         memcpy((void*)(t + 1), tmp, t->w->size);
     }
+    neon_transfer_end();
     neon_send_routing_end(saved);
     if (t->w->release) {
         t->w->release(tmp);
@@ -642,8 +672,23 @@ static void neon_task_lang_await_impl(neon_task_lang* t, void* out) {
     if (t->taken) {
         neon_trap("task::await: a task's result can be awaited once");
     }
-    memcpy(out, (const void*)(t + 1), t->w->size);
-    t->taken = true; // the result MOVED out; ownership is the awaiter's now
+    // RESTAGE, exactly as a channel recv does: deep-copy the staged result into the
+    // AWAITER's own arena (the ambient routing — we are the running awaiter), release the
+    // staging copy, and only then mark it taken. The old `memcpy` handoff left the result
+    // slab-resident, invisible to the awaiter's crash-teardown walk — a leak for every
+    // result type, and with resources it would have been an fd whose cleanup never runs.
+    // Also a transfer edge: the staged owning ref hands the baton to the ref minted here.
+    neon_transfer_begin();
+    if (t->w->copy) {
+        t->w->copy((const void*)(t + 1), out);
+    } else {
+        memcpy(out, (const void*)(t + 1), t->w->size);
+    }
+    neon_transfer_end();
+    if (t->w->release) {
+        t->w->release((void*)(t + 1));
+    }
+    t->taken = true; // the staged slot is dead bytes now; drop must not release it again
 }
 
 
@@ -700,9 +745,10 @@ neon_channel_ref* neon_channel_new_bounded(const neon_witness* w, int64_t n) {
 
 // Each op borrows the body for the duration and then consumes the caller's REF — the
 // runtime-wide native convention, now paid on an ordinary arena object.
-void neon_channel_send(neon_channel_ref* r, const void* v) {
-    neon_channel_send_impl(r->body, v);
+bool neon_channel_send(neon_channel_ref* r, const void* v) {
+    bool sent = neon_channel_send_impl(r->body, v);
     neon_release((neon_header*)r);
+    return sent;
 }
 
 bool neon_channel_recv(neon_channel_ref* r, void* out) {

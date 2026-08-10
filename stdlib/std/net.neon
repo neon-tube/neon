@@ -221,25 +221,17 @@ mod tcp {
     /// every server, so that a slow client blocks only itself. Returns only by throwing,
     /// which is why its return type is `never`.
     ///
-    /// Two things this does that a hand-written accept loop currently cannot, and they are
-    /// the reason it exists rather than being an example in this comment:
-    ///
-    ///   * `handler` must be a NAMED function or a capture-free lambda, because it crosses
-    ///     to each new fiber. A handler needing state should receive it over a channel.
-    ///   * the descriptor is handed over as a NUMBER and the guard rebuilt inside the new
-    ///     fiber, so the resource that closes a connection belongs to the fiber that uses
-    ///     it — a crashed handler still closes its socket. A `Stream` cannot itself cross
-    ///     fibers (it holds a Resource, and resources do not cross yet), which is exactly
-    ///     the limitation this works around; when resources become movable this becomes an
-    ///     ordinary loop anyone can write, and `serve` becomes a three-line convenience.
+    /// This is an ordinary loop anyone could write — that sentence used to be false, and
+    /// making it true is what resource ownership was built for. `move` hands the accepted
+    /// connection's baton to its handler fiber, so the resource that closes a connection
+    /// belongs to the fiber that uses it: a crashed handler still closes its socket, and
+    /// this loop's own binding goes stale the moment it spawns. `handler` still crosses
+    /// per fiber, so it must be a named function or capture-free lambda; a handler
+    /// needing state should receive it over a channel.
     fn serve(l: Listener, handler: (Stream) -> ()) throws IoError -> never {
-        let fd = try listener_fd(l);
         while true {
-            let (conn, peer) = raw::accept(fd);
-            if conn < 0 {
-                try raw::fail(conn, "cannot accept");
-            };
-            fiber::spawn(() => { handler(guard::stream(conn)); });
+            let c = try accept(l);
+            fiber::spawn(move () => { handler(c); });
         };
         throw IoError { message: "unreachable: the accept loop ended without failing" }
     }

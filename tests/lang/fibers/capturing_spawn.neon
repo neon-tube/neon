@@ -15,8 +15,8 @@ fn main() {
         let ch: channel::Channel[str] = channel::new();
         let greeting = string::concat("hello from ", "a capture");
         fiber::spawn(() => {
-            channel::send(ch, greeting);
-            channel::send(ch, "second");
+            try! channel::send(ch, greeting);
+            try! channel::send(ch, "second");
             channel::close(ch);
         });
         fiber::spawn(() => {

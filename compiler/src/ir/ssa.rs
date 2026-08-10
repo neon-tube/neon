@@ -36,6 +36,10 @@ pub struct Program {
     /// runtime's spelling of a forced inline -- so the C compiler cannot decline: a plain
     /// hint measurably does not move gcc on the wrappers this exists for.
     pub inlined: std::collections::HashSet<String>,
+    /// Errors lowering found that the checker structurally cannot (they need reprs):
+    /// today, the `move`-capture rules for resources. Rendered by the driver exactly like
+    /// type errors; a non-empty list fails the build.
+    pub errors: Vec<crate::typecheck::env::TypeError>,
 }
 
 /// One function. `params` are the entry block's parameters; `values` records the repr
@@ -51,6 +55,11 @@ pub struct Func {
     /// first parameter is that environment, passed boxed as a `neon_header*`. `None` for
     /// an ordinary function.
     pub env: Option<Repr>,
+    /// A `move` lambda's env: its copy at a fiber boundary is a TRANSFER (captured
+    /// resources hand their baton over). Forks the env-drop/env-copy identity in the
+    /// backend, because the copy table is keyed by env shape and the runtime looks entries
+    /// up by drop pointer — a move env and a plain env of the same shape must not share.
+    pub env_move: bool,
     /// The error repr of a throwing function. Such a function returns a tagged result
     /// rather than its declared type: variant 0 is the value, variant 1 the error.
     pub throws: Option<Repr>,
@@ -411,12 +420,13 @@ impl Builder {
 
     /// Finish, declaring the entry block's parameters as the function's params.
     pub fn finish(self, params: Vec<Value>) -> Func {
-        self.finish_impl(params, None)
+        self.finish_impl(params, None, false)
     }
 
     /// Finish a lifted lambda whose first parameter is a boxed environment of `env` repr.
-    pub fn finish_lambda(self, params: Vec<Value>, env: Repr) -> Func {
-        self.finish_impl(params, Some(env))
+    /// `is_move` marks a `move` lambda (see `Func::env_move`).
+    pub fn finish_lambda(self, params: Vec<Value>, env: Repr, is_move: bool) -> Func {
+        self.finish_impl(params, Some(env), is_move)
     }
 
     /// Record that this function throws, so its result becomes the tagged
@@ -449,7 +459,7 @@ impl Builder {
         self.values[v.0 as usize].repr = repr;
     }
 
-    fn finish_impl(self, params: Vec<Value>, env: Option<Repr>) -> Func {
+    fn finish_impl(self, params: Vec<Value>, env: Option<Repr>, env_move: bool) -> Func {
         Func {
             name: self.name,
             params,
@@ -457,6 +467,7 @@ impl Builder {
             entry: BlockId(0),
             blocks: self.blocks,
             env,
+            env_move,
             throws: self.throws,
             values: self.values,
         }

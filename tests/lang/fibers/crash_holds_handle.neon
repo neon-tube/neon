@@ -13,7 +13,7 @@ use std::io;
 fn doomed() {
     // The channel exists ONLY in this local. Nothing stores it, nothing else knows it.
     let ch: channel::Channel[str] = channel::new();
-    channel::send(ch, "buffered value that must not leak");
+    try! channel::send(ch, "buffered value that must not leak");
     let xs = [1];
     io::println("#{xs[9]}");  // bounds trap: the fiber dies holding the channel
 }

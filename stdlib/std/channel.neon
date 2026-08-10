@@ -14,21 +14,24 @@
 //         fiber::runtime(() => {
 //             let ch: Channel[i64] = channel::new();
 //             fiber::spawn(() => consumer(ch));
-//             channel::send(ch, 1);
-//             channel::send(ch, 2);
+//             try! channel::send(ch, 1);
+//             try! channel::send(ch, 2);
 //             channel::close(ch);
 //         });
 //     }
 //
 // Sends never block (the buffer grows); a receive blocks the calling FIBER — not the
 // thread — until a value arrives, and returns `null` once the channel is closed and
-// drained, which is how a consumer loop ends. Closing is the sender's statement that it is
-// done: sending after it traps.
+// drained, which is how a consumer loop ends. Sending on a closed channel throws
+// ClosedError — catchable, and with a guarantee worth leaning on: a send that threw did
+// NOT send, so the caller still owns the value (for a resource, the baton never left).
 //
-// What can cross: anything except a closure or a resource — scalars, strings, lists, maps,
-// records, unions, boxed `any`, and channels themselves (a channel in a message is the
-// same channel on both sides, not a copy). A value containing a closure or resource traps
-// at the send with a message saying so.
+// What can cross: anything except a capturing closure — scalars, strings, lists, maps,
+// records, unions, boxed `any`, channels themselves (a channel in a message is the same
+// channel on both sides, not a copy), and RESOURCES. A resource in a message is a
+// TRANSFER: the receiver becomes its owner, the sender's bindings go stale and throw
+// NotOwnerError on use (std::resource). A value containing a capturing closure still
+// traps at the send with a message saying so.
 
 /// The channel type: a shared, refcounted handle. Two bindings to one channel are the same
 /// channel; equality is identity.
@@ -43,9 +46,27 @@
 /// consumer instead of growing memory without bound. `n` must be at least 1.
 @native("neon_channel_new_bounded") fn bounded[T](n: i64) -> Channel[T]
 
-/// Send `v`: deep-copy it to the shared heap, hand it to a waiting receiver (waking it) or
-/// buffer it. Never blocks. Traps if the channel is closed.
-@native("neon_channel_send") fn send[T](ch: Channel[T], v: T)
+/// Sending on a channel someone closed. Catchable: the classic race is a producer still
+/// sending while the consumer decides it is done, and a program should get to react.
+record ClosedError { message: str }
+impl Error for ClosedError { fn message(v: ClosedError) -> str { v.message } }
+
+internal mod raw {
+    /// False when the channel is (or, for a parked bounded send, becomes) closed — the
+    /// copy never ran on that path, so the value was untouched.
+    @native("neon_channel_send") fn send[T](ch: Channel[T], v: T) -> bool
+}
+
+/// Send `v`: deep-copy it to the shared heap, hand it to a waiting receiver (waking it)
+/// or buffer it. Blocks this fiber only on a full `bounded` channel. Throws ClosedError
+/// on a closed channel — and a throw means NOT sent: the caller still owns `v`, and a
+/// resource's baton stayed home.
+fn send[T](ch: Channel[T], v: T) throws ClosedError -> null {
+    if !raw::send(ch, v) {
+        throw ClosedError { message: "send on a closed channel" };
+    };
+    null
+}
 
 /// Receive the next value, blocking this fiber while the channel is open and empty.
 /// Returns `null` only once the channel is both closed and drained:
@@ -54,8 +75,9 @@
 @native("neon_channel_recv") fn recv[T](ch: Channel[T]) -> T | null
 
 /// Close the channel: every parked receiver wakes with `null`, later receives drain the
-/// buffer then return `null`, and later sends trap (a send already blocked on a full
-/// bounded channel traps on wake — it can never complete). Idempotent.
+/// buffer then return `null`, and later sends throw ClosedError (a send already blocked
+/// on a full bounded channel wakes and throws — it can never complete, and its value was
+/// never taken). Idempotent.
 @native("neon_channel_close") fn close[T](ch: Channel[T])
 
 /// Whether the channel has been closed. A `null` from `recv` already means closed AND

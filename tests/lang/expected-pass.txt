@@ -434,3 +434,7 @@ types/union_variant_is_a_subtype_of_the_union.neon
 types/unknown_type_in_a_body_is_reported.neon
 types/unpinned_throws_param_is_diagnosed.neon
 types/unpinned_type_param_is_diagnosed.neon
+fibers/move_capture.neon
+fibers/resource_through_channel.neon
+fibers/task_returns_resource.neon
+fibers/dead_letter_cleanup.neon

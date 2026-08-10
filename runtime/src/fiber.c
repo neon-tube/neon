@@ -376,6 +376,15 @@ void neon_fiber_free(neon_fiber* f) {
     neon_teardown_arena = f->arena; // the forced drops' own frees route home (lifecycle.c)
     neon_arena_walk(f->arena, neon_fiber_teardown_seal, NULL);
     neon_arena_walk(f->arena, neon_fiber_teardown_visit, NULL);
+    // The abandoned body env (crash path only — normal exit cleared it): off-arena by
+    // construction, so the walk above cannot find it. Released under teardown mode for the
+    // same reason the walk runs under it — its drop may release refs into this arena
+    // (no-ops now) alongside the shared/slab objects that really count down, including a
+    // moved-in resource's owning ref, whose drop runs the cleanup right here.
+    if (f->body_env != NULL) {
+        neon_release(f->body_env);
+        f->body_env = NULL;
+    }
     neon_teardown_arena = NULL;
     neon_current_arena = saved;
     neon_arena_drop(f->arena);

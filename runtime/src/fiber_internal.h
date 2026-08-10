@@ -46,6 +46,12 @@ struct neon_fiber {
     // How a task learns its body died: crash propagation's one seam. NULL for plain fibers.
     void (*on_reap)(void* arg, bool crashed);
     void* on_reap_arg;
+    // The running closure's environment (shared heap / slab — NOT in this fiber's arena),
+    // so a CRASH can release it: the normal-exit release in neon_fiber_run_closure is on
+    // the abandoned stack. Without this a crashed fiber leaked its env — and once a moved
+    // resource's owning ref lives in that env, the leak would be an fd whose cleanup never
+    // runs. Set before the body runs, cleared on the normal path; teardown releases it.
+    neon_header* body_env;
     // Set (CAS) by every path that admits this fiber to a run queue — local enqueue,
     // remote injection — and cleared by the pump after dequeue. What makes a wake
     // IDEMPOTENT: a deadline firing and a channel delivery racing for the same parked

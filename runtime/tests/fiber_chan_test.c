@@ -219,20 +219,22 @@ TEST(a_full_bounded_channel_parks_the_sender) {
     neon_release((neon_header*)bp_ch);
 }
 
-// Closing under a parked sender kills that sender (send-on-closed is a trap): the process
-// survives, the send after the park never completes, and the closer runs on.
+// Closing under a parked sender UNBLOCKS it with false (send-on-closed is a reportable
+// condition, not a trap — std::channel turns it into ClosedError): the sender fiber
+// survives, learns the send never completed, and runs on. The value was untouched on that
+// path, which is what "throw means not sent" rides on at the language level.
 static neon_channel_ref* cl2_ch;
-static int cl2_sent_all;
+static int cl2_first_send;
+static int cl2_second_send;
+static int cl2_ran_on;
 static void cl2_sender(void* arg) {
     (void)arg;
     int64_t v = 7;
-    neon_channel_send(nt_chan_handle(&cl2_ch), &v);
+    cl2_first_send = neon_channel_send(nt_chan_handle(&cl2_ch), &v) ? 1 : 0;
     v = 8;
-    // Parks (full), then traps on wake: the channel closed under it. The handle this call
-    // holds is ARENA-resident, so the teardown walk releases it even though the send never
-    // returned — the crash-locals leak, structurally closed.
-    neon_channel_send(nt_chan_handle(&cl2_ch), &v);
-    cl2_sent_all = 1; // must never run
+    // Parks (full), then wakes to a closed channel: false, and this fiber KEEPS RUNNING.
+    cl2_second_send = neon_channel_send(nt_chan_handle(&cl2_ch), &v) ? 1 : 0;
+    cl2_ran_on = 1;
 }
 static void cl2_closer(void* arg) {
     (void)arg;
@@ -244,10 +246,12 @@ static void cl2_parent(void* arg) {
     neon_fiber_spawn(cl2_closer, NULL);
 }
 
-TEST(close_kills_a_parked_sender) {
+TEST(close_unblocks_a_parked_sender_with_false) {
     cl2_ch = neon_channel_new_bounded(&bp_i64_w, 1);
-    cl2_sent_all = 0;
+    cl2_first_send = cl2_second_send = cl2_ran_on = -1;
     neon_fiber_runtime(cl2_parent, NULL);
-    EXPECT_EQ(cl2_sent_all, 0);
+    EXPECT_EQ(cl2_first_send, 1);  // the buffered send completed
+    EXPECT_EQ(cl2_second_send, 0); // the parked send reported closed
+    EXPECT_EQ(cl2_ran_on, 1);      // and the sender survived to say so
     neon_release((neon_header*)cl2_ch);
 }

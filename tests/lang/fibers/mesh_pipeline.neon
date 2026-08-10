@@ -22,7 +22,7 @@ fn main() {
         fiber::spawn(() => {
             let v = channel::recv(raw);
             while v is i64 {
-                channel::send(cooked, string::concat("cooked-", to_string(v * v)));
+                try! channel::send(cooked, string::concat("cooked-", to_string(v * v)));
                 v = channel::recv(raw);
             }
             channel::close(cooked);
@@ -30,7 +30,7 @@ fn main() {
         fiber::spawn(() => {
             let i = 1;
             while i <= 5 {
-                channel::send(raw, i);
+                try! channel::send(raw, i);
                 i = i + 1;
             }
             channel::close(raw);

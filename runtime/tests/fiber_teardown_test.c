@@ -23,11 +23,11 @@ static void td_cleanup_fn(neon_header* env, int64_t payload) {
 static void td_armed_drop(void* p) {
     neon_resource* r = (neon_resource*)p;
     int64_t payload;
-    if (neon_resource_take(r, &payload)) {
-        neon_closure c = r->cleanup;
+    if (r->owning && neon_resource_take(r->body, &payload)) {
+        neon_closure c = r->body->cleanup;
         ((void (*)(neon_header*, int64_t))c.fn)(c.env, payload);
     }
-    neon_resource_finish(r);
+    neon_resource_ref_finish(r);
 }
 
 static void resource_then_crash(void* arg) {

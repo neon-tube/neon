@@ -20,8 +20,10 @@
 
 #include "libneon_rt.h"
 
+#include "fiber_internal.h" // body_env: parking the running env for crash teardown
+
 #include <stdlib.h>
-#include <string.h> // memcpy for the scalar spawn_with argument
+#include <string.h>
 
 // The cell a closure rides in from the spawn site to the fiber's first run.
 typedef struct {
@@ -30,11 +32,21 @@ typedef struct {
 
 // Every language-spawned fiber runs this: unwrap the cell, call the closure (unit-returning,
 // zero-arg: `void (*)(neon_header*)` per the closure ABI), release the owned environment.
+// The env is PARKED on the fiber struct for the body's duration: a body that traps abandons
+// this frame wholesale, and the fiber teardown releases what this function no longer can —
+// the env is off-arena (shared heap or slab), so the arena walk alone would miss it.
 static void neon_fiber_run_closure(void* arg) {
     neon_fiber_cell* cell = (neon_fiber_cell*)arg;
     neon_closure body = cell->body;
     free(cell);
+    neon_fiber* self = neon_fiber_current();
+    if (self != NULL) {
+        self->body_env = body.env;
+    }
     ((void (*)(neon_header*))body.fn)(body.env);
+    if (self != NULL) {
+        self->body_env = NULL; // normal exit: this frame does the release
+    }
     neon_release(body.env); // consume the closure; NULL is a no-op
 }
 
@@ -78,16 +90,31 @@ static neon_closure neon_fiber_body_cross(neon_closure body) {
     return body;
 }
 
-// `fiber::runtime(body)` — the lazy entry. Called on the root context (nesting traps in the
-// scheduler), so `body`'s environment is slab-allocated and safe to hand to the first fiber.
+// A runtime ENTRY's capturing body always goes through the env-copy table, even though a
+// root-built env is slab-allocated and would be safe to hand over directly. The copy is
+// what makes the entry a fiber boundary like any other: a `move` body's ecopy is a
+// transfer (a resource made on the root crosses INTO the runtime by baton), and a plain
+// body's resource captures mint non-owning refs that report NotOwner inside — instead of
+// silently arriving with a root-owned baton no fiber can use. One deep copy at runtime
+// start; nothing on any per-spawn path.
+static neon_closure neon_fiber_entry_cross(neon_closure body) {
+    if (body.env != NULL) {
+        body.env = neon_env_copy_to_shared(body.env);
+    }
+    return body;
+}
+
+// `fiber::runtime(body)` — the lazy entry. Called on the root context (nesting traps in
+// the scheduler).
 void neon_fiber_lang_runtime(neon_closure body) {
-    neon_fiber_runtime(neon_fiber_run_closure, neon_fiber_cell_new(body));
+    neon_fiber_runtime(neon_fiber_run_closure, neon_fiber_cell_new(neon_fiber_entry_cross(body)));
 }
 
 // `fiber::runtime_threads(n, body)` — the M:N entry: n scheduler seats, fibers pinned by
 // spawn's round-robin. n <= 1 is exactly fiber::runtime.
 void neon_fiber_lang_runtime_threads(int64_t threads, neon_closure body) {
-    neon_fiber_runtime_threads(threads, neon_fiber_run_closure, neon_fiber_cell_new(body));
+    neon_fiber_runtime_threads(threads, neon_fiber_run_closure,
+                               neon_fiber_cell_new(neon_fiber_entry_cross(body)));
 }
 
 // `fiber::spawn(body)` — enqueue a fiber under the running scheduler.

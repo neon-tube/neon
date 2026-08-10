@@ -1409,18 +1409,23 @@ where
         .filter(move |_| allow_record_lit)
         .boxed();
 
-    let lambda = ident()
-        .then(just(Token::Colon).ignore_then(ty.clone()).or_not())
-        .map(|(name, ty)| LambdaParam { name, ty })
-        .separated_by(just(Token::Comma))
-        .allow_trailing()
-        .collect::<Vec<_>>()
-        .delimited_by(just(Token::LParen), just(Token::RParen))
+    let lambda = just(Token::Move)
+        .or_not()
+        .then(
+            ident()
+                .then(just(Token::Colon).ignore_then(ty.clone()).or_not())
+                .map(|(name, ty)| LambdaParam { name, ty })
+                .separated_by(just(Token::Comma))
+                .allow_trailing()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LParen), just(Token::RParen)),
+        )
         .then_ignore(just(Token::FatArrow))
         .then(expr.clone())
-        .map(|(params, body)| ExprKind::Lambda {
+        .map(|((mv, params), body)| ExprKind::Lambda {
             params,
             body: Box::new(body),
+            is_move: mv.is_some(),
         })
         .boxed();
 

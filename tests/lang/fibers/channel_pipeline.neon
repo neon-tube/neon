@@ -12,7 +12,7 @@ use std::string;
 fn producer(ch: channel::Channel[str]) {
     let i = 0;
     while i < 3 {
-        channel::send(ch, string::concat("msg-", to_string(i)));
+        try! channel::send(ch, string::concat("msg-", to_string(i)));
         i = i + 1;
     }
     channel::close(ch);

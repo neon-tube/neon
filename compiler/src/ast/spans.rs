@@ -272,7 +272,7 @@ fn expr(e: &mut Expr) {
                 expr(e);
             }
         }
-        ExprKind::Lambda { params, body } => {
+        ExprKind::Lambda { params, body, is_move: _ } => {
             for p in params {
                 if let Some(t) = &mut p.ty {
                     ty(t);

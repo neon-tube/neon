@@ -1,0 +1,23 @@
+// The dead-letter path: a resource sent but never received sits in the channel with its
+// baton. When the channel's last handle dies, the channel closes the resource — an
+// undelivered socket cannot leak, and cannot double-close either (the sender's stale
+// handle is inert, shown by the release that does nothing).
+
+use std::channel;
+use std::fiber;
+use std::io;
+use std::resource;
+
+fn main() {
+    fiber::runtime_on(1, () => {
+        let ch: channel::Channel[resource::Resource[str, never]] = channel::new();
+        let r = resource::new("undelivered", (n: str) => {
+            io::println("dead letter closed: #{n}");
+            null
+        });
+        try! channel::send(ch, r);
+        resource::release(r); // stale handle: a no-op, NOT a second cleanup
+        io::println("sent and forgot");
+    }); // the runtime drains; ch's last ref died with the body fiber -> channel drop
+    io::println("done");
+}

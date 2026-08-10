@@ -23,7 +23,7 @@ use super::ssa::{BlockId, Builder, Func, Op, PrimOp, Program, Target, Term, Valu
 use crate::ast::{
     self, BinOp, Block, Decl, DeclKind, Expr, ExprId, ExprKind, Stmt, StmtKind, UnOp,
 };
-use crate::typecheck::env::Env;
+use crate::typecheck::env::{Env, TypeError, TypeErrorKind};
 use crate::typecheck::result::TypecheckResult;
 use crate::typecheck::types::TyId;
 
@@ -603,6 +603,7 @@ pub fn lower_module_with<'a>(
     let mut lambda_jobs: Vec<LambdaJob> = Vec::new();
     let mut instance_jobs: Vec<InstanceJob> = Vec::new();
     let mut lowered: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut errors: Vec<TypeError> = Vec::new();
 
     // Every function body, keyed by (module, name), so a generic instance can find its
     // source when its call site discovers it.
@@ -624,7 +625,7 @@ pub fn lower_module_with<'a>(
         if !f.generics.is_empty() {
             continue;
         }
-        let (func, l, i) = lower_fn(env, result, source, &m, f);
+        let (func, l, i) = lower_fn(env, result, source, &m, f, &mut errors);
         lowered.insert(func.name.clone());
         funcs.push(func);
         lambda_jobs.extend(l);
@@ -641,7 +642,8 @@ pub fn lower_module_with<'a>(
             collect_test_blocks(path, &m.decls, kind, &mut blocks);
         }
         for (entry, (m, t)) in block_entries(module, libs, kind).into_iter().zip(blocks) {
-            let (func, l, i) = lower_test_block(env, result, source, &m, t, entry.symbol);
+            let (func, l, i) =
+                lower_test_block(env, result, source, &m, t, entry.symbol, &mut errors);
             lowered.insert(func.name.clone());
             funcs.push(func);
             lambda_jobs.extend(l);
@@ -672,7 +674,8 @@ pub fn lower_module_with<'a>(
             }
             let name = mangle_impl(&proto, &head, &m.name);
             if let Some(fd) = impl_bodies.get(&name) {
-                let (func, l, i) = lower_method(env, result, source, &impl_def.module, fd, m, name);
+                let (func, l, i) =
+                    lower_method(env, result, source, &impl_def.module, fd, m, name, &mut errors);
                 lowered.insert(func.name.clone());
                 funcs.push(func);
                 lambda_jobs.extend(l);
@@ -687,7 +690,7 @@ pub fn lower_module_with<'a>(
             if !lowered.insert(job.name.clone()) {
                 continue;
             }
-            let (func, l, i) = lower_lambda_job(env, result, source, job);
+            let (func, l, i) = lower_lambda_job(env, result, source, job, &mut errors);
             funcs.push(func);
             lambda_jobs.extend(l);
             instance_jobs.extend(i);
@@ -698,7 +701,7 @@ pub fn lower_module_with<'a>(
                 continue;
             }
             if let Some((func, l, i)) =
-                lower_instance(env, result, source, &all_fns, &impl_bodies, job)
+                lower_instance(env, result, source, &all_fns, &impl_bodies, job, &mut errors)
             {
                 funcs.push(func);
                 lambda_jobs.extend(l);
@@ -753,6 +756,7 @@ pub fn lower_module_with<'a>(
         boxed,
         pure_natives,
         inlined,
+        errors,
     }
 }
 
@@ -788,6 +792,7 @@ fn lower_instance(
     all_fns: &std::collections::HashMap<(Vec<String>, String), ast::FnDecl>,
     impl_bodies: &std::collections::HashMap<String, &ast::FnDecl>,
     job: InstanceJob,
+    errs: &mut Vec<TypeError>,
 ) -> Option<(Func, Vec<LambdaJob>, Vec<InstanceJob>)> {
     // Either a generic module function or a generic impl method: the body and the
     // signature come from different places, the lowering below is the same.
@@ -851,6 +856,7 @@ fn lower_instance(
         std::mem::take(&mut lo.pending),
         std::mem::take(&mut lo.instances),
     );
+    errs.append(&mut lo.errors);
     Some((lo.b.finish(params), l, i))
 }
 
@@ -1117,6 +1123,7 @@ fn lower_method(
     f: &ast::FnDecl,
     sig: &crate::typecheck::env::FnSig,
     name: String,
+    errs: &mut Vec<TypeError>,
 ) -> (Func, Vec<LambdaJob>, Vec<InstanceJob>) {
     let ret_repr = repr_of(&env.solver.t, sig.ret);
     let mut lo = Lower::new(env, result, source, module.to_vec(), name, ret_repr.clone());
@@ -1150,6 +1157,7 @@ fn lower_method(
         std::mem::take(&mut lo.pending),
         std::mem::take(&mut lo.instances),
     );
+    errs.append(&mut lo.errors);
     (lo.b.finish(params), l, i)
 }
 
@@ -1166,6 +1174,7 @@ fn lower_fn(
     source: Option<&SourceMap>,
     module: &[String],
     f: &ast::FnDecl,
+    errs: &mut Vec<TypeError>,
 ) -> (Func, Vec<LambdaJob>, Vec<InstanceJob>) {
     let name = f.name.clone();
     // Every bodied top-level function was registered when the Env was built; not finding
@@ -1214,6 +1223,7 @@ fn lower_fn(
         std::mem::take(&mut lo.pending),
         std::mem::take(&mut lo.instances),
     );
+    errs.append(&mut lo.errors);
     (lo.b.finish(params), l, i)
 }
 
@@ -1252,6 +1262,7 @@ fn lower_test_block(
     module: &[String],
     t: &ast::TestBlock,
     symbol: String,
+    errs: &mut Vec<TypeError>,
 ) -> (Func, Vec<LambdaJob>, Vec<InstanceJob>) {
     let mut lo = Lower::new(env, result, source, module.to_vec(), symbol, Repr::Unit);
     lo.b.switch_to(BlockId(0));
@@ -1263,6 +1274,7 @@ fn lower_test_block(
         std::mem::take(&mut lo.pending),
         std::mem::take(&mut lo.instances),
     );
+    errs.append(&mut lo.errors);
     (lo.b.finish(vec![]), l, i)
 }
 
@@ -1273,10 +1285,12 @@ fn lower_lambda_job(
     result: &TypecheckResult,
     source: Option<&SourceMap>,
     job: LambdaJob,
+    errs: &mut Vec<TypeError>,
 ) -> (Func, Vec<LambdaJob>, Vec<InstanceJob>) {
     let ExprKind::Lambda {
         params: lparams,
         body,
+        is_move,
     } = &job.lambda.kind
     else {
         unreachable!("a lambda job holds a lambda");
@@ -1366,7 +1380,8 @@ fn lower_lambda_job(
         std::mem::take(&mut lo.pending),
         std::mem::take(&mut lo.instances),
     );
-    (lo.b.finish_lambda(params, env_repr), l, i)
+    errs.append(&mut lo.errors);
+    (lo.b.finish_lambda(params, env_repr, *is_move), l, i)
 }
 
 /// The state of lowering one function body. There is one of these per emitted function —
@@ -1399,6 +1414,9 @@ struct Lower<'a> {
     subst: std::collections::HashMap<String, Repr>,
     /// Generic instances discovered at call sites, to be lowered in turn.
     instances: Vec<InstanceJob>,
+    /// User errors only lowering can see (the `move`-capture rules need reprs). Drained
+    /// into `Program::errors`; the checker's channel structurally ends before reprs exist.
+    errors: Vec<TypeError>,
 }
 
 impl<'a> Lower<'a> {
@@ -1445,6 +1463,7 @@ impl<'a> Lower<'a> {
             pending: vec![],
             subst,
             instances: vec![],
+            errors: vec![],
         }
     }
 }
@@ -2385,6 +2404,42 @@ impl Lower<'_> {
         )
     }
 
+    /// A user error found during lowering, rendered by the driver like a type error.
+    fn err(&mut self, span: crate::lexer::Span, kind: TypeErrorKind) {
+        self.errors.push(TypeError {
+            span,
+            kind,
+            module: self.module.clone(),
+        });
+    }
+
+    /// Whether a value of this repr holds a `Resource` anywhere a deep copy would reach.
+    /// This is what the `move` rules test — the same walk `copy_stmts` will make in the
+    /// backend, asked one phase earlier where a diagnostic can still be issued.
+    ///
+    /// Conservative at the two dynamic boundaries: `Any` erases its contents and a
+    /// `Closure` hides its captures, so a resource behind either is invisible here and is
+    /// caught by the runtime instead (a non-transfer crossing mints a non-owning ref,
+    /// which reports NotOwner at first use). `BoxedRec`/`Recursive` back-edges are cut —
+    /// a resource inside a recursive record would also be found on the unfolded side.
+    fn repr_contains_resource(&self, r: &Repr) -> bool {
+        match r {
+            Repr::Runtime { c_type, .. } => c_type == "neon_resource",
+            Repr::Record { fields, .. } => {
+                fields.iter().any(|(_, f)| self.repr_contains_resource(f))
+            }
+            Repr::Tuple(elems) | Repr::Union(elems) => {
+                elems.iter().any(|e| self.repr_contains_resource(e))
+            }
+            Repr::List(e) => self.repr_contains_resource(e),
+            Repr::Map(k, v) => {
+                self.repr_contains_resource(k) || self.repr_contains_resource(v)
+            }
+            Repr::Nullable(inner) => self.repr_contains_resource(inner),
+            _ => false,
+        }
+    }
+
     /// `(x) => e` — capture the free variables, queue the body to be lowered as its own
     /// function, and build a closure of the two.
     fn lower_lambda(&mut self, e: &Expr, repr: Repr, ty: TyId) -> Value {
@@ -2401,6 +2456,13 @@ impl Lower<'_> {
         // *pointers*, and each caller cast the closure to its own concrete signature on
         // top of that. `sort` delegating to `sort_by` through such a lambda answered `:eq`
         // for every pair and left the list untouched.
+        // A `move` lambda that has no resource to move is always a misunderstanding —
+        // values copy across fibers regardless — so it is an error, not a no-op.
+        if let ExprKind::Lambda { is_move: true, .. } = &e.kind {
+            if !cap_info.iter().any(|(_, r, _)| self.repr_contains_resource(r)) {
+                self.err(e.span.clone(), TypeErrorKind::MoveWithoutResource);
+            }
+        }
         let name = mangle_instance(&format!("lambda${}", e.id.0), &self.subst);
         self.pending.push(LambdaJob {
             name: name.clone(),
@@ -2422,7 +2484,7 @@ impl Lower<'_> {
     /// The free variables a lambda closes over: names its body uses that are bound in the
     /// enclosing scope, excluding its own parameters and locals.
     fn free_vars(&self, e: &Expr) -> Vec<String> {
-        let ExprKind::Lambda { params, body } = &e.kind else {
+        let ExprKind::Lambda { params, body, .. } = &e.kind else {
             return vec![];
         };
         let mut bound: std::collections::HashSet<String> =
@@ -2601,8 +2663,47 @@ impl Lower<'_> {
         repr: Repr,
         ty: TyId,
     ) -> Value {
+        self.check_spawn_captures(callee, args);
         let arg_vs: Vec<Value> = args.iter().map(|a| self.lower_expr(a)).collect();
         self.lower_call_vals(id, callee, generics, arg_vs, repr, ty)
+    }
+
+    /// The static half of the `move` rule: a LITERAL lambda handed to `fiber::spawn` or
+    /// `task::spawn` that captures a resource must say `move`. Only the literal case is
+    /// checkable here — a closure arriving through a variable is a value, and its capture
+    /// of a resource is a runtime fact the non-owning-ref backstop handles (NotOwner at
+    /// first use on the far side). One error per lambda: the first offending capture
+    /// names the problem; repeating it per capture is noise.
+    fn check_spawn_captures(&mut self, callee: &Expr, args: &[Expr]) {
+        let ExprKind::Path(p) = &callee.kind else {
+            return;
+        };
+        let is_spawn = self.env.fn_named(&self.module, p).is_some_and(|sig| {
+            matches!(
+                sig.native.as_deref(),
+                Some(
+                    "neon_fiber_lang_spawn"
+                        | "neon_task_lang_spawn"
+                        | "neon_fiber_lang_runtime"
+                        | "neon_fiber_lang_runtime_threads"
+                )
+            )
+        });
+        if !is_spawn {
+            return;
+        }
+        let Some(arg0) = args.first() else { return };
+        if !matches!(&arg0.kind, ExprKind::Lambda { is_move: false, .. }) {
+            return;
+        }
+        for n in self.free_vars(arg0) {
+            let Some(v) = self.lookup(&n) else { continue };
+            let r = self.b.value_repr(v).clone();
+            if self.repr_contains_resource(&r) {
+                self.err(arg0.span.clone(), TypeErrorKind::CaptureNeedsMove { name: n });
+                return;
+            }
+        }
     }
 
     /// Lower a call whose arguments are already lowered (shared by `f(..)` and pipe).
@@ -4530,7 +4631,7 @@ fn collect_free_expr(
                 }
             }
         }
-        ExprKind::Lambda { params, body } => {
+        ExprKind::Lambda { params, body, .. } => {
             // A nested lambda's own parameters are bound within it; do not leak them out.
             let mut inner = bound.clone();
             inner.extend(params.iter().map(|p| p.name.clone()));
