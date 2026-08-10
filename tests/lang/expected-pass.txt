@@ -442,3 +442,4 @@ fibers/task_crash_releases_moved_resource.neon
 fibers/http_round_trip.neon
 fibers/tls_round_trip.neon
 strings/url_parse.neon
+fibers/http_client_builder.neon

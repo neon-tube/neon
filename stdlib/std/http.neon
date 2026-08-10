@@ -265,6 +265,7 @@ fn connection(c: Conn, handler: (Request) throws HttpError -> Response) {
 
 mod client {
     use std::io::IoError;
+    use std::list;
     use std::net;
     use std::string;
     use std::url;
@@ -321,5 +322,58 @@ fn get(url: str) throws HttpError | IoError | net::TlsError -> Response {
 
 fn post(url: str, body: str) throws HttpError | IoError | net::TlsError -> Response {
     try request("POST", url, [], body)
+}
+
+// ---- the request builder ----
+//
+// For anything past a bare get/post: a method, headers, a body, built up and then sent.
+// Neon has no method-call syntax, so it threads through the pipe — each step takes the
+// request-so-far as its first argument and returns a fresh one (no `mut`; the update form
+// rebuilds with one field changed), and `send` is the terminal that actually goes to the
+// network:
+//
+//     let resp = try client::to("https://api.example.com/things")
+//         |> client::method("POST")
+//         |> client::header("Authorization", "Bearer #{token}")
+//         |> client::header("Content-Type", "application/json")
+//         |> client::body("{\"name\":\"x\"}")
+//         |> client::send();
+//
+// Headers accumulate in call order and are sent in that order; nothing dedups or
+// normalises them, because a request may legitimately repeat a field and the wire order
+// is occasionally load-bearing. `Content-Length` is still added by `send` — don't set it
+// by hand.
+
+record Req {
+    url: str,
+    method: str,
+    headers: List[(str, str)],
+    body: str,
+}
+
+/// Begin a request to `url`: GET, no headers, empty body, until the pipe says otherwise.
+fn to(url: str) -> Req {
+    Req { url: url, method: "GET", headers: [], body: "" }
+}
+
+/// The method (GET by default). Uppercase by convention; nothing forces it.
+fn method(r: Req, m: str) -> Req {
+    Req { method: m, ..r }
+}
+
+/// Append a header. Repeatable — two calls with the same name send two fields, in order.
+fn header(r: Req, name: str, value: str) -> Req {
+    Req { headers: list::push(r.headers, (name, value)), ..r }
+}
+
+/// The request body. `send` frames it with `Content-Length`, so a body implies no
+/// chunked encoding on the way out.
+fn body(r: Req, b: str) -> Req {
+    Req { body: b, ..r }
+}
+
+/// Send the built request and read the full response. The terminal of the pipe.
+fn send(r: Req) throws HttpError | IoError | net::TlsError -> Response {
+    try request(r.method, r.url, r.headers, r.body)
 }
 }

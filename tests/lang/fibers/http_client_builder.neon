@@ -1,0 +1,39 @@
+// The client request builder, end to end against a local server that reflects what it
+// received: the method, a chosen header, and the body all set through the pipe and read
+// back off the wire. Proves the builder threads each field into the actual request —
+// `runtime_on(1, ..)` and a bounded accept loop so a corpus program stays deterministic
+// and drains.
+
+use std::channel;
+use std::fiber;
+use std::http;
+use std::io;
+use std::net;
+
+// Reflect the request into the response body so the client can assert what arrived.
+fn reflect(req: http::Request) throws http::HttpError -> http::Response {
+    let auth = http::header(req.headers, "X-Token") orelse "<none>";
+    http::server::ok("method=#{req.method} token=#{auth} body=#{req.body}")
+}
+
+fn client(addr: str, done: channel::Channel[str]) {
+    let resp = try! (http::client::to("http://#{addr}/thing")
+        |> http::client::method("PUT")
+        |> http::client::header("X-Token", "sesame")
+        |> http::client::body("payload-here")
+        |> http::client::send());
+    try! channel::send(done, "#{resp.status}: #{resp.body}");
+}
+
+fn main() {
+    let l = try! net::tcp::listen("127.0.0.1:0");
+    let addr = try! net::tcp::local_addr(l);
+    fiber::runtime_on(1, move () => {
+        let done: channel::Channel[str] = channel::new();
+        fiber::spawn(() => client(addr, done));
+        let c = try! net::tcp::accept(l);
+        fiber::spawn(move () => { http::server::connection(c, reflect); });
+        io::println(channel::recv(done) orelse "?");
+    });
+    io::println("done");
+}
