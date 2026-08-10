@@ -11,7 +11,6 @@ fn main() {
     fiber::runtime_on(1, () => {
         let r = resource::new("sock-9", (name: str) => {
             io::println("cleanup: #{name}");
-            null
         });
         fiber::spawn(move () => {
             let payload = try! resource::get(r);

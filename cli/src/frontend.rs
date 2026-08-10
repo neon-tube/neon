@@ -250,6 +250,22 @@ pub fn check_project(
     })
 }
 
+/// Run LOWERING purely for its diagnostics — the `move`-capture rules need reprs, so
+/// they structurally live past the checker — and exit rendered on any. This is what
+/// keeps `neon check` and `neon build` agreeing about programs the checker alone cannot
+/// reject: monomorphisation and SSA construction, no optimisation, no C.
+pub fn check_lowered(checked: &Checked) {
+    let libs: Vec<(Vec<String>, &ast::Module)> =
+        checked.libs.iter().map(|(p, m)| (p.clone(), m)).collect();
+    let program = neon_compiler::ir::lower::lower_module(
+        &checked.env,
+        &checked.result,
+        &checked.module,
+        &libs,
+    );
+    exit_on_lower_errors(&program, checked);
+}
+
 /// Render lowering's own errors (`Program::errors`) and exit, exactly as `check` does for
 /// the checker's. Called by every emit path right after `ir::compile*`.
 pub fn exit_on_lower_errors(program: &neon_compiler::ir::ssa::Program, checked: &Checked) {

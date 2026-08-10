@@ -13,7 +13,6 @@ fn main() {
     fiber::runtime_on(1, () => {
         let r = resource::new("crashy-fd", (n: str) => {
             io::println("cleanup: #{n}");
-            null
         });
         task::spawn(move () => {
             let xs = [1, 2, 3];

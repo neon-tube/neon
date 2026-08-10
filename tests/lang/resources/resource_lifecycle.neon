@@ -13,7 +13,7 @@ use std::io;
 use std::resource;
 
 fn main() {
-    let a = resource::new(1, (n: i64) => { io::println("cleanup a"); null });
+    let a = resource::new(1, (n: i64) => { io::println("cleanup a"); });
     io::println(to_string(resource::is_live(a)));
 
     // Explicit release: cleanup runs here, and `a` is no longer live.
@@ -31,7 +31,7 @@ fn main() {
 
     // `take` disarms and hands the payload over without running cleanup: the caller is
     // taking responsibility for it.
-    let b = resource::new(5, (n: i64) => { io::println("cleanup b MUST NOT RUN"); null });
+    let b = resource::new(5, (n: i64) => { io::println("cleanup b MUST NOT RUN"); });
     let taken = resource::take(b);
     io::println(to_string(resource::is_live(b)));
 }

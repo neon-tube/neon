@@ -13,7 +13,6 @@ fn main() {
         let t = task::spawn(() => {
             resource::new("opened-in-task", (n: str) => {
                 io::println("cleanup #{n}");
-                null
             })
         });
         let r = task::await(t);

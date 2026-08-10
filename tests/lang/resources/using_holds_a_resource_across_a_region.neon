@@ -22,7 +22,6 @@ use std::string;
 fn held(n: i64) -> i64 {
     let r = resource::new(n, (v: i64) => {
         io::println(string::concat("released ", to_string(v)));
-        null
     });
     try resource::using(r, (v: i64) => {
         io::println(string::concat("inside the region with ", to_string(v)));
@@ -33,7 +32,6 @@ fn held(n: i64) -> i64 {
 fn body_throws() -> i64 {
     let r = resource::new(7, (v: i64) => {
         io::println("released after a throw");
-        null
     });
     // `get` is fallible, so `using`'s clause is `E | ReleasedError`; a body that throws
     // leaves through the same edge, and cleanup rides ARC rather than the explicit call.

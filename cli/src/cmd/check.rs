@@ -14,7 +14,10 @@ pub fn run(file: Option<&OsString>, lib: bool, cfg: &[String]) -> Result<()> {
     let Some(file) = file else {
         let project = crate::project::Project::find(std::path::Path::new("."))?;
         let modules = project.modules()?;
-        crate::frontend::check_project(&project.entry(), &modules, lib, cfg)?;
+        let checked = crate::frontend::check_project(&project.entry(), &modules, lib, cfg)?;
+        // Lowering has diagnostics of its own (the `move` rules); check runs it too, so
+        // this verb cannot pass a program `build` would reject.
+        crate::frontend::check_lowered(&checked);
         return Ok(());
     };
     let path = PathBuf::from(file);
@@ -96,6 +99,19 @@ pub fn run(file: Option<&OsString>, lib: bool, cfg: &[String]) -> Result<()> {
     }
     if let Some(result) = &result {
         crate::frontend::eprint_warnings(&result.warnings, &path, &src, &std_sources);
+        // Lowering's diagnostics too (the `move` rules need reprs and fire after the
+        // checker) — `check` must reject exactly what `build` rejects.
+        let libs: Vec<(Vec<String>, &_)> =
+            std_modules.iter().map(|(p, m)| (p.clone(), m)).collect();
+        let program = neon_compiler::ir::lower::lower_module(&env, result, &module, &libs);
+        if !program.errors.is_empty() {
+            for e in &program.errors {
+                crate::frontend::eprint_type_error(e, &path, &src, &std_sources);
+            }
+            let n = program.errors.len();
+            eprintln!("{n} error{}", if n == 1 { "" } else { "s" });
+            std::process::exit(1);
+        }
     }
     Ok(())
 }

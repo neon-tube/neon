@@ -13,7 +13,6 @@ fn main() {
         let ch: channel::Channel[resource::Resource[str, never]] = channel::new();
         let r = resource::new("undelivered", (n: str) => {
             io::println("dead letter closed: #{n}");
-            null
         });
         try! channel::send(ch, r);
         resource::release(r); // stale handle: a no-op, NOT a second cleanup

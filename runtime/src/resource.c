@@ -73,8 +73,8 @@ neon_resource* neon_resource_new(const void* payload, const neon_witness* w,
         sizeof(neon_resource_body) - sizeof(neon_header) + w->size, neon_resource_body_drop);
     b->w = w;
     b->cleanup = cleanup;
-    b->armed = true;
-    b->owner = neon_resource_ctx();
+    atomic_store_explicit(&b->armed, true, memory_order_relaxed);
+    atomic_store_explicit(&b->owner, neon_resource_ctx(), memory_order_relaxed);
     // The payload's heap parts must not point into the creator's arena — the body may
     // outlive it. Deep-copy under the still-active shared routing; a payload that cannot
     // cross (a capturing closure inside it) traps here, at construction, not at some later
@@ -99,11 +99,14 @@ void neon_resource_ref_finish(neon_resource* r) {
     neon_free(r);
 }
 
+// Load-then-store rather than an RMW, deliberately: only the holder of the unique owning
+// ref (or the gated disarm behind it) ever gets here, so the sequence is uncontended by
+// the same argument that keeps `owner` fence-free.
 bool neon_resource_take(neon_resource_body* b, void* out) {
-    if (!b->armed) {
+    if (!atomic_load_explicit(&b->armed, memory_order_relaxed)) {
         return false;
     }
-    b->armed = false;
+    atomic_store_explicit(&b->armed, false, memory_order_relaxed);
     memcpy(out, neon_resource_body_payload(b), b->w->size);
     memset(neon_resource_body_payload(b), 0, b->w->size);
     return true;
@@ -115,13 +118,13 @@ bool neon_resource_take(neon_resource_body* b, void* out) {
 // here, and it learned of the ref through the same publish edge the store rides back on.
 static int64_t neon_resource_gate(neon_resource* r) {
     neon_resource_body* b = r->body;
-    if (b->owner == NULL && r->owning) {
-        b->owner = neon_resource_ctx();
+    if (atomic_load_explicit(&b->owner, memory_order_relaxed) == NULL && r->owning) {
+        atomic_store_explicit(&b->owner, neon_resource_ctx(), memory_order_relaxed);
     }
-    if (b->owner != neon_resource_ctx()) {
+    if (atomic_load_explicit(&b->owner, memory_order_relaxed) != neon_resource_ctx()) {
         return NEON_RESOURCE_NOT_OWNER;
     }
-    if (!b->armed) {
+    if (!atomic_load_explicit(&b->armed, memory_order_relaxed)) {
         return NEON_RESOURCE_RELEASED;
     }
     return NEON_RESOURCE_OK;
@@ -167,7 +170,7 @@ neon_closure neon_resource_cleanup(neon_resource* r) {
 }
 
 bool neon_resource_is_live(neon_resource* r) {
-    bool live = r->body->armed;
+    bool live = atomic_load_explicit(&r->body->armed, memory_order_relaxed);
     neon_release((neon_header*)r);
     return live;
 }
@@ -183,7 +186,8 @@ void neon_wcopy_resource(const void* src, void* dst) {
     neon_resource* nr = neon_resource_ref_new(b, r->header.drop, moving);
     if (moving) {
         ((neon_resource*)r)->owning = false;
-        b->owner = NULL; // in flight; the far side's first use claims it
+        // In flight; the far side's first use claims it.
+        atomic_store_explicit(&b->owner, NULL, memory_order_relaxed);
     }
     *(neon_resource**)dst = nr;
 }

@@ -55,7 +55,7 @@ internal mod raw {
     @native("neon_net_udp_recv_from") fn udp_recv_from(fd: i64, max: i64) -> (str, str, i64)
     @native("neon_io_strerror") fn strerror(code: i64) -> str
 
-    fn fail(code: i64, what: str) throws IoError -> null {
+    fn fail(code: i64, what: str) throws IoError {
         throw IoError { message: "#{what}: #{strerror(code)}" };
     }
 }
@@ -75,10 +75,10 @@ mod tcp {
     // — or not at all.
     internal mod guard {
         fn listener(fd: i64) -> Listener {
-            Listener { r: resource::new(fd, (d: i64) => { raw::close(d); null }) }
+            Listener { r: resource::new(fd, (d: i64) => { raw::close(d); }) }
         }
         fn stream(fd: i64) -> Stream {
-            Stream { r: resource::new(fd, (d: i64) => { raw::close(d); null }) }
+            Stream { r: resource::new(fd, (d: i64) => { raw::close(d); }) }
         }
     }
 
@@ -147,46 +147,41 @@ mod tcp {
     /// Every byte, waiting whenever the socket buffer fills. A stream socket may accept a
     /// write only partially; this loops until it is all out, so a short write is never the
     /// caller's problem.
-    fn write(s: Stream, data: str) throws IoError -> null {
+    fn write(s: Stream, data: str) throws IoError {
         let code = raw::write(try stream_fd(s), [data]);
         if code < 0 {
             try raw::fail(code, "cannot write");
         };
-        null
     }
 
     /// As `write`, for several pieces at once — they reach the kernel without being
     /// concatenated first.
-    fn write_all(s: Stream, parts: List[str]) throws IoError -> null {
+    fn write_all(s: Stream, parts: List[str]) throws IoError {
         let code = raw::write(try stream_fd(s), parts);
         if code < 0 {
             try raw::fail(code, "cannot write");
         };
-        null
     }
 
     /// Close now rather than when the handle dies. Optional — the guard closes it either
     /// way — and closing twice is a no-op.
-    fn close(s: Stream) throws IoError -> null {
+    fn close(s: Stream) throws IoError {
         try resource::release(s.r);
-        null
     }
 
-    fn close_listener(l: Listener) throws IoError -> null {
+    fn close_listener(l: Listener) throws IoError {
         try resource::release(l.r);
-        null
     }
 
     /// Half-close: `:write` says "I have sent everything" while leaving this side able to
     /// read the reply, which is how a request/response exchange over a stream ends without
     /// ambiguity.
-    fn shutdown(s: Stream, half: Half) throws IoError -> null {
+    fn shutdown(s: Stream, half: Half) throws IoError {
         let how = if half == :read { 0 } else if half == :write { 1 } else { 2 };
         let code = raw::shutdown(try stream_fd(s), how);
         if code < 0 {
             try raw::fail(code, "cannot shut down");
         };
-        null
     }
 
     /// The address a listener is bound to — how one on port `0` learns its port.
@@ -209,12 +204,11 @@ mod tcp {
 
     /// Nagle off: send small writes immediately instead of waiting to coalesce them. What a
     /// request/response protocol wants; a bulk transfer is better off without it.
-    fn set_nodelay(s: Stream, on: bool) throws IoError -> null {
+    fn set_nodelay(s: Stream, on: bool) throws IoError {
         let code = raw::set_nodelay(try stream_fd(s), on);
         if code < 0 {
             try raw::fail(code, "cannot set nodelay");
         };
-        null
     }
 
     /// Accept forever, running `handler` on its own fiber per connection — the shape of
@@ -244,7 +238,7 @@ mod udp {
 
     internal mod guard {
         fn socket(fd: i64) -> Socket {
-            Socket { r: resource::new(fd, (d: i64) => { raw::close(d); null }) }
+            Socket { r: resource::new(fd, (d: i64) => { raw::close(d); }) }
         }
     }
 
@@ -285,9 +279,8 @@ mod udp {
         (data, peer)
     }
 
-    fn close(u: Socket) throws IoError -> null {
+    fn close(u: Socket) throws IoError {
         try resource::release(u.r);
-        null
     }
 
     fn local_addr(u: Socket) throws IoError -> str {

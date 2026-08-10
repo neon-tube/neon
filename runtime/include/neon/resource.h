@@ -33,6 +33,7 @@
 // which is why cleanup can run from whatever context drops the owning ref, including a
 // channel discarding an undelivered resource.
 
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -40,12 +41,19 @@
 
 typedef struct neon_fiber neon_fiber;
 
+// `armed` and `owner` are RELAXED atomics, and the relaxation is the point: every write
+// on the owning chain happens on the fiber holding the unique owning ref, with ordering
+// supplied by the publish edge the value itself crossed on (a channel mutex, a task
+// mutex, the spawn injection queue) — so no fence is needed here for correctness. The
+// atomics exist for the OTHER readers: a non-owner fiber's gate check and a cross-fiber
+// `is_live` race these fields by design, and a plain field would make that formal UB
+// (and TSan noise) even though every hardware outcome is benign.
 typedef struct neon_resource_body {
     neon_header header;    // concurrent count (SHARED heap); drop = neon_resource_body_drop
     const neon_witness* w; // payload witness
     neon_closure cleanup;  // env on the shared heap (copied at construction), or NULL env
-    bool armed;            // cleanup still owed; plain — see the handoff argument above
-    neon_fiber* owner;     // the fiber allowed to use it; NULL = unowned / in flight
+    _Atomic bool armed;    // cleanup still owed
+    _Atomic(neon_fiber*) owner; // the fiber allowed to use it; NULL = unowned / in flight
 } neon_resource_body;
 
 static inline void* neon_resource_body_payload(neon_resource_body* b) {

@@ -59,11 +59,11 @@ internal mod raw {
     @native("neon_io_close") fn close(fd: i64) -> i64
     @native("neon_io_strerror") fn strerror(code: i64) -> str
 
-    fn fail(code: i64, what: str) throws ProcessError -> null {
+    fn fail(code: i64, what: str) throws ProcessError {
         throw ProcessError { message: "#{what}: #{strerror(code)}" };
     }
 
-    fn io_fail(code: i64, what: str) throws IoError -> null {
+    fn io_fail(code: i64, what: str) throws IoError {
         throw IoError { message: "#{what}: #{strerror(code)}" };
     }
 
@@ -76,7 +76,6 @@ internal mod raw {
             if code < 0 {
                 try io_fail(code, "cannot close pipe");
             }
-            null
         }) }
     }
 
@@ -192,12 +191,11 @@ fn wait(c: Child) throws ProcessError -> i64 {
 
 /// End the child NOW -- SIGKILL, no handler, no negotiation. `wait` afterwards reaps it
 /// and reports 137. For a graceful end, close its stdin and `wait` instead.
-fn kill(c: Child) throws ProcessError -> null {
+fn kill(c: Child) throws ProcessError {
     let code = raw::kill(c.pid);
     if code < 0 {
         try raw::fail(code, "cannot kill pid #{c.pid}");
     };
-    null
 }
 
 /// Everything the child writes to this stream, to its end -- which arrives when the
@@ -225,17 +223,16 @@ fn read_some(p: Pipe, max: i64) throws IoError -> str {
 }
 
 /// Write the whole of `data` to the child's stdin.
-fn write(p: Pipe, data: str) throws IoError -> null {
+fn write(p: Pipe, data: str) throws IoError {
     let fd = try raw::pipe_fd(p);
     let code = raw::writev(fd, [data]);
     if code < 0 {
         try raw::io_fail(code, "cannot write pipe");
     };
-    null
 }
 
 /// Close this end now, rather than when the last reference drops. Closing a child's
 /// stdin is the portable "no more input"; closing twice is an error, as for a `File`.
-fn close(p: Pipe) throws IoError -> null {
+fn close(p: Pipe) throws IoError {
     try! resource::release(p.r)
 }

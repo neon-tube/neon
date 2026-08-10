@@ -19,7 +19,6 @@ fn dropped_at_last_use() {
     let name = string::concat("payload", "-one");
     let r = resource::new(name, (s: str) => {
         io::println(string::concat("drop cleanup: ", s));
-        null
     });
     io::println("after the resource");
 }
@@ -28,7 +27,6 @@ fn released_explicitly() {
     let name = string::concat("payload", "-two");
     let r = resource::new(name, (s: str) => {
         io::println(string::concat("release cleanup: ", s));
-        null
     });
     try resource::release(r) catch (e) { null };
     io::println(to_string(resource::is_live(r)));
@@ -40,7 +38,6 @@ fn taken_out() {
     let name = string::concat("payload", "-three");
     let r = resource::new(name, (s: str) => {
         io::println("MUST NOT RUN");
-        null
     });
     let got = resource::take(r);
     io::println(string::concat("took: ", got orelse "nothing"));

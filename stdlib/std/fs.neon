@@ -76,8 +76,7 @@ internal mod raw {
             let code = raw::close(d);
             if code < 0 {
                 try fail(code, "cannot close", "<file>");
-            }
-            null
+            };
         }) }
     }
 }
@@ -93,7 +92,7 @@ fn exists(p: path::Path) -> bool {
     probe::exists(path::to_str(p))
 }
 
-fn fail(code: i64, what: str, path: str) throws IoError -> null {
+fn fail(code: i64, what: str, path: str) throws IoError {
     throw IoError { message: "#{what} `#{path}`: #{raw::strerror(code)}" };
 }
 
@@ -126,9 +125,8 @@ fn open_append(p: path::Path) throws IoError -> File {
 /// Release the descriptor now rather than whenever the handle dies. Optional -- ARC closes
 /// it either way -- and closing twice is a no-op, because a closed handle has nothing left
 /// to fail at and an fd number gets reused.
-fn close(f: File) throws IoError -> null {
+fn close(f: File) throws IoError {
     try resource::release(f.r);
-    null
 }
 
 /// The descriptor, or an `IoError` if this handle was already closed. The check never
@@ -155,13 +153,12 @@ fn read_all(f: File) throws IoError -> str {
 /// leaves become an `iovec` array of pointer/length pairs. One `writev` covers up to
 /// `IOV_MAX` pieces, so a larger tree takes one syscall per batch, and a partial write is
 /// resumed rather than reported.
-fn write_all(f: File, data: IoList) throws IoError -> null {
+fn write_all(f: File, data: IoList) throws IoError {
     let fd = try fd_of(f);
     let code = raw::writev(fd, flatten(data));
     if code < 0 {
         try fail(code, "cannot write to", "<file>");
     };
-    null
 }
 
 // ---- iolists ----
@@ -212,24 +209,21 @@ fn read_lines(p: path::Path) throws IoError -> List[str] {
     string::lines(try read(p))
 }
 
-fn write(p: path::Path, data: IoList) throws IoError -> null {
+fn write(p: path::Path, data: IoList) throws IoError {
     let f = try create(p);
     try write_all(f, data);
-    null
 }
 
-fn append(p: path::Path, data: IoList) throws IoError -> null {
+fn append(p: path::Path, data: IoList) throws IoError {
     let f = try open_append(p);
     try write_all(f, data);
-    null
 }
 
-fn remove(p: path::Path) throws IoError -> null {
+fn remove(p: path::Path) throws IoError {
     let code = raw::remove(path::to_str(p));
     if code < 0 {
         try fail(code, "cannot remove", path::to_str(p));
     };
-    null
 }
 
 // ---- directories and metadata ----
@@ -244,24 +238,22 @@ fn remove(p: path::Path) throws IoError -> null {
 // runs, so the Windows half could be written against something that executes rather than
 // something that only type-checks. `verify/windows.sh` is that path.
 
-fn mkdir(p: path::Path) throws IoError -> null {
+fn mkdir(p: path::Path) throws IoError {
     let code = raw::mkdir(path::to_str(p));
     if code < 0 {
         try fail(code, "cannot create directory", path::to_str(p));
     };
-    null
 }
 
 /// Replaces an existing destination, which is POSIX `rename`'s behaviour and what Windows is
 /// asked for explicitly (`MOVEFILE_REPLACE_EXISTING`) so the two agree. A cross-volume move
 /// is permitted on Windows and is NOT atomic there; POSIX refuses it outright. Do not rely on
 /// atomicity across volumes on either.
-fn rename(from: path::Path, to: path::Path) throws IoError -> null {
+fn rename(from: path::Path, to: path::Path) throws IoError {
     let code = raw::rename(path::to_str(from), path::to_str(to));
     if code < 0 {
         try fail(code, "cannot rename", path::to_str(from));
     };
-    null
 }
 
 /// Whether the path names a directory. `false` for a file AND for something that is not
@@ -296,8 +288,7 @@ fn read_dir(p: path::Path) throws IoError -> List[str] {
 /// Copy by reading and writing, so it needs no syscall of its own and works wherever `read`
 /// and `write` do. It is NOT atomic and does not preserve permissions or timestamps -- a copy
 /// that did would be a different function with a different name.
-fn copy(from: path::Path, to: path::Path) throws IoError -> null {
+fn copy(from: path::Path, to: path::Path) throws IoError {
     let data = try read_bytes(from);
     try write(to, data as str);
-    null
 }

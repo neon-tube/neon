@@ -16,12 +16,12 @@ use std::io;
 use std::resource;
 
 fn unused_resource() {
-    let r = resource::new(7, (n: i64) => { io::println("cleanup ran"); null });
+    let r = resource::new(7, (n: i64) => { io::println("cleanup ran"); });
     io::println("after the resource");
 }
 
 fn held_until_used() -> i64 {
-    let r = resource::new(9, (n: i64) => { io::println("cleanup held"); null });
+    let r = resource::new(9, (n: i64) => { io::println("cleanup held"); });
     io::println("before the last use");
     // `r`'s last use, so cleanup runs after this line rather than before it.
     let live = resource::is_live(r);

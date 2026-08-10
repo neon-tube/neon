@@ -61,11 +61,10 @@ internal mod raw {
 /// or buffer it. Blocks this fiber only on a full `bounded` channel. Throws ClosedError
 /// on a closed channel — and a throw means NOT sent: the caller still owns `v`, and a
 /// resource's baton stayed home.
-fn send[T](ch: Channel[T], v: T) throws ClosedError -> null {
+fn send[T](ch: Channel[T], v: T) throws ClosedError {
     if !raw::send(ch, v) {
         throw ClosedError { message: "send on a closed channel" };
     };
-    null
 }
 
 /// Receive the next value, blocking this fiber while the channel is open and empty.

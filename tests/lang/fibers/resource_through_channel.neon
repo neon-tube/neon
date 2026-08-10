@@ -29,7 +29,7 @@ fn main() {
         let jobs: channel::Channel[Job] = channel::new();
         fiber::spawn(() => worker(jobs));
 
-        let a = Job { r: resource::new("fd-a", (n: str) => { io::println("cleanup #{n}"); null }) };
+        let a = Job { r: resource::new("fd-a", (n: str) => { io::println("cleanup #{n}"); }) };
         try! channel::send(jobs, a);
         let stale = try resource::get(a.r) catch (e) { "moved" };
         io::println("sender sees: #{stale}");
@@ -37,7 +37,7 @@ fn main() {
 
         // A throw means NOT sent: the baton stayed, the resource is still ours to use
         // and to clean up right here.
-        let b = Job { r: resource::new("fd-b", (n: str) => { io::println("cleanup #{n}"); null }) };
+        let b = Job { r: resource::new("fd-b", (n: str) => { io::println("cleanup #{n}"); }) };
         try channel::send(jobs, b) catch (e) {
             io::println("send failed: #{e.message}");
         };

@@ -31,7 +31,7 @@ fn main() {
     // The motivating case. The cleanup throws nothing, so `E` is `never`, and the
     // annotation says so out loud rather than leaving it to inference.
     let r: resource::Resource[i64, never] =
-        resource::new(7, (n: i64) => { io::println("cleanup ran"); null });
+        resource::new(7, (n: i64) => { io::println("cleanup ran"); });
 
     io::println(to_string(resource::is_live(r)));
 
