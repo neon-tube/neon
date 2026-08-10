@@ -1,344 +1,373 @@
-# Design: fibers — isolated-arena green threads, refcount-safe by construction
+# Fibers — isolated-arena green threads, refcount-safe by construction
 
-**Status:** design locked, implementation in progress on the `fibers` branch, built in
-independently-testable slices (see the build order at the end). No fiber runtime is on
-`main` yet. This document is the decided design; where it and a future module doc disagree,
-the module doc is nearer the code and this file is the bug.
+**Status: built.** The runtime, the language surface, M:N scheduling, and an io_uring backend
+are implemented and tested on the `fibers` branch. This document describes what the system
+**is**; the last section is an honest list of what it is **not** yet. Where this file and a
+module comment disagree, the module comment is nearer the code and this file is the bug.
 
-This is **fibers only.** A general-purpose CPU **executor pool** (`par_map`) and
-**send-multiprocess** are pinned and named at the end just as seams. The one thread
-component in scope is the internal **file-offload pool**, which `std::fs` under fibers
-requires on the readiness IO backends.
+Verified continuously by: 186 C unit tests under ASan/UBSan/LSan and 309 backend trials (a
+corpus program compiled, linked against the sanitized runtime, run, and diffed), **each run
+against both IO engines**; 15 of those corpus programs are fiber programs.
 
 ## The constraint everything answers to
 
 Every heap object carries a non-atomic `uint32_t rc`. Two OS threads touching one object's
 `rc` concurrently is a data race and a use-after-free. So the whole design honours one rule:
 
-> **No heap object's refcount is ever touched by two OS threads at once.**
+> **No ordinary heap object's refcount is ever touched by two OS threads at once.**
 
-The chosen way to honour it is **isolation**: each fiber has its own heap (arena), and a
-value lives in exactly one arena. Cross-fiber sharing of a reference is structurally
+The chosen way to honour it is **isolation**: each fiber has its own heap (arena), and an
+ordinary value lives in exactly one arena. Cross-fiber sharing of a reference is structurally
 impossible, so the non-atomic `rc` is safe by construction — not by a lock, not by
-serialisation, not by an atomic. (The one exception, the size-heuristic shared heap for big
-values, is addressed below and pays atomic `rc` only where it is free to.)
+serialisation, not by an atomic.
+
+The exceptions are enumerable and small: the *bodies* of channels and tasks, which are shared
+by design and count atomically through their own entry points (see **Handles**). Nothing else
+crosses, so `neon_retain`/`neon_release` never learned about threads at all.
 
 ## What a fiber is
 
-A **stackful, cooperatively-scheduled green thread**: its own stack, its own arena,
-suspended and resumed by swapping the stack pointer. The defining property:
+A **stackful, cooperatively-scheduled green thread**: its own stack, its own arena, suspended
+and resumed by swapping the stack pointer. The defining property:
 
 > **A fiber suspends by swapping its whole stack, so any ordinary `fn` can block-and-yield
-> transparently, and NO function signature changes.** No `async`, no colouring, no `await`.
-> `fs::read(p) -> str` is the same function on a fiber and on `main`.
+> transparently, and NO function signature changes.** No `async`, no colouring, no `await`
+> keyword on IO. `fs::read(p) -> str` is the same function on a fiber and on `main`.
 
 Colouring exists only because *stackless* `async` compiles suspension into a compile-time
-state machine, forcing "can suspend" into the type. A stackful fiber keeps a real stack;
-its locals live on it; the swap preserves them; nothing colours. Choosing the stack-swap
-mechanism *is* choosing to have no colours. (Java's Loom is the industrial proof:
-`InputStream.read()` didn't change signature; the JDK parks the virtual thread.)
+state machine, forcing "can suspend" into the type. A stackful fiber keeps a real stack; its
+locals live on it; the swap preserves them; nothing colours. Java's Loom is the industrial
+proof: `InputStream.read()` did not change signature.
+
+The swap gadget is ours: ~15 instructions of x86-64 SysV assembly
+(`src/fiber_swap_x86_64_sysv.S`) saving the callee-saved registers and the FP control words,
+storing the suspended `rsp`, loading the target's. Not vendored — a cooperative context
+switch is small enough to own, audit, and comment. Every switch is bracketed with
+AddressSanitizer's fiber annotations (`__sanitizer_start/finish_switch_fiber`); without them
+ASan's fake-stack tracking corrupts across a raw stack swap.
 
 ## The heap: per-fiber arenas
 
-Each fiber allocates from its own arena. The arena is:
+Each fiber allocates from its own arena (`src/arena.c`):
 
-- **Bump-pointer for fresh allocation** — a register-pinned pointer, so allocation is a
-  pointer add (faster than the global slab's free-list-pop-plus-class-math). See "the
-  register" below.
-- **Size-class free lists for reclaim** — a refcount reaching zero pushes the slot to its
-  class list; a later allocation pops that list before bumping. This is what makes memory
-  **plateau instead of leak**: arena size = the sum over classes of each class's high-water
-  mark of simultaneously-live objects, which stops growing once each class peaks and is
-  bounded by the fiber's *peak per-class working set*. Pure bump (no reclaim) charges
-  *total* allocation and would leak a long-lived fiber; size classes charge *peak live* and
-  cannot. No fiber can fragment into an unbounded leak.
-- **Dropped whole at death** — normal exit and crash both end by dropping the entire arena
-  in one operation, the "generational nursery bulk-frees the dead young objects" win without
-  a moving collector.
+- **Bump-pointer for fresh allocation**, with the arena pointer in an `initial-exec`
+  `_Thread_local`.
+- **Size-class free lists for reclaim** — a count reaching zero pushes the slot to its class
+  list; a later allocation pops it before bumping. This is what makes memory **plateau
+  instead of grow**: arena size is the sum over classes of each class's high-water mark of
+  simultaneously-live objects. Pure bump would charge *total* allocation and leak a
+  long-lived fiber; size classes charge *peak live* and cannot.
+- **Walkable** — a freed slot keeps its size class (the free-list link rides in the `drop`
+  field instead) and sets a FREED bit, so the teardown walk can step slot to slot.
+- **Dropped whole at death**, after the teardown walk below.
 
 **This is the GC, and it needs no scan and no compaction.** Immutability ⟹ no cycles ⟹
-refcounting is *complete* (everything reaches zero, nothing leaks), so there is no tracing
-backstop to build. The arena-drop gives the bulk-free that copying collectors compact-to-
-reclaim for. What a compacting collector additionally gives — defragmentation — is unneeded:
-short fibers die before fragmenting, uniform-allocation fibers (the accept loop) barely
-fragment, and size classes bound the residual to a plateau. So Neon gets complete
-reclamation, bulk young-object free, zero leaks, **stable pointers** (no relocation, no
-barriers, trivial FFI) and deterministic destruction — the things tracing/copying/
-generational collectors are built for — with none of the machinery.
+refcounting is *complete*; the arena-drop gives the bulk-free that copying collectors compact
+to reclaim. Defragmentation is unneeded: short fibers die before fragmenting, and size
+classes bound the residual to a plateau. So Neon gets complete reclamation, bulk young-object
+free, zero leaks, **stable pointers** (no relocation, no barriers, trivial FFI) and
+deterministic destruction, with none of the machinery.
 
-*Smarter later (earned by proof, never default):* a fiber the compiler proves
-bounded-lifetime can use **pure bump, no reclaim** (total is known small, so skipping the
-free list is safe and faster). Safe-by-default (size-classed, plateaus), optimise-where-
-proven (pure bump). That is the Neon posture: the fast-but-unsafe path exists only where the
-compiler guarantees it is safe.
+**Measured (2026-08-10):** in-fiber arena allocation is *indistinguishable* from the global
+slab — 23–26 ms both, on a 4M-node binary-trees pattern with safepoints on. The design
+originally called a dedicated arena register "critical"; measurement says it is not. What
+matters, and what isolation buys, is never paying atomics and never paying general-dynamic
+TLS (see the TLS rule in `src/internal.h`). A pinned register would save the last ~1% at the
+cost of burning a register in all generated code and coupling build flags across the archive
+seam; it waits for a profile that names the load, and none has.
 
-## The register
+## Handles: a channel is two objects
 
-**Measured resolution (2026-08-10): initial-exec TLS is enough; the register is not
-critical.** The arena pointer is an initial-exec `_Thread_local` — one `%fs`-relative,
-L1-hot load per allocation. Measured on the binary-trees pattern: general-dynamic TLS
-(a `__tls_get_addr` call) costs 6-7%; initial-exec costs ~1%, inside noise; and the
-IN-FIBER arena path matches the global slab exactly (23-26ms both, 4M nodes, safepoints
-on). What the earlier draft of this section overestimated was the identity lookup — the
-one load amortizes into the ~dozen-instruction alloc path and an out-of-order core hides
-it. What actually matters, and what isolation bought: no atomics, no locks, and never the
-general-dynamic model. A dedicated register (`-ffixed-reg`, Go's `mcache`-via-`g`) remains
-the documented LAST ~1% — it burns a register in all generated code and couples build
-flags across the archive seam, so it waits for a fiber-heavy profile that names the load,
-which no measurement yet has.
+A channel or task has a shared **body** — ring, waiter lists, lock, result slot — that
+genuinely lives across fibers and threads. The Neon value `Channel[T]` is *not* that body: it
+is a per-holder **ref**, an ordinary object in the holder's own arena owning exactly one
+reference to the body.
 
-(An earlier draft derived the current fiber from a size-aligned stack via `rsp`-masking.
-That is unsound for non-fiber threads — a file-offload pool worker on an ordinary pthread
-stack would read arbitrary bytes as a fiber pointer. `_Thread_local` is the sound choice,
-and it also frees us from fixed-size stacks, leaving growable stacks open as a later
-density optimisation.)
+The split makes one bug unrepresentable. With a bare pointer, a handle held only in a crashed
+fiber's **locals** — never stored in any arena object — was invisible to the teardown walk,
+and the body (with everything buffered in it) leaked. Locals die with the abandoned stack and
+there are no stack maps to find them; conservative stack scanning is sound for a *tracing*
+collector (over-finding merely retains) but **unsound for a refcount release**, where a stale
+word that looks like a pointer would double-free. Making the handle arena-resident solves it
+structurally: the walk finds every live ref by construction and its drop releases the body.
 
-## Crash semantics: a trap is fatal to the fiber, and leaves no mess
+It also confines concurrency. A ref never crosses threads — a handle crossing fibers is a
+*copy*, which mints a fresh ref in the destination's heap — so a ref has a plain,
+thread-local count and codegen emits the generic retain/release for handles. Atomic counting
+lives in one file, where a ref's birth and death touch the body. Same shape as `neon_str`'s
+data + owner.
 
-Today a trap is `_exit(101)` — the whole process, cleaned up by the OS. Making a fiber a
-fault domain means being your own OS for that domain: close its handles, free its memory.
-The design does exactly that, cleanly, because **Neon's traps are preventive.** A bounds
-check traps *before* the bad access; overflow *before* the wrong value; division *before*
-the fault. So the heap is *consistent* at the trap point — the trap fired to keep it that
-way — and an immutable cleanup closure over intact immutable values can run safely.
+## Crash semantics: a trap kills the fiber and leaves no mess
 
-Teardown — exit *and* crash, the same operation — is a **walk, not a registry.** Resources
-and big shared values do NOT live in the arena; they live in the process/shared heap
-(a Resource must survive its creating fiber, since it can be *moved* to another fiber). The
-arena only holds *references* to them. So:
+A trap outside a fiber is `_exit(101)`, unchanged. Inside a fiber it kills **just that
+fiber**, because Neon's traps are *preventive*: a bounds check traps before the bad access,
+overflow before the wrong value. The heap is consistent at the trap point — that is what the
+trap is for — so cleanup can safely run.
 
-1. **Walk the arena's live objects, releasing their OUTGOING references.** A Resource
-   reference released to its last holder runs the cleanup (close the fd); a shared-value
-   reference is decremented (freed if last). Intra-arena references need nothing — those
-   objects are all dying together. The walk is generic (repr-directed, like the drop
-   functions), so Resources and shared values are handled uniformly, with no per-object
-   tracking and no cross-fiber re-homing. Cost is **O(live working set)** — bounded by the
-   arena's plateau — paid once, at death, never during execution. Each cleanup is
-   **guarded**: one that itself traps is abandoned, logged, and the walk continues (C++'s
-   "don't throw from a destructor mid-unwind"). Cleanup runs blocking and prompt — the fiber
-   is dead, it cannot park.
-2. **Bulk-free the arena's memory** — the arena-local objects, in one operation.
-3. **Swap back to the scheduler** — the park operation, flagged dead. The fiber's stack
-   returns to the pool.
+**The mechanism is the swap gadget, not `setjmp`/`longjmp`.** A crashing fiber switches back
+to the scheduler exactly as a finishing one does, flagged crashed. A cross-stack `longjmp`
+would trip glibc's `__longjmp_chk` and side-step the ASan annotations; killing a fiber *is* a
+context switch, and we already have a correct one.
 
-The walk needs only **arena walkability**: each slot's header already carries its type (the
-drop pointer) to find outgoing references and its size to step to the next, plus a
-freed-slot flag to skip reclaimed slots. No registry, no per-store cost, no re-homing — the
-walk is the teardown. This also unifies exit and crash: during life, refcounting reclaims
-intermediate garbage into the arena's free lists; only the *terminal* release at death is
-replaced by the walk (which is the bulk-drop win — skip per-object terminal releases).
+**Teardown is a walk, in two passes**, and it runs for crash and normal exit alike:
 
-No memory leaked, no handle left open, and every other fiber untouched. For an HTTP server
-this is tokio's `catch_unwind`-per-task behaviour reached with **no unwinding** — the fiber
-does not `try` its own bounds error; it dies and the system moves on.
+1. **Seal** every live object in the arena with the `IMMORTAL` flag. From then on any release
+   aimed at it is a no-op through the guard `neon_release` has always had.
+2. **Force-drop** each one (`rc = 0`, then `h->drop(h)`). A Resource runs its cleanup; a
+   container releases what it holds — and because siblings are sealed, only *outgoing*
+   references really count down. Exactly-once falls out of the seal.
+3. **Bulk-free** the arena.
 
-**Non-fiber traps `_exit` unchanged.** `neon_trap` is only reachable from generated Neon
-code, which only ever runs on a fiber, so in practice the isolate path is universal for
-program code; the scheduler and IO engine are hand-written C that report errors as C return
-codes and never call `neon_trap`. So the branch is: on a fiber → isolate; otherwise → today's
-`_exit`. Isolation is purely additive.
+The seal is why this costs the hot path nothing. The first implementation instead taught
+`neon_release` a teardown-mode test — one branch with a TLS load — and that cost **30% on
+binary-trees**. Reusing a guard that already existed costs zero. Soundness rests on isolation
+(no other fiber can reference this arena's objects) and on sendability (a shared object never
+references an arena one, so external release cascades cannot re-enter).
 
-**Two guarded exceptions** to "run cleanup inline":
-- **OOM** (`neon_alloc` failed): the heap is consistent but memory is scarce, and a cleanup
-  that allocates could nested-trap — hence the per-cleanup guard, and cleanups are
-  `close()`-shaped and should not allocate.
-- **Stack overflow**: a SIGSEGV on an exhausted stack, where the walk cannot run (async-signal
-  unsafe). A minimal `sigaltstack` handler swaps to the scheduler, which runs the arena walk
-  on its own healthy stack, then bulk-frees. The walk is the same one exit and crash use, so
-  isolation makes even this corner tractable — no special path.
+**Stack overflow** is the one case that is a real fault: fiber stacks are `mmap`'d with a
+`PROT_NONE` guard page, and on Linux a SIGSEGV handler on a `sigaltstack` **rewrites the
+interrupted `ucontext`** to resume on a healthy recovery stack, which then performs the
+ordinary kill. (A handler that switched away and never returned would leave the altstack
+marked in-use and the signal blocked.) Under ASan the handler is left off so ASan's own
+overflow detection stands; the isolation path is validated by
+`tests/manual/fiber_overflow.c`.
 
-## Sendability: move-only Resources, copy everything else
+**Deadlock is a trap, never a hang.** When no seat can run anything, nothing external is in
+flight, and fibers are still live, the last seat to go idle says so — after re-checking every
+seat's queues, because a wake already pushed into an injection queue is work no counter
+reflects until that seat looks.
 
-A value crossing a channel is copied into the receiver's arena. The rules:
+## Sendability: what crosses, and how
 
-- **Resources are move-only, gated by a runtime `rc == 1` check** at the send/spawn boundary
-  (traps if shared). No compile-time linearity, no colouring — "is this sendable" is a
-  structural property (does the value contain a Resource?), computed from the repr like the
-  drop-walk, and the uniqueness is a local single-threaded `rc == 1` comparison. A value
-  containing a Resource inherits move-only (contagion, structural). Since a Resource lives in
-  the process/shared heap (not the arena), a move just transfers the reference; the teardown
-  walk of whichever fiber owns it at the time cleans it — no per-fiber resource list.
-- **Everything else copies.** In an immutable language, duplicating a shared node is
-  *semantically invisible* — two identical immutable copies are indistinguishable from the
-  original (`==` is structural, nothing mutates). So a deep copy is always *correct*; it can
-  only be bigger or slower, never wrong. Internal sharing (a DAG) is duplicated by default;
-  preserving it is a measured-later optimisation (Erlang's opt-in `copy_shared`), not a
-  correctness decision.
-- The **size-heuristic shared heap** carries the big-value case: values above a size
-  threshold are allocated on a shared refcounted heap *from birth*, so a send of them is a
-  refcount bump, not a byte-copy. The threshold that avoids the copy is the same threshold
-  that makes atomic `rc` affordable (big values, few rc ops), so the shared heap pays atomic
-  `rc` only where it costs nothing; arenas stay non-atomic for the small, frequently-counted
-  values. A shared-heap value can never contain a Resource (move-only ⟹ single-referenced ⟹
-  never shared), so the shared heap is Resource-free by construction. This is Erlang's
-  binary-heap split, generalised to any large value because Neon's values are uniform.
+A value crossing a channel, a spawn argument, a capture, or a task result is **deep-copied**,
+through a `copy` operation on the value witness that codegen emits per repr:
+
+- **scalars** — the bitcopy is the copy (a NULL `copy` slot);
+- **str, list, map, boxed `any`** — runtime helpers that rebuild recursively;
+- **records, tuples, unions, boxed records** — generated walkers (bitcopy, then overwrite the
+  heap parts; unions switch on the tag; boxed records get per-type functions, forward-declared
+  so mutually recursive shapes terminate);
+- **channels and tasks** — identity: retain the body, mint a fresh ref (see **Handles**);
+- **closures and resources** — a **trapping** copy, never NULL. Loudness over corruption.
+
+Deep copy is always *correct* in an immutable language: two identical immutable values are
+indistinguishable, so duplicating is semantically invisible. It can only be bigger or slower,
+never wrong.
+
+Where the copy *lands* depends on the lifetime shape, and this is what keeps atomics out of
+the generic path:
+
+- **Rendezvous** (a receiver is already parked): the copy goes **straight into the receiver's
+  arena**. A parked receiver's arena is exclusively the sender's for the handoff — parkedness
+  is the lock, even under M:N. One hop, plain counts.
+- **Staging** (a buffered send, a spawn argument, an env copy, a task result): the plain slab.
+  Ownership is *sequential* — producer creates, container owns, exactly one consumer takes
+  over, with the channel lock as the visibility barrier — so plain counts are sound. `recv`
+  and `await` then **restage** into the consumer's own arena and release the staging copy.
+  Two hops for a buffered value: the price of a generic refcount path with no atomics in it.
+
+A **capturing** lambda crosses too: its environment is deep-copied through the *env-copy
+table*, which maps an environment's `drop` function (the runtime's only handle on its shape)
+to a generated copy. The drop-pointer-as-type-id trick, in its second use after teardown.
 
 ## The surface
 
 ```neon
 // std::fiber
-fn runtime(body: () -> null)                  // lazy entry: start the scheduler, run body as fiber 0
-fn yield()                                     // cooperatively step aside
+fn runtime(body: () -> ())                        // lazy entry; returns when the tree is done
+fn runtime_threads(threads: i64, body: () -> ())  // the same, on N scheduler seats
+fn spawn(body: () -> ())                          // capturing lambdas welcome
+fn spawn_with[T](body: (T) -> (), arg: T)         // hand data over explicitly
+fn yield()
 
+// std::channel
 opaque record Channel[T] { .. }
-fn channel[T](capacity: i64) -> Channel[T]     // 0 = rendezvous
-fn send[T](c: Channel[T], v: T)                // copies into the receiver's arena (moves a Resource)
-fn recv[T](c: Channel[T]) -> T | closed        // parks the caller
-fn close[T](c: Channel[T])
+fn new[T]() -> Channel[T]                         // unbounded: sends never block
+fn bounded[T](n: i64) -> Channel[T]               // backpressure: a full send parks
+fn send[T](ch: Channel[T], v: T)
+fn recv[T](ch: Channel[T]) -> T | null            // null == closed and drained
+fn recv_timeout[T](ch: Channel[T], millis: i64) -> T | null
+fn close[T](ch: Channel[T])
+fn is_closed[T](ch: Channel[T]) -> bool
 
-opaque record Task[T] { .. }                   // a fiber + the one-shot channel of its result
-fn spawn[T](body: () -> T) -> Task[T]          // start a fiber; its return sends on the channel
-fn await[T](t: Task[T]) -> T                   // recv the result; parks the caller
+// std::task
+opaque record Task[T] { .. }
+fn spawn[T](body: () -> T) -> Task[T]
+fn await[T](t: Task[T]) -> T                      // one-shot; traps if the task crashed
+
+// std::sys
+fn has_fibers() -> bool
+fn io_engine() -> IoEngine                        // :io_uring | :epoll | :none
 ```
 
-**Lazy entry, explicit.** `fiber::runtime(body)` starts the scheduler and runs `body` as
-fiber 0 from the stack pool — the OS `main` thread becomes the scheduler driver. A program
-that never calls it (a plain CLI, a compiler) pays *nothing*: no scheduler, no engine, no
-arenas. `runtime`, not on-first-spawn, avoids adopting `main`'s non-pool stack as a fiber.
+Everything above is `@native` + `@runtime` **stdlib declarations**. Adding fibers to the
+language needed no typechecker change: a Neon closure is already a 16-byte `neon_closure`
+passed by value, a named function used as a closure already gets an adapter thunk, and
+`@runtime("neon_channel_ref")` is how a stdlib type names a runtime-backed representation.
+Codegen assists only where a generic value crosses the ABI (witnesses, per-repr call shims,
+the env-copy table, the `T | null` that `recv` returns).
 
-**Join is a channel.** `Task[T]`/`await` is a thin library over a one-shot channel; the
-result crosses arenas on the same copy/move path as any send. Structured concurrency (a
-`scope` that awaits its tasks and surfaces the first error) is buildable on top.
+**Lazy entry.** A program that never calls `fiber::runtime` pays *nothing*: no scheduler, no
+engine, no arenas, and — because safepoints are emitted only in fiber programs — C output
+byte-identical to a pre-fiber build.
 
-**Cancellation is cooperative.** A fiber carries a cancellation token it `select`s on or
-checks, notices, and *returns normally* — running its own cleanups via the ordinary path,
-no injected async kill. Hard `kill(fiber)` needs true async unwind and is deferred (it is a
-supervision feature, and supervision is pushed — see below).
+**Failure propagates along await edges.** A task whose body traps marks the task failed and
+wakes its awaiter, whose `await` then traps — killing that fiber cleanly, which cascades to
+*its* awaiter. Fibers that await nothing are unaffected.
 
-**Deadlock is a panic.** If every fiber is parked and nothing can wake one (run queue empty,
-no IO op in flight, no timer, no pool task), the scheduler panics, as Go does for "all
-goroutines asleep."
+## Parallelism: M:N, by affinity
 
-## Memory in the real world
+`fiber::runtime_threads(n, body)` runs `n` scheduler seats. Each seat is exactly the M=1
+engine; **fibers are pinned** to a home seat at spawn (round-robin), and every later wake
+routes to that home. So a fiber's arena is only ever touched by its own thread, and the whole
+isolation argument survives multithreading untouched.
 
-Per parked fiber, physical, back-of-envelope: **stack ~4–8 KB** (one page floor of a
-guard-paged, demand-paged reservation) + **arena ~1–4 KB** (plateaued at working set) +
-control ~200 B ≈ **6–9 KB**, stack-dominated. So: a plain program pays **zero** (lazy
-runtime); 1K–100K fibers is 6 MB–900 MB (fine); 1M fibers is ~6–9 GB, **Go-class**, behind
-Erlang's ~2.7 KB. The density lever is the **stack, not the arena** — the allocator is the
-cheap part. Erlang-class density is a later **growable/copyable stack** optimisation (start
-small, grow-by-copy), which the `_Thread_local` current-fiber decision left open (no
-fixed-alignment requirement).
+The mesh's moving parts: a per-seat lock guarding `{injection queue, sleepers}` (the local run
+queue stays owner-only and lock-free), an `eventfd` doorbell per seat registered in whatever
+engine that seat idles in, global atomic live/external/waiting counts, shutdown by whoever
+reaps the last fiber, and per-channel/per-task mutexes.
 
-## Parallelism: M:N is the design; M=1 is the first milestone
+Two races worth remembering, both found by hammering rather than reasoning:
 
-The design is **M:N in one process** — one runtime, M OS-thread schedulers, N fibers
-(`1:M:N`). Parallelism reaches multi-core WITHOUT two threads on one arena: work-stealing
-migrates a whole fiber (arena and all) to another OS thread, and single-owner-at-all-times
-holds (a fiber is in a run queue *or* running, never both), so arenas stay non-atomic. The
-shared big-value heap's `rc` becomes atomic under M>1 — but only there, and only for big,
-rarely-counted values (the size heuristic makes that free). Cross-thread sends route through
-a synchronised message queue, never a direct arena write.
+- **Admission must be idempotent.** A deadline firing and a channel delivery racing for the
+  same parked fiber would enqueue it twice and corrupt the intrusive queue. Every admission
+  path now claims an atomic `queued` bit; the loser's wake dissolves.
+- **The park/wake race is unlosable *because* of pinning.** Only the home seat resumes a
+  fiber, and only after the park's switch completes — so publish-then-unlock-then-park is
+  safe.
 
-**The build reaches M:N via M=1 first**, and that is a milestone, not a downgrade. A single
-scheduler is *deterministic*, which is the only way this codebase validates the novel parts
-(the swap, the arena, crash-isolation, channels) — the oracle and the models need
-reproducibility. So the mechanics are proven at M=1, then M>1 is turned on as an **additive**
-slice: the run queue becomes a concurrent work-stealing deque, fibers migrate, the shared
-heap's `rc` switches to atomic, and same-thread sends become cross-thread queues. The fiber,
-the arena, the IO engine, and the channel *semantics* do not change. So every slice is built
-**M:N-ready even while running M=1** — the run queue behind an interface, `rc` ops always
-through `retain`/`release` (never open-coded `rc++`), sends through a hand-off abstraction —
-so flipping M>1 rearchitects nothing.
+## IO: a completion engine, with a readiness fallback
 
-Separately, **send-multiprocess** is its own capability, not the parallelism mechanism: OS
-processes, hardware-isolated fault domains, over the `std::process` pipes; sends serialise.
-`fork` vs spawn-and-serialise is its own unmade ruling. Isolated arenas were chosen so both
-M:N and multiprocess stay addable without redoing the memory model.
+Two seams, and everything above them is engine-agnostic: the **operation hooks**
+(`neon_fiber_blocking_read`/`_writev`, armed only inside a runtime) and the **pump's idle
+wait**.
 
-## The swap gadget
+- **io_uring** (`src/fiber_uring.c`) — raw, no liburing: two syscalls and three `mmap`s
+  against `<linux/io_uring.h>`. One ring per seat (single-issuer, hence lock-free). READ and
+  WRITEV are submitted as operations, so **regular files need no worker threads at all**;
+  POLL_ADD serves readiness (pidfd waits, the doorbell); the idle wait is one
+  `io_uring_enter(GETEVENTS)` carrying a TIMEOUT SQE for the nearest sleep deadline — the
+  wait, the deadline, and the reap in a single call. The ring-index barriers are written as
+  explicit `__atomic` orderings (release on SQ tail, acquire on CQ tail, release on CQ head)
+  so the code is correct on aarch64, not accidentally-correct on x86's TSO.
+- **epoll + an offload pool** — the fallback. Readiness for descriptors; regular files, which
+  epoll cannot wait on, go to a two-thread pool whose workers run *raw syscalls only* (never a
+  neon object, a refcount, or an arena — that is what makes a thread pool sound here) and
+  ring an eventfd the scheduler watches.
 
-Context switch is a small per-ABI assembly routine (save callee-saved regs, exchange `rsp`,
-restore). **Vendor `boost.context`'s `fcontext`** rather than hand-roll the per-ABI stubs
-(x86-64 SysV, x86-64 Windows with its TIB fields, aarch64) — the swap is not where the
-correctness budget should go. **Sanitizer fiber annotations are mandatory**:
-`__sanitizer_start_switch_fiber` / `__sanitizer_finish_switch_fiber` bracket every switch, or
-ASan-over-corpus floods with false positives — and ASan-over-corpus is how this codebase
-proves memory.
+Selected by feature detection at seat open: `ENOSYS` (old kernel), `EPERM` (seccomp), or
+`NEON_IO=epoll` picks the fallback. **Both engines run the entire test suite**, because a
+backend nobody exercises is a backend that rots.
+
+Transparently fiber-aware today: `time::sleep` (parks on a deadline list), the `fs`/`io`
+read and write paths (hooked at the syscall level, so everything above them came along for
+free), and `process::wait` (parks on a pidfd).
 
 ## Preemption
 
-Cooperative, plus **compiler-inserted safepoints at loop back-edges and function entry** —
-a one-instruction poll (`if (self->preempt) yield()`) so a CPU-bound fiber yields within a
-bounded instruction count, and the *same* safepoint checks the cancellation token. Neon's
-structural advantage over signal-based preemption. A long-running *native* has no safepoints
-(it is C), so the invariant for native authors is: **a native must be short, chunk-and-yield,
-or offload to the pool** — the sibling of "all blocking goes through the engine."
+Cooperative scheduling starves on a fiber that never yields, so codegen emits
+`neon_fiber_safepoint()` at every **loop back-edge** — in fiber programs only. The safepoint
+is a flag check that yields when a **per-seat** CPU-time timer (`CLOCK_THREAD_CPUTIME_ID` +
+`SIGEV_THREAD_ID`, 10 ms) has ticked. Per-seat matters under M:N: a process-wide timer
+delivers to one arbitrary thread, so only that thread's hot loops would ever be preempted.
 
-## Build order (the `fibers` branch)
+This is the JVM's design (safepoint polls at back-edges, flag armed externally). Back-edge
+placement specifically avoids Go's pre-1.14 hole, where a tight loop containing no calls was
+unpreemptible. Measured cost: **~1%** on a loop whose body is a single `bxor`, unmeasurable on
+anything realistic, and zero in non-fiber programs.
 
-Each slice lands green, tested, before the next — the repo's discipline applied to a big
-feature. All six of the runtime slices below are BUILT and C-tested under ASan/UBSan/LSan on
-x86-64 Linux; what remains is codegen (the language surface) and the production breadth noted
-per slice.
+## Memory in the real world
 
-1. **Arena allocator** — bump + size-class free lists + drop, standalone. C-tested + a CBMC
-   model. **Done.**
-2. **Swap gadget** — our own ~15-instruction x86-64 SysV `neon_ctx_swap` (NOT vendored
-   boost.context — a cooperative switch is small and worth owning), a two-fiber cooperative
-   swap, mandatory ASan fiber annotations. **Done.** aarch64/Win64 stubs are the port.
-3. **Scheduler + `fiber::runtime` + current arena** — run queue behind an interface, lazy
-   entry, `neon_alloc` routes to the current fiber's arena. The arena pointer is a
-   `_Thread_local` with the `initial-exec` TLS model (measured: the routing costs ~1% on
-   binary-trees this way, ~6% with the default general-dynamic model). **Done.** The
-   register-pinned arena the design pictured is a later perf swap under this same seam.
-4. **Trap isolation** — arena walkability (`neon_arena_walk` + a freed-slot flag + per-chunk
-   high-water; C-tested + a CBMC model) and the teardown walk; crash isolation via the swap
-   gadget, NOT setjmp/longjmp (a crashing fiber switches back to the scheduler like a
-   finishing one — a cross-stack longjmp trips `__longjmp_chk` and side-steps the ASan
-   annotations); guard-page mmap'd stacks + a `sigaltstack` SIGSEGV handler that recovers via
-   a `ucontext` rewrite through `sigreturn`; deadlock-panic. **Done.** The walk's per-object
-   *release-outgoing* is codegen's to emit (the primitive is ready); overflow isolation and
-   deadlock are validated by standalone programs in `runtime/tests/manual/`.
-5. **Channels + `Task[T]`** — scheduler park/wake; unbounded buffered channels (send/recv/
-   close, waiter on the blocked fiber's own stack); `Task[T]`/await. **Done.** copy-on-send
-   (small values into the receiver's arena) and the size-heuristic shared heap for big values
-   are codegen + a shared-heap primitive — deferred until there is codegen to emit the copy.
-6. **IO seam + safepoints** — the scheduler seam a completion engine plugs into, proven end to
-   end over epoll (a fiber parks on a descriptor; the pump waits in the kernel only when idle
-   and wakes it on readiness); safepoint preemption (the flag + `neon_fiber_safepoint`, the
-   runtime half of compiler-inserted back-edge checks). **Done.** The production proactor
-   (io_uring, the file-offload pool, IOCP/kqueue) and the timer that drives preemption swap in
-   behind `neon_fiber_io_wait`/`neon_fiber_safepoint` without changing anything above them.
+Per parked fiber: **stack ~4–8 KB** (a guard-paged, demand-paged reservation) + **arena
+~1–4 KB** (plateaued at working set) + control ~200 B ≈ **6–9 KB**, stack-dominated. A plain
+program pays **zero**. 1K–100K fibers is 6 MB–900 MB; 1M fibers is ~6–9 GB — Go-class, behind
+Erlang's ~2.7 KB. The density lever is the **stack, not the arena**.
 
-**The language surface: BUILT** (2026-08-10). `use std::fiber` / `std::channel` / `std::task`
-give `fiber::runtime/spawn/spawn_with/yield`, `Channel[T]` with `new/send/recv/close`, and
-`Task[T]` with `spawn/await` — all `@native` + `@runtime` stdlib declarations over the
-runtime above, with codegen assistance only where a generic value crosses the ABI:
+---
 
-- **The teardown walk is LIVE** (2026-08-10): a dying fiber's arena is walked and every
-  still-live object's drop forced — resources run their cleanups even on a crash, outgoing
-  references release exactly once — under a teardown mode that no-ops internal releases
-  (they vaporize in the bulk-free). The drop pointer IS the type knowledge; no registry.
-  A handle (channel, task) is TWO objects for this reason: a shared body plus a per-holder
-  arena-resident ref owning one reference to it, so a handle held only in a crashed fiber's
-  LOCALS is still found by the walk — the leak that shape used to cause is structurally
-  impossible rather than tracked. It also confines atomic counting to the body: a ref is an
-  ordinary arena object with a plain, thread-local count.
-- **Copy-on-send is the witness's `copy` operation** — deep-relocate one value, allocating
-  through the ambient routing, which the send path points at the shared slab. Emitted per
-  repr: NULL for scalars, runtime helpers for str/list/map/any/channel-handle (retain —
-  a channel in a message is the same channel on both sides), generated walkers for
-  composites and boxed records, and a TRAPPING copy for closures and resources — the
-  sendability rule enforced at the exact moment it would otherwise corrupt.
-- **Capturing spawn WORKS** (2026-08-10): a lambda spawned from inside a fiber may capture;
-  its environment deep-copies to the shared heap through the env-copy table (drop pointer →
-  per-shape copy, emitted into every fiber program, weak-defaulted in the runtime). Each
-  capture follows the sendability rules. `fiber::spawn_with(body, arg)` remains for the
-  named-worker style. Task handles are sendable (shared identities, like channels), and a
-  crashed task body fails its awaiter — the await traps, propagating along await edges.
-- **Blocking IO is fiber-transparent** (2026-08-10): `time::sleep` parks the fiber on a
-  deadline list; file reads/writes ride a pthread offload pool (workers run raw syscalls
-  only; completions ring an eventfd in the scheduler's epoll); `process::wait` parks on a
-  pidfd. Channels gained `bounded(n)` (backpressure — sends park when full), `is_closed`,
-  and `recv_timeout` (on a park-with-deadline primitive where the waker and timer race and
-  the loser is cancelled).
-- **Preemption is live end to end**: the 10ms ITIMER_VIRTUAL sets the flag, codegen emits
-  `neon_fiber_safepoint()` at every loop back-edge — in fiber programs only; a non-fiber
-  program's C is byte-identical, so benchmarks pay nothing.
+## What is not built
 
-Six corpus programs pin it under the sanitized runtime: spawn/yield FIFO, round-robin
-interleave, a parked receiver woken by a send with producer-built strings outliving their
-fiber, records with str+list+map fields and a reply channel travelling inside the spawn
-argument, task await both parked and already-done, and a never-yielding spinner preempted
-by the timer.
+Everything below is deliberate scope, not oversight. Each is independent of the others.
+
+### Semantics and API
+
+- **Move-only Resources.** The design called for a Resource to *move* across a send, gated by
+  a runtime `rc == 1` check. What exists instead is stricter and simpler: a value containing a
+  Resource (or a closure) **traps** at the send with a message naming the limit. Moving is the
+  feature; the trap is the honest placeholder.
+- **`select`.** Waiting on several channels at once. Needs an API decision first (a
+  `select`-expression versus a builder), and the runtime side is a multi-channel waiter
+  registration — the waiter lists already support the shape.
+- **Cancellation.** A fiber carrying a token it checks, returning normally so its own cleanups
+  run through the ordinary path. The safepoint machinery is exactly the place to poll one.
+  Hard `kill(fiber)` is a separate, harder question and stays deferred.
+- **Structured concurrency / supervision.** A `scope` that awaits its children and surfaces
+  the first failure. `Task` failure already propagates along await edges, which is the
+  primitive it would be built from.
+- **Timers beyond `sleep`.** No interval/ticker, no timeout combinator over an arbitrary
+  operation (`recv_timeout` is the one timed op).
+- **Fiber-local storage.** Not designed. Arenas make it cheap if it is ever wanted.
+- **One awaiter per task.** A second `await` traps. Multi-await would need the result to be
+  copied rather than moved out.
+
+### Performance, all profile-gated
+
+None of these has a benchmark asking for it; that is the bar for starting one.
+
+- **Size-heuristic shared heap.** Big values still deep-copy on send. The design's plan —
+  allocate above a threshold on a shared refcounted heap from birth, so a send is a refcount
+  bump — is unimplemented, and the threshold that avoids the copy is the same threshold that
+  makes atomic `rc` affordable.
+- **Sharing-preserving copy.** A DAG sent through a channel is duplicated. Erlang's opt-in
+  `copy_shared` is the model.
+- **Register-pinned arena.** Measured unnecessary (see **The heap**).
+- **Work-stealing.** Fibers are pinned, so a seat with an empty queue idles while another has
+  a backlog. Stealing would move a fiber's arena to another thread, which the isolation
+  argument currently forbids — it needs a real answer (steal-on-park, or arena hand-off), not
+  just a deque.
+- **Growable stacks.** The path to Erlang-class fiber density.
+- **Ring tuning.** 256 SQEs per seat, two offload workers, 10 ms quantum: all fixed constants
+  that no measurement has yet challenged.
+
+### Platform
+
+- **aarch64 and Win64 swap gadgets.** ~15 instructions each; fibers are x86-64 SysV only, and
+  on every other target the sources are not compiled and `std::sys::has_fibers()` answers
+  false.
+- **IOCP (Windows) and kqueue (BSD/macOS)** backends behind the same two seams.
+- **Networking.** There is no `std::net`, so the sockets a completion engine most wants to
+  serve do not exist yet. This is the largest single gap between "fibers work" and "fibers are
+  useful for the thing fibers are for".
+
+### Verification
+
+- **No CBMC model of the scheduler.** The arena has two; the concurrency does not, and the
+  mesh's invariants (idempotent admission, the park/wake race, deadlock detection) are the
+  kind of thing a model checker is good at.
+- **No fiber benchmark.** `bench/` has no concurrency program, so there is no standing number
+  for spawn cost, channel throughput, or mesh scaling — only correctness tests.
+
+---
+
+## How it was built
+
+Slices, each landing green before the next, on the `fibers` branch:
+
+1. **Arena allocator** — bump + size-class free lists + drop. C-tested, plus a CBMC model.
+2. **Swap gadget** — our own x86-64 SysV switch, ASan fiber annotations mandatory.
+3. **Scheduler** — run queue, lazy `fiber::runtime`, `neon_alloc` routed to the current arena.
+4. **Trap isolation** — walkability + the teardown walk; crash isolation via the gadget;
+   guard-page stacks and overflow recovery.
+5. **Channels + `Task[T]`** — park/wake, buffered and rendezvous paths.
+6. **IO seam + safepoints.**
+
+Then the language surface (`std::fiber`, `std::channel`, `std::task`), the completeness set
+(teardown wired, capturing spawn, sendable tasks and failure propagation, fiber-aware
+`sleep`, bounded channels, the offload pool), M:N, io_uring, and the handle split.
+
+The recurring lesson, paid for three times: **`neon_retain`/`neon_release` admit no
+additions.** An inlined slab body cost 26%, a teardown-mode branch 30%, an atomic arm 44%,
+and even an out-of-line cold call reachable from the guard 33%. Every design decision that
+looks indirect — the seal, the receiver-arena copy, handles as two objects — exists because
+that pair had to stay exactly as it was. binary-trees is 0.30 s, unchanged from before fibers
+existed.

@@ -95,7 +95,7 @@ static size_t neon_fiber_page(void) {
 // struct neon_fiber lives in fiber_internal.h, shared with the scheduler.
 
 // "Who is running" and "who we just left" are per-OS-thread — the design's current-fiber,
-// which slice 3 pins to a register. `t_prev` lets a fresh fiber's bootstrap capture the
+// reached through an initial-exec TLS load. `t_prev` lets a fresh fiber's bootstrap capture the
 // resumer's stack region for ASan (see below).
 static _Thread_local neon_fiber* t_current;
 static _Thread_local neon_fiber* t_prev;

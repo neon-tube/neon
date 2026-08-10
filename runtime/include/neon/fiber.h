@@ -6,17 +6,16 @@
 // per-ABI assembly), so fibers are uncolored: a fiber that blocks looks like an ordinary
 // call, no `async`.
 //
-// This is slice 2: the raw swap primitive and nothing above it. A fiber owns a stack and a
-// suspended stack pointer; `neon_fiber_resume` runs one until it next yields or finishes,
-// `neon_fiber_yield` hands control back to whoever resumed it. No scheduler, no run queue,
-// no per-fiber arena yet — slices 3 and after. What this slice pins is that control transfer
-// is correct, and correct *under AddressSanitizer*, whose fake-stack bookkeeping silently
-// corrupts across a raw stack swap unless every switch is bracketed with the fiber
-// annotations (`__sanitizer_start_switch_fiber` / `_finish_switch_fiber`).
+// This header is layered: the raw swap primitive first (a fiber owns a stack, an arena, and
+// a suspended stack pointer; `neon_fiber_resume` runs one until it yields or finishes), then
+// the scheduler, then the `std::fiber` native surface. Every switch is bracketed with
+// AddressSanitizer's fiber annotations (`__sanitizer_start_switch_fiber` /
+// `_finish_switch_fiber`), whose absence silently corrupts ASan's fake-stack bookkeeping
+// across a raw stack swap.
 //
-// M:N-ready by construction: "who is running now" is a per-OS-thread `_Thread_local` (slice
-// 3 pins it to a register), and a switch names both sides explicitly, so nothing assumes a
-// single scheduler thread.
+// M:N by construction: "who is running now" is per-OS-thread, a switch names both sides
+// explicitly, and fibers are PINNED to a home seat — so nothing here assumes one scheduler
+// thread, and a fiber's arena is only ever touched by its own.
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -26,8 +25,8 @@
 typedef struct neon_fiber neon_fiber;
 
 // The body a fiber runs. When it returns, the fiber is finished and control goes to the
-// fiber that most recently resumed it (its resume-link). Results travel through channels
-// (slice 5), not a return value.
+// fiber that most recently resumed it (its resume-link). Results travel through channels or
+// a `Task`, not a return value.
 typedef void (*neon_fiber_fn)(void* arg);
 
 // Create a suspended fiber with its own stack (`stack_size` rounded up to a floor and
@@ -52,17 +51,15 @@ void neon_fiber_yield(void);
 // Whether `f` has run its body to completion. A finished fiber must not be resumed.
 bool neon_fiber_finished(const neon_fiber* f);
 
-// Free a finished (or never-resumed) fiber, its arena, and its stack. The arena is
-// bulk-dropped: anything the body allocated and left live is reclaimed in one pass. That is
-// complete for objects with no outgoing references; releasing outgoing references (resource
-// cleanups, shared-value decrements) before the bulk-free is the teardown walk (slice 4).
+// Free a finished (or never-resumed) fiber, its arena, and its stack. The arena is WALKED
+// first — every still-live object's drop forced, so resource cleanups run and outgoing
+// references release exactly once — and then bulk-freed.
 void neon_fiber_free(neon_fiber* f);
 
 // ---- the scheduler (src/fiber_sched.c) ----
 //
-// A cooperative, single-thread run queue over the primitive above — the M=1 first milestone
-// of the design's M:N target (the queue is behind this interface so it can become a
-// work-stealing deque later without the callers changing).
+// One cooperative run queue per scheduler seat, over the primitive above. `runtime` opens a
+// single seat; `runtime_threads` opens N and pins fibers across them.
 
 // Run `body(arg)` as the first fiber on a fresh scheduler, pumping its run queue until every
 // fiber — the first and everything it transitively spawns — has finished, then tear the
@@ -84,7 +81,8 @@ void neon_fiber_runtime_threads(int64_t threads, neon_fiber_fn body, void* arg);
 neon_fiber* neon_fiber_spawn(neon_fiber_fn fn, void* arg);
 
 // From within a running fiber: yield cooperatively. The scheduler runs the other ready
-// fibers, then this one again. The one safepoint this slice has; preemption is slice 6.
+// fibers, then this one again. The explicit form; codegen also emits an implicit safepoint
+// at every loop back-edge, which the preemption timer drives.
 void neon_fiber_sched_yield(void);
 
 // Park the current fiber: it leaves the run queue until neon_fiber_wake re-admits it, and the
@@ -112,9 +110,8 @@ void neon_fiber_wake(neon_fiber* f);
 //
 // What the stdlib's `@native` declarations bind to: a Neon `() -> ()` closure arrives as an
 // owned 16-byte `neon_closure` by value, is called on the new fiber's stack, and its
-// environment released after. `fiber::spawn` refuses a closure whose environment lives in a
-// fiber's arena (capturing lambdas built inside a fiber) until copy-on-send exists; named
-// functions and capture-free lambdas have a NULL environment and always work.
+// environment released after. A CAPTURING closure crosses too — an arena-resident
+// environment is deep-copied to the shared heap through the env-copy table below.
 
 // The env-copy table: per closure-environment shape, the shape's DROP function (the
 // runtime's only handle on a closure's type at spawn time) mapped to a deep copy of its

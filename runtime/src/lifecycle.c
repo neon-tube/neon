@@ -232,8 +232,8 @@ NEON_NOINLINE void neon_free(void* p) {
     neon_header* h = (neon_header*)p;
     // An arena block goes back to the arena it came from. Under isolation that arena is the
     // current one: a fiber only ever frees its own objects, and its objects live in its own
-    // (current) arena, so `neon_current_arena` is the owner. Objects that outlive their fiber
-    // or cross to another (shared/big values) are a different, flagged path — slice 5.
+    // (current) arena, so `neon_current_arena` is the owner. A value that crosses to another
+    // fiber was COPIED there, and the copy is that fiber's own arena object.
     if (h->flags & NEON_ALLOC_ARENA) {
         // In teardown the walk runs on the scheduler's context (current arena NULL) but
         // forced drops still free their own objects — route those to the dying arena.

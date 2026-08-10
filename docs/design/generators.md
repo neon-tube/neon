@@ -1,6 +1,15 @@
 # Design: coroutines — one machine, two surfaces (generators & async)
 
-**Status:** design sketch, nothing implemented. No `gen`/`yield`/`async`/`await` token exists
+**Status: half of this is superseded.** The ASYNC half — `async fn`, a scheduler, coloured
+functions — was answered instead by **fibers** (`docs/design/fibers.md`, built): stackful
+green threads, so nothing colours and `fs::read` is the same function on a fiber and on
+`main`. Do not build the async surface described here without re-arguing it against that.
+
+The GENERATOR half — `gen fn` / `yield` / lazy iteration — is untouched by fibers and remains
+an open proposal: a generator is a *value* you pull from, not a scheduled task, and a
+stackless state machine is the right shape for it. Read the rest with that split in mind.
+
+**Original status:** design sketch, nothing implemented. No `gen`/`yield`/`async`/`await` token exists
 in `compiler/src/` today. This is a proposal to be argued with. It grew out of the stdlib
 JSON work (a DOM parser wants a streaming tokenizer, a tokenizer wants coroutines) and the
 observation that coroutines fall almost entirely out of machinery neon already has for

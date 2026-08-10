@@ -8,13 +8,12 @@
 // immutable there are no cycles, so this refcounting is complete — there is no tracing
 // backstop and no compaction, and pointers are stable.
 //
-// This is slice 1: a standalone, explicitly-passed arena. In the fiber runtime the current
-// fiber's arena is register-pinned and `neon_alloc`/`neon_free` route to it implicitly
-// (isolation guarantees a fiber only ever frees its own objects, which are in its own
-// arena). The teardown *walk* that releases a dying arena's OUTGOING references (Resource
-// cleanups, shared-value decrements) before the bulk-free is slice 4; `neon_arena_drop`
-// here bulk-frees the memory, which is exactly right for objects with no outgoing
-// references (the case slice 1 tests).
+// The arena is explicitly passed here; in the running system `neon_alloc`/`neon_free` route
+// to the CURRENT fiber's arena implicitly (an initial-exec `_Thread_local`), which isolation
+// makes sound — a fiber only ever frees its own objects, and its objects are in its own
+// arena. A dying fiber's arena is WALKED before it is dropped (`neon_arena_walk`, and
+// `neon_fiber_free`'s two-pass teardown), so cleanups run and outgoing references are
+// released; `neon_arena_drop` is the bulk-free that follows.
 
 #include <stddef.h>
 #include <stdint.h>

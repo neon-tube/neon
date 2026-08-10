@@ -1,14 +1,14 @@
 #ifndef NEON_CHANNEL_H
 #define NEON_CHANNEL_H
 
-// Channels and Task/await — fibers talking to fibers (docs/design/fibers.md, slice 5), built
-// on the scheduler's park/wake (neon/fiber.h). This is the C mechanism: payloads are `void*`.
-// HOW a language value crosses a channel — small values copied into the receiver's arena,
-// big values shared on a refcounted heap, Resources moved — is codegen's job (the send site
-// emits the copy), because only codegen knows the value's type and size. In particular a
-// value that points into the SENDER's arena must be copied out before it is sent, and a
-// Task's result must not point into the task's arena, which is dropped when the task is
-// reaped. The tests here use scalars cast to `void*`, which live in no arena.
+// Channels and Task/await — fibers talking to fibers (docs/design/fibers.md), built on the
+// scheduler's park/wake (neon/fiber.h).
+//
+// Two layers live here. The `neon_chan` pair below is a `void*` mechanism the C tests drive.
+// The LANGUAGE channel (`neon_channel` + `neon_channel_ref`) carries VALUES: witness-sized
+// slots, deep-copied on send — into a parked receiver's arena directly, or staged on the
+// slab and restaged by `recv`. A handle is two objects, a shared body and a per-holder
+// arena-resident ref; see the long comment in src/fiber_chan.c for why.
 
 #include <stdbool.h>
 #include <stddef.h>
