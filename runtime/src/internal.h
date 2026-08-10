@@ -14,6 +14,8 @@
 #include "neon/core.h"
 #include "neon/lifecycle.h"
 
+#include "platform.h" // neon_ssize/neon_iovec, for the blocking-IO hook signatures
+
 // The current fiber's arena, or NULL on the root / non-fiber context. `neon_alloc` and
 // `neon_free` route through it (see src/lifecycle.c and docs/design/fibers.md); the fiber
 // scheduler sets it on every context switch. Defined in lifecycle.c — which is always
@@ -49,6 +51,18 @@ extern _Thread_local NEON_TLS_IE neon_arena* neon_teardown_arena;
 // back to the plain sleep when called on the root context (a resource cleanup, say).
 extern _Thread_local void (*neon_fiber_sleep_hook)(int64_t millis);
 
+// The blocking-file-IO bridge (same pattern): while a fiber runtime is active these route a
+// regular-file read / writev batch through the offload pool — the calling FIBER parks, a
+// worker thread runs the raw syscall — and NULL means the plain blocking call, everywhere
+// else. `neon_ssize`/`neon_iovec` come from src/platform.h, included just above.
+extern _Thread_local neon_ssize (*neon_fiber_blocking_read)(int fd, void* buf, size_t n);
+extern _Thread_local neon_ssize (*neon_fiber_blocking_writev)(int fd, const neon_iovec* iov,
+                                                              int n);
+
+// Park the calling fiber until `pid` exits, without blocking the thread — pidfd + epoll on
+// Linux; NULL (a plain blocking waitpid) everywhere else and off-runtime.
+extern _Thread_local void (*neon_fiber_pidwait_hook)(int64_t pid);
+
 // The trap→fiber bridge. While a fiber runs, the scheduler arms this per-thread hook; a trap
 // (bounds, arithmetic, uncaught error) then calls it INSTEAD of ending the process — the hook
 // switches control back to the scheduler, killing just that fiber (docs/design/fibers.md's
@@ -68,6 +82,14 @@ static inline void neon_str_drop(void* p) {
 
 // Allocate a fresh heap string holding `len` bytes copied from `src`.
 static inline neon_str neon_str_new(const char* src, size_t len) {
+    // A length with the top bit set is not a string, it is a negative number that has been
+    // through a size_t — a corrupted or miscomputed slice bound. Trapping here names the
+    // bug at its cheapest observable point, and as a bonus hands the optimizer the bound
+    // its overflow analysis wants (this branch is what silences the -Wstringop-overflow
+    // false positives that appeared when the fiber IO hooks made read lengths opaque).
+    if (len > (SIZE_MAX >> 1)) {
+        neon_trap("string length overflow");
+    }
     // Explicit cast: `void*` converts implicitly in C but not in C++, and this header is
     // included from the C++ unit tests.
     neon_header* h = (neon_header*)neon_alloc(len, neon_str_drop);

@@ -16,6 +16,8 @@
 
 #include "libneon_rt.h"
 
+#include "internal.h"
+
 #include "platform.h"
 
 #include <stdbool.h>
@@ -315,7 +317,15 @@ static int64_t status_code(int status) {
     return 128; // stopped/continued cannot reach a plain waitpid
 }
 
+_Thread_local void (*neon_fiber_pidwait_hook)(int64_t pid) = NULL;
+
 int64_t neon_proc_wait(int64_t pid) {
+    // Inside a fiber runtime the hook parks THIS FIBER until the child exits (pidfd +
+    // epoll), so the waitpid below returns at once; everywhere else it blocks as it
+    // always did. The reap itself stays here either way — the hook only waits.
+    if (neon_fiber_pidwait_hook != NULL) {
+        neon_fiber_pidwait_hook(pid);
+    }
     int status = 0;
     if (waitpid((pid_t)pid, &status, 0) < 0) {
         return -(int64_t)errno; // ECHILD: already waited, or never ours

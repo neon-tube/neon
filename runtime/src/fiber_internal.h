@@ -45,6 +45,22 @@ struct neon_fiber {
     void* on_reap_arg;
 };
 
+// ---- the scheduler/offload seam (fiber_sched.c <-> fiber_offload.c) ----
+
+// Register `fd` persistently in the scheduler's epoll with `tag` as its cookie; the pump
+// recognises `&neon_offload_tag` and drains completions instead of waking a fiber.
+void neon_sched_epoll_add_tag(int fd, void* tag);
+
+// Count a fiber parked on out-of-scheduler work (an offloaded syscall) as an IO waiter, so
+// an idle queue means "wait in the kernel", not deadlock.
+void neon_sched_io_waiter_begin(void);
+void neon_sched_io_waiter_end(void);
+
+extern char neon_offload_tag;
+void neon_offload_drain(void);
+void neon_offload_arm(void);
+void neon_offload_disarm(void);
+
 // Called via the trap→fiber bridge (neon_fiber_trap_handler) when the running fiber traps:
 // mark it crashed and switch back to its resume-link, abandoning this stack. Reuses the
 // ASan-annotated context swap the normal exit uses — no setjmp/longjmp. NORETURN.

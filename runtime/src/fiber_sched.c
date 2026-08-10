@@ -162,6 +162,26 @@ bool neon_fiber_park_deadline(int64_t millis) {
     return false;
 }
 
+#if defined(NEON_FIBER_IO)
+#include <sys/syscall.h>
+// Park until `pid` exits, via pidfd + epoll; the caller's waitpid then returns at once. On
+// the root context, or if pidfd_open is unavailable, do nothing — the caller's plain
+// blocking waitpid stands.
+static void neon_sched_pidwait_hook(int64_t pid) {
+    if (neon_fiber_current()->is_root) {
+        return;
+    }
+    int pidfd = (int)syscall(SYS_pidfd_open, (pid_t)pid, 0);
+    if (pidfd < 0) {
+        return; // old kernel: fall back to the blocking wait
+    }
+    neon_fiber_io_wait(pidfd, EPOLLIN); // readable exactly when the process has exited
+    close(pidfd);
+}
+#else
+static void neon_sched_pidwait_hook(int64_t pid) { (void)pid; }
+#endif
+
 // The time::sleep hook (internal.h): fiber context parks, the root context — a resource
 // cleanup running on the scheduler, say — keeps the plain blocking sleep.
 static void neon_sched_sleep_hook(int64_t millis) {
@@ -173,6 +193,29 @@ static void neon_sched_sleep_hook(int64_t millis) {
 }
 
 #if defined(NEON_FIBER_IO)
+static void neon_sched_ensure_epfd(void) {
+    if (t_sched.epfd < 0) {
+        t_sched.epfd = epoll_create1(EPOLL_CLOEXEC);
+        if (t_sched.epfd < 0) {
+            neon_trap("epoll_create1 failed");
+        }
+    }
+}
+
+// The offload pool's doorbell: a persistent registration whose cookie the pump recognises.
+void neon_sched_epoll_add_tag(int fd, void* tag) {
+    neon_sched_ensure_epfd();
+    struct epoll_event ev;
+    ev.events = EPOLLIN;
+    ev.data.ptr = tag;
+    if (epoll_ctl(t_sched.epfd, EPOLL_CTL_ADD, fd, &ev) != 0) {
+        neon_trap("epoll_ctl(ADD, offload doorbell) failed");
+    }
+}
+
+void neon_sched_io_waiter_begin(void) { t_sched.io_waiters++; }
+void neon_sched_io_waiter_end(void) { t_sched.io_waiters--; }
+
 // Block in the kernel until at least one awaited descriptor is ready, then wake every fiber
 // waiting on a ready one. Called only when nothing is runnable, so waiting here cannot starve
 // a ready fiber. Registrations are EPOLLONESHOT with the waiting fiber in `data.ptr`.
@@ -186,6 +229,10 @@ static void neon_sched_poll_io(int timeout_ms) {
         neon_trap("epoll_wait failed");
     }
     for (int i = 0; i < n; i++) {
+        if (evs[i].data.ptr == &neon_offload_tag) {
+            neon_offload_drain(); // completed offloaded syscalls: wake their fibers
+            continue;
+        }
         neon_fiber_wake((neon_fiber*)evs[i].data.ptr); // re-admit; the fiber finishes its wait
     }
 }
@@ -203,6 +250,8 @@ void neon_fiber_runtime(neon_fiber_fn body, void* arg) {
     t_sched.epfd = -1; // created lazily on the first IO wait
 #endif
     neon_fiber_sleep_hook = neon_sched_sleep_hook; // time::sleep parks fibers from here on
+    neon_offload_arm(); // file reads/writes park fibers via the pool from here on
+    neon_fiber_pidwait_hook = neon_sched_pidwait_hook; // process waits park via pidfd
 
     neon_sched_enqueue(neon_fiber_new(body, arg, 0));
     t_sched.live++;
@@ -225,12 +274,7 @@ void neon_fiber_runtime(neon_fiber_fn body, void* arg) {
             }
 #if defined(NEON_FIBER_IO)
             if (t_sched.io_waiters > 0 || timeout >= 0) {
-                if (t_sched.epfd < 0) {
-                    t_sched.epfd = epoll_create1(EPOLL_CLOEXEC);
-                    if (t_sched.epfd < 0) {
-                        neon_trap("epoll_create1 failed");
-                    }
-                }
+                neon_sched_ensure_epfd();
                 neon_sched_poll_io(timeout);
                 continue;
             }
@@ -264,6 +308,8 @@ void neon_fiber_runtime(neon_fiber_fn body, void* arg) {
 
     neon_fiber_timer_disarm();
     neon_fiber_sleep_hook = NULL;
+    neon_offload_disarm();
+    neon_fiber_pidwait_hook = NULL;
 
     // The queue emptied with fibers still live AND none parked on a descriptor: every one is
     // waiting on another that will never run. That is a deadlock, and silence would be a hang.

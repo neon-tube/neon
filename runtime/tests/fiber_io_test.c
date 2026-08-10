@@ -216,3 +216,48 @@ TEST(sleeps_overlap_rather_than_add) {
     EXPECT(took_ms >= 60);
     EXPECT(took_ms < 180);
 }
+
+// ---- the file-offload pool ----
+
+#if defined(__linux__)
+// neon_io_read_all through the armed offload hook: the READ ITSELF blocks (a pipe with
+// nothing in it yet), but it blocks a WORKER THREAD, not the scheduler — the sibling fiber
+// runs, writes, and closes while the reader is parked. Deterministic: the reader is queued
+// first and cannot complete until the sibling has run.
+static int off_pipe[2];
+static bool off_sibling_ran;
+static bool off_read_ok;
+
+static void off_reader(void* arg) {
+    (void)arg;
+    int64_t err = 0;
+    neon_str s = neon_io_read_all(off_pipe[0], &err); // offloaded; worker blocks on the pipe
+    off_read_ok = err == 0 && neon_str_len(&s) == 2 && neon_str_data(&s)[0] == 'h' &&
+                  off_sibling_ran;
+    neon_str_release(s);
+}
+static void off_writer(void* arg) {
+    (void)arg;
+    off_sibling_ran = true;
+    ssize_t w = write(off_pipe[1], "hi", 2);
+    (void)w;
+    close(off_pipe[1]); // EOF ends the read_all loop
+}
+static void off_parent(void* arg) {
+    (void)arg;
+    neon_fiber_spawn(off_reader, NULL);
+    neon_fiber_spawn(off_writer, NULL);
+}
+
+TEST(read_all_offloads_and_parks_the_fiber) {
+    if (pipe(off_pipe) != 0) {
+        EXPECT(false);
+        return;
+    }
+    off_sibling_ran = false;
+    off_read_ok = false;
+    neon_fiber_runtime(off_parent, NULL);
+    EXPECT(off_read_ok);
+    close(off_pipe[0]);
+}
+#endif

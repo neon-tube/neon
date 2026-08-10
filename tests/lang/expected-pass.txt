@@ -168,6 +168,7 @@ fibers/capturing_spawn.neon
 fibers/channel_pipeline.neon
 fibers/crash_cleanup.neon
 fibers/channel_records.neon
+fibers/fiber_process_io.neon
 fibers/fiber_sleep.neon
 fibers/interleave_and_capture.neon
 fibers/preemption.neon

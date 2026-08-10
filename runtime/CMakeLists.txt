@@ -34,7 +34,7 @@ set(NEON_RT_SOURCES
 # runtime builds without them. Win64 is a different ABI even on x86-64, hence NOT WIN32.
 if(NOT WIN32 AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
     list(APPEND NEON_RT_SOURCES
-        src/fiber.c src/fiber_sched.c src/fiber_chan.c src/fiber_lang.c
+        src/fiber.c src/fiber_sched.c src/fiber_chan.c src/fiber_lang.c src/fiber_offload.c
         src/fiber_swap_x86_64_sysv.S)
     set(NEON_RT_HAS_FIBERS ON)
 endif()
@@ -290,7 +290,10 @@ if(NEON_RT_TESTS)
     # `std::math` bottoms out in libm, a separate library on Linux. Not on Windows, where
     # the math functions are in the CRT and there is no `m` to find.
     if(NOT WIN32)
-        target_link_libraries(neon_rt_tests PRIVATE m)
+        # Threads for the file-offload pool's workers (folded into libc on modern glibc,
+        # still spelled out for older ones and for macOS).
+        find_package(Threads REQUIRED)
+        target_link_libraries(neon_rt_tests PRIVATE m Threads::Threads)
     endif()
 
     # Sanitizers on the whole test binary — the runtime sources and tinyunit compiled in with
