@@ -438,3 +438,4 @@ fibers/move_capture.neon
 fibers/resource_through_channel.neon
 fibers/task_returns_resource.neon
 fibers/dead_letter_cleanup.neon
+fibers/task_crash_releases_moved_resource.neon

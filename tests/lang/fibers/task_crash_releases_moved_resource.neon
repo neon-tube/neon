@@ -1,0 +1,27 @@
+// A task body that crashes while OWNING a moved-in resource. The env carrying the owning
+// ref is off-arena (shared heap), so the arena walk alone cannot find it — the fiber
+// parks its env for exactly this moment, and teardown releases it: cleanup runs, the fd
+// does not leak, and the rest of the program carries on. (The trap's own report goes to
+// stderr; stdout is the golden.)
+
+use std::fiber;
+use std::io;
+use std::resource;
+use std::task;
+
+fn main() {
+    fiber::runtime_on(1, () => {
+        let r = resource::new("crashy-fd", (n: str) => {
+            io::println("cleanup: #{n}");
+            null
+        });
+        task::spawn(move () => {
+            let xs = [1, 2, 3];
+            io::println("#{xs[99]}"); // bounds trap: kills the task fiber mid-body
+            try! resource::get(r)
+        });
+        fiber::yield();
+        io::println("main: still here");
+    });
+    io::println("done");
+}

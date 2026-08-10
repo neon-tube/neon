@@ -2678,21 +2678,20 @@ impl Lower<'_> {
         let ExprKind::Path(p) = &callee.kind else {
             return;
         };
-        let is_spawn = self.env.fn_named(&self.module, p).is_some_and(|sig| {
-            matches!(
-                sig.native.as_deref(),
-                Some(
-                    "neon_fiber_lang_spawn"
-                        | "neon_task_lang_spawn"
-                        | "neon_fiber_lang_runtime"
-                        | "neon_fiber_lang_runtime_threads"
-                )
-            )
+        // The lambda's ARGUMENT POSITION is per-native: `runtime_on(threads, body)` takes
+        // it second. Getting this wrong is silent (the check just never fires), which is
+        // how the runtime_threads case shipped broken the first time.
+        let lambda_at = self.env.fn_named(&self.module, p).and_then(|sig| {
+            match sig.native.as_deref() {
+                Some("neon_fiber_lang_spawn" | "neon_task_lang_spawn" | "neon_fiber_lang_runtime") => {
+                    Some(0)
+                }
+                Some("neon_fiber_lang_runtime_threads") => Some(1),
+                _ => None,
+            }
         });
-        if !is_spawn {
-            return;
-        }
-        let Some(arg0) = args.first() else { return };
+        let Some(idx) = lambda_at else { return };
+        let Some(arg0) = args.get(idx) else { return };
         if !matches!(&arg0.kind, ExprKind::Lambda { is_move: false, .. }) {
             return;
         }

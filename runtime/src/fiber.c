@@ -163,6 +163,12 @@ void neon_fiber_on_trap(void) {
     neon_fiber* self = t_current;
     self->crashed = true;
     self->finished = true;
+    // A trap can fire INSIDE a transfer bracket (a mid-copy trap at a send, a task
+    // return, a move-env copy). The bracket is thread-local state, like the current
+    // arena — and unlike the arena, nothing downstream overwrites it, so a stale flag
+    // would make the next fiber's first resource copy on this seat a phantom transfer.
+    // Clearing it here is the crash-path pair of neon_transfer_end.
+    neon_transfer_end();
     neon_fiber_switch(self, self->link, true);
     __builtin_unreachable();
 }

@@ -572,6 +572,13 @@ static void neon_task_lang_body(void* arg) {
     neon_closure body = cell->body;
     neon_task_shim shim = cell->shim;
     free(cell);
+    // Park the env for crash teardown, exactly as neon_fiber_run_closure does: a body
+    // that traps abandons this frame, the env is off-arena (shared heap), and a moved-in
+    // resource's owning ref would leak with it — an fd whose cleanup never runs.
+    neon_fiber* self_f = neon_fiber_current();
+    if (self_f != NULL) {
+        self_f->body_env = body.env;
+    }
     // The body computes its result IN THIS FIBER'S ARENA; it is then deep-copied to the
     // shared slot and the original released here, in this fiber's own context — exactly a
     // channel send with the task's slot as the destination. The temporary lives on THIS
@@ -579,6 +586,9 @@ static void neon_task_lang_body(void* arg) {
     // and a heap temporary would leak on exactly that path (LSan found the malloc'd one).
     char tmp[t->w->size];
     shim(body, tmp);
+    if (self_f != NULL) {
+        self_f->body_env = NULL; // normal exit: this frame does the release
+    }
     neon_release(body.env);
     // A task RETURN is a transfer edge: a resource in the result hands its baton to the
     // staged ref, which await's restage below hands on to the awaiter.
@@ -661,15 +671,25 @@ static void neon_task_lang_await_impl(neon_task_lang* t, void* out) {
         t->awaiter = neon_fiber_current();
         pthread_mutex_unlock(&t->mu);
         neon_fiber_park(); // woken by the body's completion — or by its crash
-    } else {
-        pthread_mutex_unlock(&t->mu);
+        pthread_mutex_lock(&t->mu);
     }
-    if (t->failed) {
+    // failed/taken are decided UNDER THE LOCK: task handles cross fibers, so two awaiters
+    // on different seats can race here, and an unlocked taken-check let both restage —
+    // and both release the staged slot, a double free. The winner claims `taken` inside
+    // the lock and restages after unlocking (a deep copy can trap, and a trap must not
+    // abandon the mutex); the loser traps.
+    bool failed = t->failed;
+    bool lost = !failed && t->taken;
+    if (!failed && !lost) {
+        t->taken = true; // claimed: the staged slot is exclusively ours now
+    }
+    pthread_mutex_unlock(&t->mu);
+    if (failed) {
         // Propagate: the awaited work died, so the await dies too — in a fiber that is a
         // clean kill (crash isolation), and failures travel along await edges.
         neon_trap("task::await: the awaited task crashed");
     }
-    if (t->taken) {
+    if (lost) {
         neon_trap("task::await: a task's result can be awaited once");
     }
     // RESTAGE, exactly as a channel recv does: deep-copy the staged result into the
@@ -686,9 +706,8 @@ static void neon_task_lang_await_impl(neon_task_lang* t, void* out) {
     }
     neon_transfer_end();
     if (t->w->release) {
-        t->w->release((void*)(t + 1));
+        t->w->release((void*)(t + 1)); // the staged slot is dead bytes from here
     }
-    t->taken = true; // the staged slot is dead bytes now; drop must not release it again
 }
 
 

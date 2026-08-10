@@ -18,10 +18,11 @@ void neon_transfer_end(void) {
     t_transfer = false;
 }
 
-// The owner slot for the root (off-fiber) context. NULL must mean exactly one thing —
-// UNOWNED / in flight — or a root-context alias of an in-flight resource would pass the
-// gate below (fiber_current() is NULL on the root, and NULL == NULL). The root is an
-// execution context like any fiber; it gets a sentinel identity instead.
+// The current execution context's identity for the owner slot. `neon_fiber_current`
+// lazily adopts a per-thread root fiber and so never actually returns NULL today; the
+// sentinel is a belt over those braces, because NULL in `owner` must mean exactly one
+// thing — UNOWNED / in flight — and a context that ever identified as NULL would walk
+// through the gate below (NULL == NULL) on someone else's in-flight resource.
 #define NEON_RESOURCE_ROOT_CTX ((neon_fiber*)(uintptr_t)1)
 
 static neon_fiber* neon_resource_ctx(void) {
