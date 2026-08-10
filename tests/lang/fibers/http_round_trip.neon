@@ -20,20 +20,20 @@ fn handle(req: http::Request) throws http::HttpError -> http::Response {
         throw http::HttpError { message: "kaboom" };
     };
     if req.target == "/hello" {
-        http::ok("hi #{req.method} #{req.body}")
+        http::server::ok("hi #{req.method} #{req.body}")
     } else {
-        http::respond(404, "nope")
+        http::server::respond(404, "nope")
     }
 }
 
 fn clients(addr: str, done: channel::Channel[str]) {
-    let r1 = try! http::get("http://#{addr}/hello");
+    let r1 = try! http::client::get("http://#{addr}/hello");
     try! channel::send(done, "get: #{r1.status} #{r1.body}");
-    let r2 = try! http::post("http://#{addr}/hello", "bodybytes");
+    let r2 = try! http::client::post("http://#{addr}/hello", "bodybytes");
     try! channel::send(done, "post: #{r2.status} #{r2.body}");
-    let r3 = try! http::get("http://#{addr}/boom");
+    let r3 = try! http::client::get("http://#{addr}/boom");
     try! channel::send(done, "boom: #{r3.status} #{r3.body}");
-    let r4 = try! http::get("http://#{addr}/missing");
+    let r4 = try! http::client::get("http://#{addr}/missing");
     try! channel::send(done, "missing: #{r4.status} #{r4.body}");
 
     // Keep-alive, on a raw socket: two requests, one connection. The server must answer
@@ -58,7 +58,7 @@ fn main() {
         let served = 0;
         while served < 5 {
             let c = try! net::tcp::accept(l);
-            fiber::spawn(move () => { http::connection(c, handle); });
+            fiber::spawn(move () => { http::server::connection(c, handle); });
             served = served + 1;
         };
         let n = 0;

@@ -1,0 +1,6 @@
+http example.com 8080
+path=/a%20b decoded=/a b
+query=x=1 fragment=frag
+bare: port=-1 path=
+bad: not a URL: `http://exa mple/`
+done

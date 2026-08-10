@@ -11,6 +11,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 # files share and is not installed.
 set(NEON_RT_SOURCES
     src/lifecycle.c
+    src/url.c
     src/arena.c
     src/trap.c
     src/arith.c
@@ -61,6 +62,31 @@ if(MSVC)
     set_source_files_properties(${NEON_RT_LLHTTP_SOURCES} PROPERTIES COMPILE_OPTIONS "/w")
 else()
     set_source_files_properties(${NEON_RT_LLHTTP_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
+endif()
+
+# uriparser: RFC 3986 URL parsing behind `std::url` (src/url.c wraps it). Same treatment
+# as llhttp: pinned tarball, populate-only, sources compiled into the variants with
+# warnings suppressed. Its only generated header (UriConfig.h) exists to record probed
+# HAVEs; a stub means the portable fallbacks compile, which is exactly right for an
+# archive built for machines the probe never saw. `URI_NO_UNICODE`: the wchar_t half of
+# its API, which nothing here calls, stays uncompiled.
+FetchContent_Declare(
+    uriparser
+    URL      https://github.com/uriparser/uriparser/releases/download/uriparser-0.9.8/uriparser-0.9.8.tar.gz
+    URL_HASH SHA256=4cd0e4f93b477272fabceeb0202f269169fe6ec3044e10fac6acbcdf354bb080
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    SOURCE_SUBDIR  do-not-build
+)
+FetchContent_MakeAvailable(uriparser)
+file(GLOB NEON_RT_URIPARSER_SOURCES ${uriparser_SOURCE_DIR}/src/*.c)
+file(WRITE ${CMAKE_BINARY_DIR}/uriparser-config/UriConfig.h
+    "/* populate-only build: no probed defines; portable fallbacks compile. */\n")
+if(MSVC)
+    set_source_files_properties(${NEON_RT_URIPARSER_SOURCES} PROPERTIES
+        COMPILE_OPTIONS "/w" COMPILE_DEFINITIONS "URI_NO_UNICODE")
+else()
+    set_source_files_properties(${NEON_RT_URIPARSER_SOURCES} PROPERTIES
+        COMPILE_OPTIONS "-w" COMPILE_DEFINITIONS "URI_NO_UNICODE")
 endif()
 
 # Fibers (docs/design/fibers.md). The swap gadget is per-ABI assembly; x86-64 System V is the
@@ -221,9 +247,11 @@ check_c_compiler_flag("${NEON_RT_SAN_PROBE}" NEON_RT_HAS_SAN)
 unset(CMAKE_REQUIRED_LINK_OPTIONS)
 
 function(neon_rt_variant name)
-    add_library(${name} STATIC ${NEON_RT_SOURCES} ${NEON_RT_LLHTTP_SOURCES})
+    add_library(${name} STATIC ${NEON_RT_SOURCES} ${NEON_RT_LLHTTP_SOURCES}
+                ${NEON_RT_URIPARSER_SOURCES})
     target_include_directories(${name} PUBLIC include)
-    target_include_directories(${name} PRIVATE ${llhttp_SOURCE_DIR}/include)
+    target_include_directories(${name} PRIVATE ${llhttp_SOURCE_DIR}/include
+        ${uriparser_SOURCE_DIR}/include ${CMAKE_BINARY_DIR}/uriparser-config)
     # Warnings-as-errors on every variant: the runtime is warning-clean in all three
     # shapes, and a variant that is only ever built in CI is exactly where rot would go
     # unnoticed.
@@ -308,6 +336,7 @@ if(NEON_RT_TESTS)
     add_executable(neon_rt_tests
         ${NEON_RT_SOURCES}
         ${NEON_RT_LLHTTP_SOURCES}
+        ${NEON_RT_URIPARSER_SOURCES}
         ${tinyunit_SOURCE_DIR}/tinyunit.c
         tests/init.c
         tests/arith_test.c
@@ -328,6 +357,7 @@ if(NEON_RT_TESTS)
         tests/process_test.c
         tests/llhttp_test.c
         tests/http_test.c
+        tests/url_test.c
     )
     # The fiber tests only build where the swap gadget does.
     if(NEON_RT_HAS_FIBERS)
@@ -338,7 +368,7 @@ if(NEON_RT_TESTS)
     endif()
     # The rich assertion and TEST macros use GNU C (__auto_type, constructors, _Generic).
     set_target_properties(neon_rt_tests PROPERTIES C_STANDARD 11 C_EXTENSIONS ON)
-    target_include_directories(neon_rt_tests PRIVATE include src ${tinyunit_SOURCE_DIR} ${llhttp_SOURCE_DIR}/include)
+    target_include_directories(neon_rt_tests PRIVATE include src ${tinyunit_SOURCE_DIR} ${llhttp_SOURCE_DIR}/include ${uriparser_SOURCE_DIR}/include ${CMAKE_BINARY_DIR}/uriparser-config)
     # `std::math` bottoms out in libm, a separate library on Linux. Not on Windows, where
     # the math functions are in the CRT and there is no `m` to find.
     if(NOT WIN32)

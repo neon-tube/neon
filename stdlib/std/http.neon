@@ -2,12 +2,12 @@
 // (`runtime/src/http.c` wraps it; docs/design/fibers.md for how connections cross fibers).
 //
 //     // server: one fiber per connection, keep-alive handled, handler per request
-//     try http::serve(l, (req: http::Request) => {
-//         http::ok("hello, #{req.target}")
+//     try http::server::serve(l, (req: http::Request) => {
+//         http::server::ok("hello, #{req.target}")
 //     });
 //
 //     // client
-//     let resp = try http::get("http://127.0.0.1:8080/hello");
+//     let resp = try http::client::get("http://127.0.0.1:8080/hello");
 //
 // Plain HTTP only: nothing in this toolchain does TLS, and pretending otherwise with a
 // vendored cipher suite would be worse than saying so. Bodies are fully buffered both
@@ -147,6 +147,12 @@ fn reason(status: i64) -> str {
 
 // ---- the server ----
 
+mod server {
+    use std::fiber;
+    use std::io::IoError;
+    use std::net;
+    use std::string;
+
 /// A 200 with a text body — the shape most handlers return.
 fn ok(body: str) -> Response {
     Response { status: 200, headers: [], body: body }
@@ -204,28 +210,34 @@ fn connection(c: net::tcp::Stream, handler: (Request) throws HttpError -> Respon
         raw::reset(p);
     };
 }
+}
 
 // ---- the client ----
 
-/// `http://host[:port]/path` split at the syscall boundary's shape: an address for
-/// `tcp::connect` and a request-target. The only scheme this module speaks is `http`.
-fn split_url(url: str) throws HttpError -> (str, str) {
-    if !string::starts_with(url, "http://") {
-        throw HttpError { message: "only http:// URLs are supported (no TLS in this toolchain): `#{url}`" };
+mod client {
+    use std::io::IoError;
+    use std::net;
+    use std::string;
+    use std::url;
+
+/// A URL split at the syscall boundary's shape: an address for `tcp::connect` and a raw
+/// request-target (path + query, still percent-encoded — the wire wants them that way).
+/// RFC 3986 parsing is `std::url`'s; the HTTP judgments (scheme, default port, empty
+/// path means "/") are this module's.
+fn split_url(u: str) throws HttpError -> (str, str) {
+    let parsed = try url::parse(u) catch (e) {
+        throw HttpError { message: e.message };
     };
-    let rest = string::strip_prefix(url, "http://");
-    let at = string::find(rest, "/");
-    let (addr, target) = if at is i64 {
-        (try! string::slice(rest, 0, at), try! string::slice(rest, at, string::byte_len(rest)))
-    } else {
-        (rest, "/")
+    if parsed.scheme != "http" {
+        throw HttpError { message: "only http:// URLs are supported (no TLS yet): `#{u}`" };
     };
-    if addr == "" {
-        throw HttpError { message: "no host in `#{url}`" };
+    if parsed.host == "" {
+        throw HttpError { message: "no host in `#{u}`" };
     };
-    // A bare host gets HTTP's default port; tcp::connect wants host:port.
-    let with_port = if string::find(addr, ":") is i64 { addr } else { "#{addr}:80" };
-    (with_port, target)
+    let port = if parsed.port == -1 { 80 } else { parsed.port };
+    let path = if parsed.path == "" { "/" } else { parsed.path };
+    let target = if parsed.query == "" { path } else { "#{path}?#{parsed.query}" };
+    ("#{parsed.host}:#{port}", target)
 }
 
 /// One request, one connection: connect, send, read the full response, close. The
@@ -252,4 +264,5 @@ fn get(url: str) throws HttpError | IoError -> Response {
 
 fn post(url: str, body: str) throws HttpError | IoError -> Response {
     try request("POST", url, [], body)
+}
 }

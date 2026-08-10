@@ -1,0 +1,18 @@
+// std::url over uriparser: raw components out, decode as the explicit step, and a parse
+// failure as a catchable UrlError.
+
+use std::io;
+use std::url;
+
+fn main() {
+    let u = try! url::parse("http://example.com:8080/a%20b?x=1#frag");
+    io::println("#{u.scheme} #{u.host} #{u.port}");
+    io::println("path=#{u.path} decoded=#{url::decode(u.path)}");
+    io::println("query=#{u.query} fragment=#{u.fragment}");
+
+    let bare = try! url::parse("http://h");
+    io::println("bare: port=#{bare.port} path=#{bare.path}");
+
+    let bad = try url::parse("http://exa mple/") catch (e) { io::println("bad: #{e.message}"); null };
+    io::println("done");
+}

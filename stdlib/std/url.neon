@@ -1,0 +1,43 @@
+// URLs, by RFC 3986 (uriparser behind `runtime/src/url.c`). Components come back RAW —
+// still percent-encoded — because the wire wants them that way (a request-target must not
+// be decoded before it is sent); `decode` is the explicit step for looking inside one.
+//
+//     let u = try url::parse("http://example.com:8080/a%20b?x=1#top");
+//     u.scheme   // "http"
+//     u.host     // "example.com"
+//     u.port     // 8080 (-1 when the URL names none)
+//     u.path     // "/a%20b"     url::decode(u.path) // "/a b"
+//     u.query    // "x=1" (no '?'; "" when absent)
+//     u.fragment // "top" (no '#'; "" when absent)
+
+record UrlError { message: str }
+impl Error for UrlError { fn message(v: UrlError) -> str { v.message } }
+
+record Url {
+    scheme: str,
+    host: str,
+    port: i64,
+    path: str,
+    query: str,
+    fragment: str,
+}
+
+internal mod raw {
+    @native("neon_url_parse")
+    fn parse(s: str) -> (bool, str, str, i64, str, str, str)
+    @native("neon_url_decode") fn decode(s: str) -> str
+}
+
+fn parse(s: str) throws UrlError -> Url {
+    let (ok, scheme, host, port, path, query, fragment) = raw::parse(s);
+    if !ok {
+        throw UrlError { message: "not a URL: `#{s}`" };
+    };
+    Url { scheme: scheme, host: host, port: port, path: path, query: query, fragment: fragment }
+}
+
+/// Percent-decoding, on a copy. `+` is left alone — form encoding is a separate, explicit
+/// convention, not part of RFC 3986.
+fn decode(s: str) -> str {
+    raw::decode(s)
+}
