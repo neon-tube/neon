@@ -34,7 +34,8 @@ set(NEON_RT_SOURCES
 # runtime builds without them. Win64 is a different ABI even on x86-64, hence NOT WIN32.
 if(NOT WIN32 AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
     list(APPEND NEON_RT_SOURCES
-        src/fiber.c src/fiber_sched.c src/fiber_chan.c src/fiber_swap_x86_64_sysv.S)
+        src/fiber.c src/fiber_sched.c src/fiber_chan.c src/fiber_lang.c
+        src/fiber_swap_x86_64_sysv.S)
     set(NEON_RT_HAS_FIBERS ON)
 endif()
 

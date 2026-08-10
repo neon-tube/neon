@@ -1,0 +1,35 @@
+// Two things pinned here. One: cooperative round-robin — two fibers that yield inside a
+// loop interleave deterministically, a,b,a,b,a,b. Two: a lambda passed to `fiber::runtime`
+// MAY capture (the capture is made outside any fiber, so it can safely cross into the first
+// fiber); it is capturing *inside* a fiber and spawning that cannot cross yet.
+
+use std::fiber;
+use std::io;
+
+fn ping() {
+    let i = 0;
+    while i < 3 {
+        io::println("ping #{i}");
+        i = i + 1;
+        fiber::yield();
+    }
+}
+
+fn pong() {
+    let i = 0;
+    while i < 3 {
+        io::println("pong #{i}");
+        i = i + 1;
+        fiber::yield();
+    }
+}
+
+fn main() {
+    let label = "captured at the root";
+    fiber::runtime(() => {
+        io::println(label);  // a capture made at the fiber::runtime call site — allowed
+        fiber::spawn(ping);
+        fiber::spawn(pong);
+    });
+    io::println("done");
+}

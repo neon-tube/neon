@@ -21,6 +21,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "neon/core.h" // neon_closure, for the std::fiber native surface
+
 typedef struct neon_fiber neon_fiber;
 
 // The body a fiber runs. When it returns, the fiber is finished and control goes to the
@@ -88,6 +90,20 @@ void neon_fiber_park(void);
 // Re-admit a parked fiber to the run queue. Call it from the fiber that satisfied whatever
 // `f` was waiting on (a send, a Task completion). Single-thread M=1: no queue race.
 void neon_fiber_wake(neon_fiber* f);
+
+// ---- the `std::fiber` native surface (src/fiber_lang.c) ----
+//
+// What the stdlib's `@native` declarations bind to: a Neon `() -> ()` closure arrives as an
+// owned 16-byte `neon_closure` by value, is called on the new fiber's stack, and its
+// environment released after. `fiber::spawn` refuses a closure whose environment lives in a
+// fiber's arena (capturing lambdas built inside a fiber) until copy-on-send exists; named
+// functions and capture-free lambdas have a NULL environment and always work.
+
+// `fiber::runtime(body)` — run `body` as the first fiber, pump until the whole tree is done.
+void neon_fiber_lang_runtime(neon_closure body);
+
+// `fiber::spawn(body)` — enqueue `body` as a fiber under the running scheduler.
+void neon_fiber_lang_spawn(neon_closure body);
 
 // ---- safepoint preemption (src/fiber_sched.c) ----
 //

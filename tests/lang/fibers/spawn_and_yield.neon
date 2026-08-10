@@ -1,0 +1,28 @@
+// The fiber surface end to end: `fiber::runtime` runs its body as the first fiber and
+// returns only when the whole tree is done; `spawn` takes a named function (the canonical
+// form — a named function carries no environment, so it always crosses to the new fiber) or
+// a capture-free lambda; `yield` hands the CPU around. Scheduling is cooperative FIFO on one
+// thread, so the interleaving below is deterministic, not racy.
+
+use std::fiber;
+use std::io;
+
+fn worker() {
+    io::println("worker: start");
+    fiber::yield();
+    io::println("worker: end");
+}
+
+fn main() {
+    fiber::runtime(() => {
+        io::println("boss: begin");
+        fiber::spawn(worker);  // a named function used as a `() -> ()` value
+        fiber::spawn(() => {
+            io::println("lambda: ran");
+        });
+        io::println("boss: end");
+        // The boss finishes here; the queue then runs worker (to its yield), the lambda,
+        // and worker again (past its yield).
+    });
+    io::println("main: done");
+}

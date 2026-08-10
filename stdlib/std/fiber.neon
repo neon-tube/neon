@@ -1,0 +1,40 @@
+// Fibers: stackful, cooperatively-scheduled green threads (docs/design/fibers.md). A fiber
+// that blocks looks like an ordinary call — no `async`, no coloring — and each fiber has its
+// own isolated heap, so a crash in one kills that fiber and the rest carry on.
+//
+// The runtime is lazy: nothing exists until `fiber::runtime(body)` runs `body` as the first
+// fiber and returns when it and everything it transitively spawned have finished. `spawn`
+// enqueues another fiber under the running scheduler; `yield` hands the CPU to the next ready
+// fiber and returns when it comes back around.
+//
+//     fn worker() {
+//         io::println("working");
+//         fiber::yield();
+//         io::println("done");
+//     }
+//
+//     fn main() {
+//         fiber::runtime(() => {
+//             fiber::spawn(worker);
+//             fiber::spawn(worker);
+//         });
+//     }
+//
+// `spawn` takes any `() -> ()` — a named function or a lambda. A lambda that CAPTURES
+// values while running inside a fiber cannot cross to the new fiber yet (the captured
+// values live in the spawning fiber's own heap) and traps with a message saying so; a named
+// function or a capture-free lambda always works, and captures made outside the runtime (at
+// the `fiber::runtime` call site itself) are fine.
+
+/// Run `body` as the first fiber and pump the scheduler until every fiber — `body` and
+/// everything it transitively spawned — has finished. Call it once, from outside; nesting a
+/// runtime inside a running fiber traps.
+@native("neon_fiber_lang_runtime") fn runtime(body: () -> ())
+
+/// Enqueue `body` to run as a new fiber under the running scheduler. Traps if no runtime is
+/// active. The new fiber runs when the scheduler next reaches it, not immediately.
+@native("neon_fiber_lang_spawn") fn spawn(body: () -> ())
+
+/// Yield cooperatively: the scheduler runs the other ready fibers, then this one again.
+/// Traps outside a fiber.
+@native("neon_fiber_sched_yield") fn yield()
