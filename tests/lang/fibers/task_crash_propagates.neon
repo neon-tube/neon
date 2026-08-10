@@ -1,0 +1,27 @@
+// Failure travels along await edges: the task's body traps, so the fiber awaiting it is
+// killed at the await — its lines after never print — while a bystander fiber and the
+// runtime itself carry on. The task handle also CROSSES here (captured by the awaiting
+// lambda): a shared identity, like a channel. Both trap reports go to stderr.
+
+use std::fiber;
+use std::io;
+use std::task;
+
+fn crashes() -> i64 {
+    let xs = [1];
+    xs[9]  // bounds trap: the task body dies
+}
+
+fn main() {
+    fiber::runtime(() => {
+        let t = task::spawn(crashes);
+        fiber::spawn(() => {
+            io::println("#{task::await(t)}");  // dies HERE, cleanly
+            io::println("unreachable");
+        });
+        fiber::spawn(() => {
+            io::println("bystander: unaffected");
+        });
+    });
+    io::println("done");
+}

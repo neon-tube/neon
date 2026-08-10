@@ -1865,6 +1865,9 @@ fn copy_stmts(types: &TypeTable, repr: &Repr, src: &str, dst: &str, out: &mut Ve
         Repr::Runtime { c_type, .. } if c_type == "neon_channel" => {
             out.push(format!("neon_wcopy_channel(&{src}, &{dst})"))
         }
+        Repr::Runtime { c_type, .. } if c_type == "neon_task_lang" => {
+            out.push(format!("neon_wcopy_task(&{src}, &{dst})"))
+        }
         Repr::Closure { .. } | Repr::Runtime { .. } => out.push(
             "neon_wcopy_unsendable((const void*)0, (void*)0)".to_string(),
         ),
@@ -1923,6 +1926,9 @@ fn witness_copy_ref(out: &mut String, types: &TypeTable, name: &str, repr: &Repr
         Repr::Any => return "neon_wcopy_any".into(),
         Repr::Runtime { c_type, .. } if c_type == "neon_channel" => {
             return "neon_wcopy_channel".into()
+        }
+        Repr::Runtime { c_type, .. } if c_type == "neon_task_lang" => {
+            return "neon_wcopy_task".into()
         }
         Repr::Closure { .. } | Repr::Runtime { .. } => return "neon_wcopy_unsendable".into(),
         _ => {}

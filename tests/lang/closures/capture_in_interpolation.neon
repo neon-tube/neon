@@ -1,0 +1,19 @@
+// A variable whose ONLY use inside a lambda is in an interpolation hole is still a capture.
+// The free-variable scan once had no arm for interpolated strings, so `xs` here was never
+// captured and lowering ICEd on an unresolvable path — found the day a spawned fiber
+// printed a captured value, but nothing about it needs fibers.
+
+use std::io;
+use std::list;
+
+fn run(f: () -> ()) {
+    f()
+}
+
+fn main() {
+    let xs = [1, 2, 3];
+    let label = "len";
+    run(() => {
+        io::println("#{label}: #{list::len(xs)}");
+    });
+}

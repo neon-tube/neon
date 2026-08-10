@@ -140,6 +140,11 @@ void neon_fiber_runtime(neon_fiber_fn body, void* arg) {
         neon_fiber_trap_handler = NULL;
         if (neon_fiber_finished(f)) {
             f->state = NEON_FIBER_DONE;
+            if (f->on_reap != NULL) {
+                // Whoever registered (a task) learns how this fiber ended — BEFORE the
+                // free, so the hook may still wake an awaiter parked on the outcome.
+                f->on_reap(f->on_reap_arg, f->crashed);
+            }
             neon_fiber_free(f); // frees a crashed fiber's abandoned stack and its arena too
             t_sched.live--;
         } else if (f->state == NEON_FIBER_BLOCKED) {
@@ -166,12 +171,14 @@ void neon_fiber_runtime(neon_fiber_fn body, void* arg) {
     t_sched.active = false;
 }
 
-void neon_fiber_spawn(neon_fiber_fn fn, void* arg) {
+neon_fiber* neon_fiber_spawn(neon_fiber_fn fn, void* arg) {
     if (!t_sched.active) {
         neon_trap("neon_fiber_spawn: no scheduler — call from inside fiber::runtime");
     }
-    neon_sched_enqueue(neon_fiber_new(fn, arg, 0));
+    neon_fiber* f = neon_fiber_new(fn, arg, 0);
+    neon_sched_enqueue(f);
     t_sched.live++;
+    return f;
 }
 
 void neon_fiber_sched_yield(void) {

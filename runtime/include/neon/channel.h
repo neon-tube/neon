@@ -87,8 +87,13 @@ neon_task_lang* neon_task_lang_spawn(neon_closure body, const neon_witness* w,
                                      neon_task_shim shim);
 
 // Block until the task completes and move its result into `out` (owned by the caller).
-// One-shot: a second await traps. Consumes the handle reference.
+// One-shot: a second await traps, and awaiting a task whose body CRASHED traps too — the
+// failure propagates along await edges. Consumes the handle reference.
 void neon_task_lang_await(neon_task_lang* t, void* out);
+
+// The witness `copy` for a task-handle slot: retain + pointer copy (a shared identity,
+// like a channel). Used by emitted witness tables when a Task crosses fibers.
+void neon_wcopy_task(const void* src, void* dst);
 
 // ---- Task[T] / await (the C-level `void*` form the runtime tests drive) ----
 

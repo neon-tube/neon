@@ -6,6 +6,7 @@
 
 #include "libneon_rt.h"
 
+#include "fiber_internal.h" // a task attaches its reap hook to the body fiber
 #include "neon/channel.h"
 
 #include <stdlib.h>
@@ -361,6 +362,7 @@ typedef struct neon_task_lang {
     neon_header header;
     const neon_witness* w;
     bool done;
+    bool failed;         // the body fiber CRASHED; await propagates rather than parking forever
     bool taken;          // the result moved out to an awaiter; drop must not release it
     neon_fiber* awaiter; // parked awaiter, woken at completion
     // the result bytes follow, w->size of them
@@ -392,11 +394,10 @@ static void neon_task_lang_body(void* arg) {
     free(cell);
     // The body computes its result IN THIS FIBER'S ARENA; it is then deep-copied to the
     // shared slot and the original released here, in this fiber's own context — exactly a
-    // channel send with the task's slot as the destination.
-    char* tmp = malloc(t->w->size);
-    if (tmp == NULL) {
-        neon_trap("out of memory");
-    }
+    // channel send with the task's slot as the destination. The temporary lives on THIS
+    // FIBER'S STACK (a VLA), deliberately: a body that traps abandons its stack wholesale,
+    // and a heap temporary would leak on exactly that path (LSan found the malloc'd one).
+    char tmp[t->w->size];
     shim(body, tmp);
     neon_release(body.env);
     void* saved = neon_send_routing_begin();
@@ -409,14 +410,29 @@ static void neon_task_lang_body(void* arg) {
     if (t->w->release) {
         t->w->release(tmp);
     }
-    free(tmp);
     t->done = true; // publish strictly after the copy, as a channel send does
     if (t->awaiter != NULL) {
         neon_fiber* a = t->awaiter;
         t->awaiter = NULL;
         neon_fiber_wake(a);
     }
-    neon_release((neon_header*)t); // the body's reference
+    // The body's task reference is released by the reap hook, which runs for a crash too —
+    // the one owner that exists on both outcomes.
+}
+
+// The reap hook: how a task learns its body fiber died. On a crash, mark failed and wake
+// the awaiter (whose await then propagates); either way, drop the body's task reference.
+static void neon_task_lang_reaped(void* arg, bool crashed) {
+    neon_task_lang* t = (neon_task_lang*)arg;
+    if (crashed && !t->done) {
+        t->failed = true;
+        if (t->awaiter != NULL) {
+            neon_fiber* a = t->awaiter;
+            t->awaiter = NULL;
+            neon_fiber_wake(a);
+        }
+    }
+    neon_release((neon_header*)t);
 }
 
 neon_task_lang* neon_task_lang_spawn(neon_closure body, const neon_witness* w,
@@ -432,24 +448,33 @@ neon_task_lang* neon_task_lang_spawn(neon_closure body, const neon_witness* w,
     neon_send_routing_end(saved);
     t->w = w;
     t->done = false;
+    t->failed = false;
     t->taken = false;
     t->awaiter = NULL;
     neon_task_cell* cell = malloc(sizeof(neon_task_cell));
     if (cell == NULL) {
         neon_trap("out of memory");
     }
-    neon_retain((neon_header*)t); // the body fiber's reference
+    neon_retain((neon_header*)t); // the body fiber's reference, released by the reap hook
     cell->task = t;
     cell->body = body;
     cell->shim = shim;
-    neon_fiber_spawn(neon_task_lang_body, cell);
+    neon_fiber* fb = neon_fiber_spawn(neon_task_lang_body, cell);
+    fb->on_reap = neon_task_lang_reaped;
+    fb->on_reap_arg = t;
     return t;
 }
 
 void neon_task_lang_await(neon_task_lang* t, void* out) {
-    if (!t->done) {
+    if (!t->done && !t->failed) {
         t->awaiter = neon_fiber_current();
-        neon_fiber_park(); // woken by the body's completion
+        neon_fiber_park(); // woken by the body's completion — or by its crash
+    }
+    if (t->failed) {
+        // Propagate: the awaited work died, so the await dies too — in a fiber that is a
+        // clean kill (crash isolation), and failures travel along await edges.
+        neon_release((neon_header*)t);
+        neon_trap("task::await: the awaited task crashed");
     }
     if (t->taken) {
         neon_trap("task::await: a task's result can be awaited once");
@@ -457,4 +482,12 @@ void neon_task_lang_await(neon_task_lang* t, void* out) {
     memcpy(out, (const void*)(t + 1), t->w->size);
     t->taken = true; // the result MOVED out; ownership is the awaiter's now
     neon_release((neon_header*)t);
+}
+
+// The witness `copy` for a task-handle slot: a task is a shared-heap identity, exactly as a
+// channel is — crossing fibers is a retain and a pointer copy.
+void neon_wcopy_task(const void* src, void* dst) {
+    neon_task_lang* t = *(neon_task_lang* const*)src;
+    neon_retain((neon_header*)t);
+    *(neon_task_lang**)dst = t;
 }

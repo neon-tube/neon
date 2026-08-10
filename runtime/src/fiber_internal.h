@@ -39,6 +39,10 @@ struct neon_fiber {
     bool is_root;             // the thread's original context, adopted rather than allocated
     neon_fiber* q_next;       // intrusive run-queue link, owned by src/fiber_sched.c
     int state;                // one of the NEON_FIBER_* above, owned by src/fiber_sched.c
+    // Called by the scheduler when this fiber is reaped, with `crashed` saying how it went.
+    // How a task learns its body died: crash propagation's one seam. NULL for plain fibers.
+    void (*on_reap)(void* arg, bool crashed);
+    void* on_reap_arg;
 };
 
 // Called via the trap→fiber bridge (neon_fiber_trap_handler) when the running fiber traps:

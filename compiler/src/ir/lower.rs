@@ -4613,6 +4613,17 @@ fn collect_free_expr(
         ExprKind::Assert { args, .. } => {
             args.iter().for_each(|a| collect_free_expr(a, bound, used))
         }
+        // An interpolation hole is an expression like any other; missing this arm meant a
+        // variable whose ONLY use in a lambda was inside `#{...}` was never captured, and
+        // lowering the lambda body then found an unresolvable path (an ICE, found the day
+        // a spawned fiber printed a captured value).
+        ExprKind::Str(parts) => {
+            for p in parts {
+                if let crate::ast::StrPart::Interp(x) = p {
+                    collect_free_expr(x, bound, used);
+                }
+            }
+        }
         ExprKind::Todo(_) => {}
         _ => {}
     }

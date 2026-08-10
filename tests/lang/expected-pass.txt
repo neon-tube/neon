@@ -54,6 +54,7 @@ basics/unknown_name_suggestions.neon
 basics/unknown_name_typo_in_used_module.neon
 basics/unknown_type_suggestion.neon
 closures/capture_is_by_value_and_sealed.neon
+closures/capture_in_interpolation.neon
 closures/capture_local.neon
 closures/closure_outlives_its_scope.neon
 closures/closure_type_mismatch.neon
@@ -170,6 +171,7 @@ fibers/interleave_and_capture.neon
 fibers/preemption.neon
 fibers/spawn_and_yield.neon
 fibers/task_await.neon
+fibers/task_crash_propagates.neon
 functions/declaration.neon
 functions/dot_call_rejected.neon
 functions/explicit_type_arguments.neon

@@ -72,8 +72,10 @@ void neon_fiber_free(neon_fiber* f);
 void neon_fiber_runtime(neon_fiber_fn body, void* arg);
 
 // From within a running fiber: create a fiber running `fn(arg)` and enqueue it to run later
-// under the same scheduler. Traps if there is no scheduler (i.e. called off-fiber).
-void neon_fiber_spawn(neon_fiber_fn fn, void* arg);
+// under the same scheduler. Traps if there is no scheduler (i.e. called off-fiber). Returns
+// the created fiber — owned by the scheduler, valid until it is reaped; a caller may attach
+// bookkeeping (a task's reap hook) but must not free it.
+neon_fiber* neon_fiber_spawn(neon_fiber_fn fn, void* arg);
 
 // From within a running fiber: yield cooperatively. The scheduler runs the other ready
 // fibers, then this one again. The one safepoint this slice has; preemption is slice 6.
