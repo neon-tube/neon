@@ -59,11 +59,17 @@ fiber-local ("pinned") resources are unshipped until a type needs one.
 
 ## Tracked next tasks
 
-1. `std::http` SHIPPED (client + server, HTTP/1.1, keep-alive, chunked decode; llhttp is
-   FetchContent-pinned into the archives — the `cargo make rt` step fetches, the cargo
-   path stays offline). Next on that road, both researched and task-tracked: URL parsing
-   via uriparser (replaces http::split_url) and TLS via mbedTLS on the fiber BIO seam
-   (mbedtls_ssl_set_bio callbacks -> the existing fiber-parking socket ops).
+1. HTTP/URL/TLS stack SHIPPED. `std::http` (client + server split into http::client /
+   http::server; HTTP/1.1, keep-alive, chunked decode) parses with llhttp; `std::url` is
+   RFC 3986 via uriparser; `net::tls` is mbedTLS 3.6.7 on the fiber BIO seam (blocking
+   mode over neon_net_wait — no WANT_READ/WRITE dance), client AND server, verify-by-
+   default with connect_insecure opt-out, OS trust store at runtime, https:// in
+   http::client via a Conn = tcp|tls union. All three vendored via FetchContent
+   (populate-only, pinned by sha256), fetched in `cargo make rt` only — cargo path stays
+   offline. Adversarially reviewed; one teardown-blocking bug found and fixed (cbbdf22).
+   Archive grew ~7.7 MB (mbedTLS). Next candidates: HTTP streaming bodies, connection
+   pooling in the client, http::server::serve_tls hardening, or the fibers not-built
+   list (select/cancellation/timeouts — a server creates real demand for these).
 2. Known checker gaps found while testing, worth fixing:
    - `expr is T as x` fails on nullable runtime records and on any `T | null` with a
      qualified generic (`is` on a BINDING works — see `resource_through_channel.neon`'s
