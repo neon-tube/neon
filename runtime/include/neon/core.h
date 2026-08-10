@@ -69,6 +69,13 @@ typedef struct neon_header {
 // `neon_arena_walk` to skip the dead.
 #define NEON_ALLOC_FREED 0x40000u
 
+// Bit 19 marks an object on the SHARED heap — allocated under the send routing, so it may
+// be referenced (and its count touched) from more than one scheduler thread under M:N.
+// Retain/release use atomic ops exactly for these, through the same guard branch the
+// immortal flag has always taken; everything else keeps the plain non-atomic count that
+// isolation makes safe.
+#define NEON_ALLOC_SHARED 0x80000u
+
 // A string is a view: a data pointer and length (the pair libc wants), plus the
 // refcounted allocation it points into. A literal has owner == NULL: static, never freed.
 typedef struct {

@@ -35,6 +35,12 @@
 #endif
 extern _Thread_local NEON_TLS_IE neon_arena* neon_current_arena;
 
+// The send-routing sentinel: `neon_send_routing_begin` points the current arena HERE, and
+// `neon_alloc` routes such allocations to the slab WITH the SHARED flag (atomic rc). A real
+// pointer is never 1, and the non-fiber fast path (`arena == NULL`) is untouched — the
+// sentinel test lives inside the already-taken fiber branch.
+#define NEON_SHARED_ARENA ((neon_arena*)1)
+
 // Teardown mode: non-NULL exactly while a dying fiber's arena is being WALKED (the
 // docs/design/fibers.md teardown). Two effects, both in lifecycle.c: releasing an
 // ARENA-flagged object is a NO-OP (internal references vaporize in the coming bulk-free,

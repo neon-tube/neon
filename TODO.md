@@ -48,6 +48,32 @@ is bounded to bug paths and is memory, not corruption.
 
 ---
 
+## Fibers — M:N: the measured wall, and the corrected plan
+
+Groundwork landed 2026-08-10: the slab is PER-THREAD (TLS free lists, cross-thread frees
+migrate slots, ~1-2% on binary-trees — the price of a lock-free allocator under M threads),
+and the send routing allocates through a SHARED-ARENA sentinel so shared-heap objects are
+stamped NEON_ALLOC_SHARED at birth.
+
+What was tried and REJECTED, with numbers: teaching retain/release about the SHARED bit.
+Inlining the atomic arm cost 44% on binary-trees; hoisting it NOINLINE still cost 33% — a
+call reachable anywhere in release's inlined body forces spill setup around the whole drop
+recursion. Third data point on the same lesson (slab inline 26%, teardown TLS branch 30%):
+the retain/release bodies admit NO additions, of any kind.
+
+The corrected plan, which is also the ORIGINAL design: copy-on-send lands values in the
+RECEIVER'S ARENA, not the shared slab — then ordinary objects are never cross-thread and
+the generic rc path never changes. Sound under M:N because a parked receiver's arena is
+exclusively the sender's for the handoff (parkedness is the lock). The buffered path
+two-hops (sender → channel-owned staging, recv restages into the receiver's arena). Only
+the HANDLE types (channels, tasks) cross threads, and every site releasing a handle knows
+its repr at emission time — so handles get atomic counts through their own entry points,
+and the generic path never learns anything. Then M:N proper: per-scheduler injection
+queues + eventfd doorbells, fibers pinned to a home scheduler, per-thread preemption
+timers (timer_create), global idle/live accounting for the deadlock panic.
+
+---
+
 ## Design — `TODO` should error at the CALL site, not the definition
 
 `TODO("why")` type-checks and panics if reached, as Rust's `todo!()` does. That is the

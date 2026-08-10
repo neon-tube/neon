@@ -5,6 +5,10 @@
 
 #include <stdlib.h>
 
+#ifndef NEON_CBMC
+#include <pthread.h> // the slab's chunk registry lock (refill-time only)
+#endif
+
 // The current fiber's arena (declared in internal.h). Defined here, in the always-compiled
 // lifecycle unit, so every build links it even where the fiber sources are absent; it stays
 // NULL until the scheduler sets it, and NULL means "use the global slab" below. Not defined
@@ -36,6 +40,14 @@ void neon_rt_init(int argc, char** argv) {
     neon_plat_stdio_binary();
 }
 
+// The retain/release bodies are MEASURED SURFACE and admit no additions: an extra branch
+// with a TLS load cost 30% on binary-trees (the teardown experiment), an inlined atomic
+// arm 44%, and even an out-of-line cold call reachable from the guard arm 33% — a call
+// anywhere in the inlined body forces spill setup around the whole drop recursion. The
+// M:N answer is therefore NOT a dynamic shared-bit here: copy-on-send lands values in the
+// RECEIVER'S ARENA (the original design), so ordinary objects are never cross-thread and
+// this path never changes; only the enumerable HANDLE types (channels, tasks) need atomic
+// counts, through their own entry points at repr-known sites. See docs/design/fibers.md.
 void neon_retain(neon_header* h) {
     if (h == NULL || (h->flags & NEON_IMMORTAL)) {
         return;
@@ -105,8 +117,17 @@ void neon_free(void* p) {
 #define NEON_SLAB_MAX (NEON_SLAB_GRAIN * NEON_SLAB_CLASSES)
 #define NEON_SLAB_CHUNK (64 * 1024) // one malloc carves this many bytes into blocks
 
-static void* neon_free_list[NEON_SLAB_CLASSES];
-static void* neon_slab_chunks; // linked list of raw chunks, freed only at exit
+// PER-THREAD, not static, and it is what makes the slab safe under M:N with zero locks:
+// each worker allocates from its own lists, and a slot freed on a different thread than it
+// was carved on simply migrates — pushed onto the freeing thread's list, reused there. The
+// memory stays valid (chunks are never returned to the OS before exit), ownership of the
+// slot just moves. Single-threaded programs see exactly the old behavior through one
+// initial-exec TLS indirection. Chunks are additionally threaded onto a LOCKED global
+// registry — refill-time only, never per-allocation — so the exit teardown (below, LSan's
+// sake) can free every thread's chunks from wherever the destructor runs.
+static _Thread_local NEON_TLS_IE void* neon_free_list[NEON_SLAB_CLASSES];
+static void* neon_slab_chunks; // global registry of every thread's chunks, for exit teardown
+static pthread_mutex_t neon_slab_registry_mu = PTHREAD_MUTEX_INITIALIZER;
 
 static size_t neon_class_of(size_t total) {
     return (total + NEON_SLAB_GRAIN - 1) / NEON_SLAB_GRAIN - 1;
@@ -124,8 +145,10 @@ static void* neon_slab_refill(size_t cls) {
     if (chunk == NULL) {
         neon_trap("out of memory");
     }
+    pthread_mutex_lock(&neon_slab_registry_mu);
     *(void**)chunk = neon_slab_chunks;
     neon_slab_chunks = chunk;
+    pthread_mutex_unlock(&neon_slab_registry_mu);
 
     size_t bsz = neon_class_size(cls);
     char* base = chunk + NEON_SLAB_GRAIN; // past the chunk link, still bsz-aligned
@@ -138,16 +161,9 @@ static void* neon_slab_refill(size_t cls) {
     return base;
 }
 
-NEON_NOINLINE void* neon_alloc(size_t bytes, void (*drop)(void*)) {
-    // Inside a fiber, allocation comes from that fiber's own arena (isolation: the object
-    // lives, and will be freed, in exactly one arena — see docs/design/fibers.md). Off-fiber
-    // — the root context, and every program with no fibers at all — this is NULL and the
-    // slab path below runs unchanged, one predictable branch the cost.
-    neon_arena* arena = neon_current_arena;
-    if (arena != NULL) {
-        return neon_arena_alloc(arena, bytes, drop);
-    }
-
+// The slab proper, shared by the plain path and the shared-heap (sentinel) path; `extra`
+// carries the SHARED flag for the latter.
+static inline void* neon_slab_alloc(size_t bytes, void (*drop)(void*), uint32_t extra) {
     size_t total = sizeof(neon_header) + bytes;
     neon_header* h;
     if (total > NEON_SLAB_MAX) {
@@ -155,7 +171,7 @@ NEON_NOINLINE void* neon_alloc(size_t bytes, void (*drop)(void*)) {
         if (h == NULL) {
             neon_trap("out of memory");
         }
-        h->flags = NEON_ALLOC_BIG;
+        h->flags = NEON_ALLOC_BIG | extra;
     } else {
         size_t cls = neon_class_of(total);
         void* blk = neon_free_list[cls];
@@ -165,11 +181,28 @@ NEON_NOINLINE void* neon_alloc(size_t bytes, void (*drop)(void*)) {
             neon_free_list[cls] = *(void**)blk;
         }
         h = (neon_header*)blk;
-        h->flags = (uint32_t)((cls + 1) << NEON_ALLOC_CLASS_SHIFT);
+        h->flags = (uint32_t)((cls + 1) << NEON_ALLOC_CLASS_SHIFT) | extra;
     }
     h->rc = 1;
     h->drop = drop;
     return h;
+}
+
+NEON_NOINLINE void* neon_alloc(size_t bytes, void (*drop)(void*)) {
+    // Inside a fiber, allocation comes from that fiber's own arena (isolation: the object
+    // lives, and will be freed, in exactly one arena — see docs/design/fibers.md). Under
+    // the SEND ROUTING the arena is the shared sentinel and the object lands on the slab
+    // flagged SHARED (atomic rc — it may cross scheduler threads). Off-fiber — the root
+    // context, and every program with no fibers at all — the arena is NULL and the slab
+    // path runs unchanged, one predictable branch the cost.
+    neon_arena* arena = neon_current_arena;
+    if (arena != NULL) {
+        if (arena == NEON_SHARED_ARENA) {
+            return neon_slab_alloc(bytes, drop, NEON_ALLOC_SHARED);
+        }
+        return neon_arena_alloc(arena, bytes, drop);
+    }
+    return neon_slab_alloc(bytes, drop, 0);
 }
 
 NEON_NOINLINE void neon_free(void* p) {
@@ -222,7 +255,7 @@ void neon_wcopy_unsendable(const void* src, void* dst) {
 #ifndef NEON_CBMC
 void* neon_send_routing_begin(void) {
     neon_arena* saved = neon_current_arena;
-    neon_current_arena = NULL; // every allocation until end lands in the shared slab
+    neon_current_arena = NEON_SHARED_ARENA; // allocations land on the slab, flagged SHARED
     return saved;
 }
 
