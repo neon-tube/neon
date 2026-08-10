@@ -33,6 +33,15 @@
 #endif
 extern _Thread_local NEON_TLS_IE neon_arena* neon_current_arena;
 
+// Teardown mode: non-NULL exactly while a dying fiber's arena is being WALKED (the
+// docs/design/fibers.md teardown). Two effects, both in lifecycle.c: releasing an
+// ARENA-flagged object is a NO-OP (internal references vaporize in the coming bulk-free,
+// and no-oping them is what makes the walk's per-object drops exactly-once — a later
+// object's drop cannot re-release an earlier, already-freed one), and freeing an
+// ARENA-flagged object routes to THIS arena (the walk runs on the scheduler's context,
+// where neon_current_arena is NULL). Only the fiber teardown sets it.
+extern _Thread_local NEON_TLS_IE neon_arena* neon_teardown_arena;
+
 // The trap→fiber bridge. While a fiber runs, the scheduler arms this per-thread hook; a trap
 // (bounds, arithmetic, uncaught error) then calls it INSTEAD of ending the process — the hook
 // switches control back to the scheduler, killing just that fiber (docs/design/fibers.md's

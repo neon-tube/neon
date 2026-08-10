@@ -328,15 +328,43 @@ bool neon_fiber_finished(const neon_fiber* f) {
     return f->finished;
 }
 
+// The teardown walk's visitor: force the object dead. Its drop IS the per-type knowledge —
+// it releases what the object holds and runs a resource's cleanup — and teardown mode keeps
+// the cascade exactly-once (see neon_fiber_free).
+static void neon_fiber_teardown_visit(neon_header* h, void* ctx) {
+    (void)ctx;
+    // An object being dropped is at zero — that is drop's contract everywhere (release
+    // only calls it at zero, and a resource's finish asserts it). The remaining count was
+    // held entirely by this fiber (dead frames and arena siblings, by isolation), so
+    // forcing it is truthful, not a fudge.
+    h->rc = 0;
+    h->drop(h);
+}
+
 void neon_fiber_free(neon_fiber* f) {
     if (f == NULL || f->is_root) {
         return; // the root fiber lives with the thread and was never allocated here
     }
-    // Bulk-free the fiber's whole heap. Anything the body allocated and left live is released
-    // here in one pass — the design's arena-drop-is-bulk-young-free. For objects with no
-    // outgoing references (this slice's case) that is complete; releasing outgoing references
-    // (resource cleanups, shared-value decrements) before the bulk-free is the teardown WALK,
-    // slice 4.
+    // THE TEARDOWN WALK, then the bulk-free (docs/design/fibers.md). Every object still live
+    // in the arena — leaked by a normal exit, or abandoned wholesale by a crash — gets its
+    // drop called directly: a Resource runs its cleanup, a container releases what it holds.
+    // Teardown mode (internal.h) is what makes those forced drops exactly-once and safe:
+    // releasing an arena-internal reference is a no-op (it vaporizes in the bulk-free, and a
+    // later object's drop cannot re-release an earlier, already-freed one), while a release
+    // of a SHARED object — a channel handle, a received value's innards — really counts down.
+    // Isolation is the soundness argument: no other fiber can reference this arena's objects,
+    // so forcing every live one dead cannot strand an external holder.
+    //
+    // The walk runs on whatever context called free (the scheduler's, after a reap): the
+    // current arena is cleared so a cleanup's allocations land in the shared slab, and the
+    // teardown arena routes the drops' own frees back to the dying arena. Cleanups must not
+    // block (a park on this context is a fatal trap) — the finalizer rule every runtime has.
+    neon_arena* saved = neon_current_arena;
+    neon_current_arena = NULL;
+    neon_teardown_arena = f->arena;
+    neon_arena_walk(f->arena, neon_fiber_teardown_visit, NULL);
+    neon_teardown_arena = NULL;
+    neon_current_arena = saved;
     neon_arena_drop(f->arena);
 #if defined(NEON_FIBER_GUARDED)
     munmap(f->stack, f->map_len);

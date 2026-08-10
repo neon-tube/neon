@@ -281,7 +281,8 @@ if(NEON_RT_TESTS)
     if(NEON_RT_HAS_FIBERS)
         target_sources(neon_rt_tests PRIVATE
             tests/fiber_test.c tests/fiber_sched_test.c tests/fiber_crash_test.c
-            tests/fiber_chan_test.c tests/fiber_io_test.c)
+            tests/fiber_chan_test.c tests/fiber_io_test.c
+            tests/fiber_teardown_test.c)
     endif()
     # The rich assertion and TEST macros use GNU C (__auto_type, constructors, _Generic).
     set_target_properties(neon_rt_tests PROPERTIES C_STANDARD 11 C_EXTENSIONS ON)

@@ -11,6 +11,7 @@
 // under NEON_CBMC — the models take the plain-malloc path and never build the fiber code.
 #ifndef NEON_CBMC
 _Thread_local NEON_TLS_IE neon_arena* neon_current_arena = NULL;
+_Thread_local NEON_TLS_IE neon_arena* neon_teardown_arena = NULL;
 #endif
 
 // ---- lifecycle ----
@@ -46,6 +47,16 @@ void neon_release(neon_header* h) {
     if (h == NULL || (h->flags & NEON_IMMORTAL)) {
         return;
     }
+#ifndef NEON_CBMC
+    // Teardown mode (see internal.h): an internal reference in a dying arena is neither
+    // counted down nor dropped — the bulk-free reclaims it, and the no-op is what makes
+    // the walk's forced drops exactly-once. The cost outside teardown: nothing for a
+    // non-arena object (`flags` is already loaded for the immortal test), one predictable
+    // initial-exec TLS load for an arena one.
+    if ((h->flags & NEON_ALLOC_ARENA) && neon_teardown_arena != NULL) {
+        return;
+    }
+#endif
     if (--h->rc == 0) {
         h->drop(h);
     }
@@ -178,7 +189,10 @@ NEON_NOINLINE void neon_free(void* p) {
     // (current) arena, so `neon_current_arena` is the owner. Objects that outlive their fiber
     // or cross to another (shared/big values) are a different, flagged path — slice 5.
     if (h->flags & NEON_ALLOC_ARENA) {
-        neon_arena_free(neon_current_arena, p);
+        // In teardown the walk runs on the scheduler's context (current arena NULL) but
+        // forced drops still free their own objects — route those to the dying arena.
+        neon_arena* owner = neon_teardown_arena != NULL ? neon_teardown_arena : neon_current_arena;
+        neon_arena_free(owner, p);
         return;
     }
     if (h->flags & NEON_ALLOC_BIG) {
