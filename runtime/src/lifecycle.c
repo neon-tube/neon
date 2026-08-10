@@ -47,16 +47,6 @@ void neon_release(neon_header* h) {
     if (h == NULL || (h->flags & NEON_IMMORTAL)) {
         return;
     }
-#ifndef NEON_CBMC
-    // Teardown mode (see internal.h): an internal reference in a dying arena is neither
-    // counted down nor dropped — the bulk-free reclaims it, and the no-op is what makes
-    // the walk's forced drops exactly-once. The cost outside teardown: nothing for a
-    // non-arena object (`flags` is already loaded for the immortal test), one predictable
-    // initial-exec TLS load for an arena one.
-    if ((h->flags & NEON_ALLOC_ARENA) && neon_teardown_arena != NULL) {
-        return;
-    }
-#endif
     if (--h->rc == 0) {
         h->drop(h);
     }

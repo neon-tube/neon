@@ -328,15 +328,25 @@ bool neon_fiber_finished(const neon_fiber* f) {
     return f->finished;
 }
 
-// The teardown walk's visitor: force the object dead. Its drop IS the per-type knowledge —
-// it releases what the object holds and runs a resource's cleanup — and teardown mode keeps
-// the cascade exactly-once (see neon_fiber_free).
+// Teardown pass 1: SEAL every live object with the immortal flag. From here on, any
+// release aimed at it — a sibling's forced drop walking its fields, a resource cleanup
+// releasing a capture — is a no-op through the guard `neon_release` has always had. That is
+// what makes pass 2's forced drops exactly-once, and it costs the hot path NOTHING: the
+// first cut instead taught `release` a teardown-mode test, and that one extra branch-with-
+// TLS in the LTO-inlined release/drop recursion was measured at ~30% on binary-trees.
+static void neon_fiber_teardown_seal(neon_header* h, void* ctx) {
+    (void)ctx;
+    h->flags |= NEON_IMMORTAL;
+}
+
+// Teardown pass 2: force the object dead. Its drop IS the per-type knowledge — it releases
+// what the object holds (arena siblings are sealed, so only OUTGOING references really
+// count down) and runs a resource's cleanup. rc = 0 first: an object being dropped is at
+// zero — drop's contract everywhere, and a resource's finish asserts it. The remaining
+// count was held entirely by this fiber (dead frames and arena siblings, by isolation), so
+// forcing it is truthful, not a fudge.
 static void neon_fiber_teardown_visit(neon_header* h, void* ctx) {
     (void)ctx;
-    // An object being dropped is at zero — that is drop's contract everywhere (release
-    // only calls it at zero, and a resource's finish asserts it). The remaining count was
-    // held entirely by this fiber (dead frames and arena siblings, by isolation), so
-    // forcing it is truthful, not a fudge.
     h->rc = 0;
     h->drop(h);
 }
@@ -360,8 +370,9 @@ void neon_fiber_free(neon_fiber* f) {
     // teardown arena routes the drops' own frees back to the dying arena. Cleanups must not
     // block (a park on this context is a fatal trap) — the finalizer rule every runtime has.
     neon_arena* saved = neon_current_arena;
-    neon_current_arena = NULL;
-    neon_teardown_arena = f->arena;
+    neon_current_arena = NULL;   // a cleanup's allocations land in the shared slab
+    neon_teardown_arena = f->arena; // the forced drops' own frees route home (lifecycle.c)
+    neon_arena_walk(f->arena, neon_fiber_teardown_seal, NULL);
     neon_arena_walk(f->arena, neon_fiber_teardown_visit, NULL);
     neon_teardown_arena = NULL;
     neon_current_arena = saved;
