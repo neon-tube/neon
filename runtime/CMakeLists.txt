@@ -59,10 +59,14 @@ set(NEON_RT_LLHTTP_SOURCES
     ${llhttp_SOURCE_DIR}/src/api.c
     ${llhttp_SOURCE_DIR}/src/http.c
 )
+# `-fno-lto` alongside `-w`: a vendored source must not carry LTO bitcode into the
+# archive, or the program's own LTO link re-analyzes it and re-emits its warnings (mbedTLS
+# constant-time code floods -Wstringop-overflow false positives on every https compile).
+# Third-party crypto/parser guts are never worth inlining into user code anyway.
 if(MSVC)
     set_source_files_properties(${NEON_RT_LLHTTP_SOURCES} PROPERTIES COMPILE_OPTIONS "/w")
 else()
-    set_source_files_properties(${NEON_RT_LLHTTP_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
+    set_source_files_properties(${NEON_RT_LLHTTP_SOURCES} PROPERTIES COMPILE_OPTIONS "-w;-fno-lto")
 endif()
 
 # uriparser: RFC 3986 URL parsing behind `std::url` (src/url.c wraps it). Same treatment
@@ -87,7 +91,7 @@ if(MSVC)
         COMPILE_OPTIONS "/w" COMPILE_DEFINITIONS "URI_NO_UNICODE")
 else()
     set_source_files_properties(${NEON_RT_URIPARSER_SOURCES} PROPERTIES
-        COMPILE_OPTIONS "-w" COMPILE_DEFINITIONS "URI_NO_UNICODE")
+        COMPILE_OPTIONS "-w;-fno-lto" COMPILE_DEFINITIONS "URI_NO_UNICODE")
 endif()
 
 # mbedTLS: the TLS stack behind `net::tls` (src/tls.c wraps it). 3.6 LTS, deliberately not
@@ -119,7 +123,7 @@ list(REMOVE_ITEM NEON_RT_MBEDTLS_SOURCES ${mbedtls_SOURCE_DIR}/library/net_socke
 if(MSVC)
     set_source_files_properties(${NEON_RT_MBEDTLS_SOURCES} PROPERTIES COMPILE_OPTIONS "/w")
 else()
-    set_source_files_properties(${NEON_RT_MBEDTLS_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
+    set_source_files_properties(${NEON_RT_MBEDTLS_SOURCES} PROPERTIES COMPILE_OPTIONS "-w;-fno-lto")
 endif()
 
 # Fibers (docs/design/fibers.md). The swap gadget is per-ABI assembly; x86-64 System V is the
