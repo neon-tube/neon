@@ -300,16 +300,29 @@ give `fiber::runtime/spawn/spawn_with/yield`, `Channel[T]` with `new/send/recv/c
 `Task[T]` with `spawn/await` — all `@native` + `@runtime` stdlib declarations over the
 runtime above, with codegen assistance only where a generic value crosses the ABI:
 
+- **The teardown walk is LIVE** (2026-08-10): a dying fiber's arena is walked and every
+  still-live object's drop forced — resources run their cleanups even on a crash, outgoing
+  references release exactly once — under a teardown mode that no-ops internal releases
+  (they vaporize in the bulk-free). The drop pointer IS the type knowledge; no registry.
+  Residual: a shared handle held only in crashed locals still leaks (no stack maps).
 - **Copy-on-send is the witness's `copy` operation** — deep-relocate one value, allocating
   through the ambient routing, which the send path points at the shared slab. Emitted per
   repr: NULL for scalars, runtime helpers for str/list/map/any/channel-handle (retain —
   a channel in a message is the same channel on both sides), generated walkers for
   composites and boxed records, and a TRAPPING copy for closures and resources — the
   sendability rule enforced at the exact moment it would otherwise corrupt.
-- **Data reaches a spawned fiber via `fiber::spawn_with(body, arg)`** (deep-copied arg,
-  per-repr call shim). A capturing lambda still cannot cross — the spawn guard traps with
-  a message saying what to do — until the env-copy table (the drop-pointer-keyed registry
-  sketched by the teardown walk) makes captures sendable. That is the remaining sugar.
+- **Capturing spawn WORKS** (2026-08-10): a lambda spawned from inside a fiber may capture;
+  its environment deep-copies to the shared heap through the env-copy table (drop pointer →
+  per-shape copy, emitted into every fiber program, weak-defaulted in the runtime). Each
+  capture follows the sendability rules. `fiber::spawn_with(body, arg)` remains for the
+  named-worker style. Task handles are sendable (shared identities, like channels), and a
+  crashed task body fails its awaiter — the await traps, propagating along await edges.
+- **Blocking IO is fiber-transparent** (2026-08-10): `time::sleep` parks the fiber on a
+  deadline list; file reads/writes ride a pthread offload pool (workers run raw syscalls
+  only; completions ring an eventfd in the scheduler's epoll); `process::wait` parks on a
+  pidfd. Channels gained `bounded(n)` (backpressure — sends park when full), `is_closed`,
+  and `recv_timeout` (on a park-with-deadline primitive where the waker and timer race and
+  the loser is cancelled).
 - **Preemption is live end to end**: the 10ms ITIMER_VIRTUAL sets the flag, codegen emits
   `neon_fiber_safepoint()` at every loop back-edge — in fiber programs only; a non-fiber
   program's C is byte-identical, so benchmarks pay nothing.
