@@ -53,6 +53,14 @@ mu type IoList = str | Bytes | List[IoList]
 /// is not just a plain field holding an `i64`.
 sealed record File { r: resource::Resource[i64, IoError] }
 
+/// What one `stat` sees: the size in bytes, whether the path is a directory, whether it is a
+/// regular file, and when it was last modified as milliseconds since the Unix epoch. `is_dir`
+/// and `is_file` are separate booleans rather than one kind because a path can be neither -- a
+/// socket, a device, a symlink to nothing -- and folding them into an enum would force a case
+/// on every caller who only wanted the size. `modified_millis` is whole-second resolution
+/// (POSIX's `st_mtime`), which is the precision every platform agrees on.
+record FileStat { size: i64, is_dir: bool, is_file: bool, modified_millis: i64 }
+
 internal mod raw {
     @native("neon_io_open") fn open(path: str, mode: i64) -> i64
     @native("neon_io_close") fn close(fd: i64) -> i64
@@ -65,6 +73,9 @@ internal mod raw {
     @native("neon_io_rename") fn rename(from: str, to: str) -> i64
     @native("neon_io_is_dir") fn is_dir(path: str) -> i64
     @native("neon_io_size") fn size(path: str) -> i64
+    /// The status, then size, is-dir, is-file and mtime-in-millis: the tuple's tail is four
+    /// C out-parameters. `stat` below turns them into a `FileStat`, or an `IoError`.
+    @native("neon_io_stat") fn stat(path: str) -> (i64, i64, i64, i64, i64)
     /// The names, NUL-separated, and the status: the tuple's tail is a C out-parameter.
     @native("neon_io_read_dir") fn read_dir(path: str) -> (str, i64)
 
@@ -261,6 +272,30 @@ fn rename(from: path::Path, to: path::Path) throws IoError {
 /// differently from "not a directory".
 fn is_dir(p: path::Path) -> bool {
     raw::is_dir(path::to_str(p)) == 1
+}
+
+/// Whether the path names a regular file. `false` for a directory and for nothing there, the
+/// same shape as `is_dir` -- a question about a kind, where "no such path" is a plain no. Ask
+/// `stat` instead when you also want the size or the missing-path error.
+fn is_file(p: path::Path) -> bool {
+    let s = try? stat(p);
+    if s is FileStat { s.is_file } else { false }
+}
+
+/// Size, kind and modification time in one call, so a caller learning several facts about a
+/// path makes one syscall rather than one per question. A missing path is an `IoError` with a
+/// message, not a trap -- the same boundary the rest of this module keeps.
+fn stat(p: path::Path) throws IoError -> FileStat {
+    let (code, size, is_dir, is_file, mtime) = raw::stat(path::to_str(p));
+    if code < 0 {
+        try fail(code, "cannot stat", path::to_str(p));
+    };
+    FileStat {
+        size: size,
+        is_dir: is_dir == 1,
+        is_file: is_file == 1,
+        modified_millis: mtime,
+    }
 }
 
 /// The size in bytes.

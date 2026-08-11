@@ -1,0 +1,41 @@
+// `fs::stat` reports size, kind and mtime in one call; `fs::is_file` and `fs::exists` are the
+// cheap yes/no questions built beside it. `is_file` and `is_dir` answer about a KIND, so both
+// are false for nothing there. A missing path handed to `stat` is an `IoError`, not a trap.
+
+use std::io;
+use std::fs;
+use std::path;
+
+fn main() {
+    let d = path::of("/tmp/neon-fs-stat-corpus");
+    // A previous run may have left it behind; start from a clean directory.
+    if fs::is_dir(d) {
+        for name in try! fs::read_dir(d) {
+            try! fs::remove(path::join(d, path::of(name)));
+        };
+    } else {
+        try! fs::mkdir(d);
+    };
+
+    let f = path::join(d, path::of("hello.txt"));
+    try! fs::write(f, "hello");
+
+    let st = try! fs::stat(f);
+    io::println(to_string(st.size));
+    io::println(to_string(st.is_file));
+    io::println(to_string(st.is_dir));
+    io::println(to_string(st.modified_millis > 0));
+
+    let ds = try! fs::stat(d);
+    io::println(to_string(ds.is_dir));
+    io::println(to_string(ds.is_file));
+
+    io::println(to_string(fs::is_file(f)));
+    io::println(to_string(fs::is_file(d)));
+
+    io::println(to_string(fs::exists(f)));
+    io::println(to_string(fs::exists(path::join(d, path::of("nope.txt")))));
+
+    let gone = try? fs::stat(path::join(d, path::of("nope.txt")));
+    io::println(if gone is null { "stat of missing threw" } else { "no throw" });
+}

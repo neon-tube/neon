@@ -31,6 +31,10 @@ int64_t neon_io_mkdir(neon_str path);                   // consumes path; 0 or -
 int64_t neon_io_rename(neon_str from, neon_str to);     // consumes both; 0 or -errno
 int64_t neon_io_is_dir(neon_str path);                  // 1 dir, 0 not, or -errno
 int64_t neon_io_size(neon_str path);                    // bytes, or -errno
+// Size, kind and mtime in one call. Status is the return (0 or -errno); size, is_dir,
+// is_file and mtime-in-millis come back through the out-parameters. Consumes path.
+int64_t neon_io_stat(neon_str path, int64_t* size, int64_t* is_dir, int64_t* is_file,
+                     int64_t* mtime_ms);
 // Entry NAMES, NUL-separated, without `.` and `..`. *err: 0 or -errno.
 neon_str neon_io_read_dir(neon_str path, int64_t* err);
 
