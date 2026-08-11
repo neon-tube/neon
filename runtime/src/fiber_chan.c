@@ -9,8 +9,11 @@
 #include "fiber_internal.h" // a task attaches its reap hook to the body fiber
 #include "internal.h"       // neon_current_arena, for the rendezvous receiver-arena copy
 #include "neon/channel.h"
+#include "neon/list.h" // select_recv walks a List[Channel[T]] of per-holder refs
 
-#include <pthread.h> // per-channel/per-task locks: the one thing M:N adds here
+#include <pthread.h>  // per-channel/per-task locks: the one thing M:N adds here
+#include <stdatomic.h> // the select waiter's single atomic claim (see select_recv)
+#include <stdint.h>    // uintptr_t, for the canonical body-address lock order
 #include <stdlib.h>
 
 // A parked receiver, allocated on the blocked fiber's own stack (which stays live while it is
@@ -187,11 +190,29 @@ void neon_task_free(neon_task* t) {
 //      channel handle it was passed — recv only after unparking, so the channel cannot die
 //      under a parked receiver holding its reference.
 
+// The shared control block a `select_recv` parks behind — on the select fiber's stack, like
+// a waiter, but ONE of it standing behind the N per-channel waiter nodes below. `claimed` is
+// the single point of truth for "who won this select": the FIRST channel to deliver a value
+// or to close CASes it 0->1 and becomes the winner; every other channel finds it already 1
+// and leaves this select untouched. `index`/`delivered` are the winner's report, written
+// under its channel's mutex and published before the wake, exactly as a rendezvous value is.
+typedef struct neon_channel_select {
+    _Atomic int claimed; // 0 until a channel wins; CAS to 1 is the claim
+    int64_t index;       // which list entry fired (stamped by the winner)
+    bool delivered;      // true = a value landed in the slot; false = that channel closed
+} neon_channel_select;
+
 typedef struct neon_channel_waiter {
     neon_fiber* fiber;
     void* slot; // the receiver's out-buffer; a send deep-copies straight into it
     bool delivered;
     struct neon_channel_waiter* next;
+    // NULL for a plain recv. For a `select_recv` waiter, the shared control this node speaks
+    // for, plus the list entry it stands for — so the channel that wins can stamp the index.
+    // A plain waiter's positional initializer leaves both zero (select == NULL), which is
+    // exactly "not a select", so recv/recv_timeout need no change.
+    neon_channel_select* select;
+    int64_t sel_index;
 } neon_channel_waiter;
 
 // A parked SENDER on a full bounded channel, on its own stack like a receiver's waiter.
@@ -285,6 +306,69 @@ static void* neon_channel_slot_reserve(neon_channel* ch) {
     return ch->buf + ((ch->head + ch->len) % ch->cap) * sz;
 }
 
+// Pop the next DELIVERABLE receiver off ch->rhead. A plain recv waiter comes back as-is. A
+// select waiter comes back only when THIS channel wins its select — the atomic claim decides
+// — and a select already claimed by ANOTHER channel is unlinked and discarded here (a stale
+// node the winning select fiber would otherwise trip over; it will find it gone in its unlink
+// walk). Returns NULL once the list holds no live receiver — so a send that reaches the
+// backpressure test below has honestly emptied the queue of stale selects first. Caller holds
+// ch->mu. The winner's index is stamped here; its `delivered` is set by the caller (a send
+// hands over a value, a close does not), which is why this does not touch it.
+static neon_channel_waiter* neon_channel_pop_receiver(neon_channel* ch) {
+    while (ch->rhead != NULL) {
+        neon_channel_waiter* w = ch->rhead;
+        ch->rhead = w->next;
+        if (ch->rhead == NULL) {
+            ch->rtail = NULL;
+        }
+        w->next = NULL; // detached from this channel's list
+        if (w->select == NULL) {
+            return w; // an ordinary recv waiter: always deliverable
+        }
+        int zero = 0;
+        if (atomic_compare_exchange_strong(&w->select->claimed, &zero, 1)) {
+            w->select->index = w->sel_index; // this channel won the race
+            return w;
+        }
+        // Lost the claim: another channel already delivered to this select. Drop the stale
+        // node — we unlinked it above, and the select fiber's own walk tolerates its absence.
+    }
+    return NULL;
+}
+
+// Drain one buffered value into `out`: restage the staged copy into the receiver's own arena
+// (ambient routing — the caller is the running receiver), release the staging copy, advance
+// the ring, and hand the opened slot to the first parked sender. Caller holds ch->mu and has
+// established ch->len > 0. Shared by recv and by select's ready-value path so the two-hop
+// restage lives in exactly one place.
+static void neon_channel_drain_locked(neon_channel* ch, void* out) {
+    size_t sz = ch->w->size;
+    void* slot = ch->buf + ch->head * sz;
+    // The transfer edge: the staged owning ref demotes, the ref minted here (in OUR arena)
+    // takes the baton, and this fiber's first use claims the body.
+    neon_transfer_begin();
+    if (ch->w->copy) {
+        ch->w->copy(slot, out);
+    } else {
+        memcpy(out, slot, sz);
+    }
+    neon_transfer_end();
+    if (ch->w->release) {
+        ch->w->release(slot);
+    }
+    ch->head = (ch->head + 1) % ch->cap;
+    ch->len--;
+    if (ch->shead != NULL) {
+        // A slot opened: the first parked sender gets its turn.
+        neon_channel_sender* sndr = ch->shead;
+        ch->shead = sndr->next;
+        if (ch->shead == NULL) {
+            ch->stail = NULL;
+        }
+        neon_fiber_wake(sndr->fiber);
+    }
+}
+
 // False when the channel is (or becomes) closed — the caller's value is UNTOUCHED on that
 // path, which is the guarantee std::channel's ClosedError rides on: a send that throws did
 // not send, and for a resource that means the baton never left. Both closed exits sit
@@ -305,130 +389,120 @@ static bool neon_channel_send_impl(neon_channel* ch, const void* v) {
     // FIRST ENTRY, while earlier senders still wait (FIFO fairness; a late send must not
     // steal the slot a receive just opened for the first in line). Once WOKEN, this sender
     // holds the right-of-way: the receive that woke it popped it off the queue and opened a
-    // slot that no later sender can take (they queue behind on entry) — re-checking the
-    // queue here would send it to the back of its own line, wasting the wake and stalling
-    // the receiver that made room. A close while parked is a trap on wake: the send can
-    // never complete, and send-on-closed is already the loud path.
-    bool behind = ch->shead != NULL;
-    while (ch->bound != 0 && ch->rhead == NULL && (ch->len >= ch->bound || behind)) {
-        neon_channel_sender me = {neon_fiber_current(), false, NULL};
-        if (ch->stail != NULL) {
-            ch->stail->next = &me;
-        } else {
-            ch->shead = &me;
-        }
-        ch->stail = &me;
-        pthread_mutex_unlock(&ch->mu);
-        neon_fiber_park();
-        pthread_mutex_lock(&ch->mu);
-        behind = false; // woken by a receive: the opened slot is ours
-        if (me.closed) {
+    // slot that no later sender can take (they queue behind on entry) — so `right_of_way`
+    // skips the backpressure test entirely, where re-testing would send it to the back of
+    // its own line and stall the receiver that made room. A close while parked is a trap on
+    // wake: the send can never complete, and send-on-closed is already the loud path.
+    //
+    // The delivery and the backpressure test share one loop so that pop_receiver runs FIRST:
+    // it drains any stale select waiter (one claimed by another channel, not yet lazily
+    // unlinked) off the head, so a NULL from it means the receiver list is genuinely empty
+    // and the bounded test that follows is honest — a stale select cannot masquerade as a
+    // receiver and wave a full channel past its bound.
+    bool right_of_way = false;
+    for (;;) {
+        neon_channel_waiter* wake = neon_channel_pop_receiver(ch);
+        if (wake != NULL) {
+            // THE RENDEZVOUS FAST PATH: the receiver is parked, so its arena is exclusively
+            // ours for the handoff (parkedness is the lock, even under M:N) — the copy lands
+            // directly in the receiver's own heap, single hop, and every copied object is an
+            // ordinary arena object with a plain count. This is the original design's
+            // "copy into the receiver's arena", and it is what keeps the generic rc path
+            // free of atomics.
+            void* dst = wake->slot;
+            void* saved = neon_current_arena;
+            neon_current_arena = wake->fiber->arena;
+            // A channel send is a TRANSFER EDGE: any owning resource ref inside the value
+            // moves its baton (neon_wcopy_resource, reached through the witness walk). The
+            // bracket wraps exactly the copy, on this thread, before publication — so a
+            // woken receiver can only ever observe a completed handoff.
+            neon_transfer_begin();
+            if (ch->w->copy) {
+                ch->w->copy(v, dst);
+            } else {
+                memcpy(dst, v, ch->w->size);
+            }
+            neon_transfer_end();
+            neon_send_routing_end(saved);
+            // Publish only after the copy completed: the deep copy can trap (an unsendable
+            // part inside the value), and the killed sender must not leave a half-written
+            // slot visible — the receiver is woken here, never before. For a select waiter
+            // the value is what it woke for, so its control's `delivered` is true (the
+            // winning index was already stamped by the claim in pop_receiver).
+            wake->delivered = true;
+            if (wake->select != NULL) {
+                wake->select->delivered = true;
+            }
+            neon_fiber_wake(wake->fiber);
             pthread_mutex_unlock(&ch->mu);
-            if (ch->w->release) { // consume, as above; no transfer happened
+            // Consume the original value (in the SENDER's context, so an arena element frees
+            // into its own arena) and, at the ref layer, the channel reference. For a sent
+            // resource this releases a now-demoted ref — its drop is inert, the staged ref
+            // carries the baton.
+            if (ch->w->release) {
                 ch->w->release((void*)v);
             }
-            return false;
+            return true;
         }
-    }
-    // Invariant 2: deep-copy into the destination with allocation routed to the shared
-    // heap. The destination is a parked receiver's slot when one is waiting, the ring
-    // otherwise.
-    void* dst;
-    neon_channel_waiter* wake = NULL;
-    void* saved;
-    if (ch->rhead != NULL) {
-        wake = ch->rhead;
-        ch->rhead = wake->next;
-        if (ch->rhead == NULL) {
-            ch->rtail = NULL;
+        // No receiver waiting. On a bounded channel, park until a receive opens a slot,
+        // unless we already hold the right-of-way from a prior wake.
+        if (!right_of_way && ch->bound != 0 && (ch->len >= ch->bound || ch->shead != NULL)) {
+            neon_channel_sender me = {neon_fiber_current(), false, NULL};
+            if (ch->stail != NULL) {
+                ch->stail->next = &me;
+            } else {
+                ch->shead = &me;
+            }
+            ch->stail = &me;
+            pthread_mutex_unlock(&ch->mu);
+            neon_fiber_park();
+            pthread_mutex_lock(&ch->mu);
+            if (me.closed) {
+                pthread_mutex_unlock(&ch->mu);
+                if (ch->w->release) { // consume, as above; no transfer happened
+                    ch->w->release((void*)v);
+                }
+                return false;
+            }
+            right_of_way = true; // the receive that woke us opened a slot that is ours
+            continue;
         }
-        dst = wake->slot;
-        // THE RENDEZVOUS FAST PATH: the receiver is parked, so its arena is exclusively
-        // ours for the handoff (parkedness is the lock, even under M:N) — the copy lands
-        // directly in the receiver's own heap, single hop, and every copied object is an
-        // ordinary arena object with a plain count. This is the original design's
-        // "copy into the receiver's arena", and it is what keeps the generic rc path free
-        // of atomics.
-        saved = neon_current_arena;
-        neon_current_arena = wake->fiber->arena;
-    } else {
-        dst = neon_channel_slot_reserve(ch);
         // Buffered: stage on the plain slab. Ownership is sequential (sender creates, the
         // ring owns, exactly one receiver consumes — the channel lock is the visibility
-        // barrier under M:N), so plain rc is sound; the receiver RESTAGES into its own
-        // arena at recv.
-        saved = neon_send_routing_begin();
+        // barrier under M:N), so plain rc is sound; the receiver RESTAGES into its own arena
+        // at recv. Same transfer edge as the rendezvous copy above.
+        void* dst = neon_channel_slot_reserve(ch);
+        void* saved = neon_send_routing_begin();
+        neon_transfer_begin();
+        if (ch->w->copy) {
+            ch->w->copy(v, dst);
+        } else {
+            memcpy(dst, v, ch->w->size);
+        }
+        neon_transfer_end();
+        neon_send_routing_end(saved);
+        ch->len++; // a ring slot becomes occupied only after the copy completed
+        pthread_mutex_unlock(&ch->mu);
+        if (ch->w->release) {
+            ch->w->release((void*)v);
+        }
+        return true;
     }
-    // A channel send is a TRANSFER EDGE: any owning resource ref inside the value moves
-    // its baton (neon_wcopy_resource, reached through the witness walk). The bracket wraps
-    // exactly the copy, on this thread, before publication — so a woken receiver can only
-    // ever observe a completed handoff.
-    neon_transfer_begin();
-    if (ch->w->copy) {
-        ch->w->copy(v, dst);
-    } else {
-        memcpy(dst, v, ch->w->size);
-    }
-    neon_transfer_end();
-    neon_send_routing_end(saved);
-    // Publish only after the copy completed: the deep copy can trap (an unsendable part
-    // inside the value), and the killed sender must not leave a half-written slot visible —
-    // a ring slot becomes occupied here, a parked receiver is woken here, never before.
-    if (wake != NULL) {
-        wake->delivered = true;
-        neon_fiber_wake(wake->fiber);
-    } else {
-        ch->len++;
-    }
-    pthread_mutex_unlock(&ch->mu);
-    // Consume the original value (in the SENDER's context, so an arena element frees into
-    // its own arena) and the channel reference. For a sent resource this releases a
-    // now-demoted ref — its drop is inert, the staged ref carries the baton.
-    if (ch->w->release) {
-        ch->w->release((void*)v);
-    }
-    return true;
 }
 
 static bool neon_channel_recv_impl(neon_channel* ch, void* out) {
     bool got;
     pthread_mutex_lock(&ch->mu);
     if (ch->len > 0) {
-        size_t sz = ch->w->size;
-        // Restage: deep-copy the staged value into the RECEIVER's own arena (the ambient
-        // routing — we are the running receiver), then release the staging copy. Two hops
-        // for a buffered value, one for a rendezvous; the price of a generic rc path with
-        // no atomics in it.
-        void* slot = ch->buf + ch->head * sz;
-        // The buffered hop's second half is the same transfer edge: the staged owning ref
-        // demotes, the ref minted here (in OUR arena — ambient routing) takes the baton,
-        // and this fiber's first use claims the body.
-        neon_transfer_begin();
-        if (ch->w->copy) {
-            ch->w->copy(slot, out);
-        } else {
-            memcpy(out, slot, sz);
-        }
-        neon_transfer_end();
-        if (ch->w->release) {
-            ch->w->release(slot);
-        }
-        ch->head = (ch->head + 1) % ch->cap;
-        ch->len--;
-        if (ch->shead != NULL) {
-            // A slot opened: the first parked sender gets its turn.
-            neon_channel_sender* sndr = ch->shead;
-            ch->shead = sndr->next;
-            if (ch->shead == NULL) {
-                ch->stail = NULL;
-            }
-            neon_fiber_wake(sndr->fiber);
-        }
+        // Restage a buffered value into our own arena and open a slot for a parked sender.
+        // Two hops for a buffered value, one for a rendezvous; the price of a generic rc
+        // path with no atomics in it.
+        neon_channel_drain_locked(ch, out);
         got = true;
     } else if (ch->closed) {
         got = false;
     } else {
-        neon_channel_waiter w = {neon_fiber_current(), out, false, NULL};
+        neon_channel_waiter w = {neon_fiber_current(), out, false, NULL, NULL, 0};
         if (ch->rtail != NULL) {
             ch->rtail->next = &w;
         } else {
@@ -451,8 +525,22 @@ static void neon_channel_close_impl(neon_channel* ch) {
         ch->closed = true;
         for (neon_channel_waiter* w = ch->rhead; w != NULL;) {
             neon_channel_waiter* next = w->next;
-            w->delivered = false;
-            neon_fiber_wake(w->fiber);
+            if (w->select == NULL) {
+                w->delivered = false;
+                neon_fiber_wake(w->fiber);
+            } else {
+                // A parked select: this close is a candidate winner. Claim it (CAS 0->1);
+                // the winner reports this channel's index with the drained-null outcome. A
+                // lost claim means another channel already delivered to that select first —
+                // leave it be, its wake stands and this node is a stale one its unlink walk
+                // will drop.
+                int zero = 0;
+                if (atomic_compare_exchange_strong(&w->select->claimed, &zero, 1)) {
+                    w->select->index = w->sel_index;
+                    w->select->delivered = false; // woken by close, not by a value
+                    neon_fiber_wake(w->fiber);
+                }
+            }
             w = next;
         }
         ch->rhead = NULL;
@@ -488,7 +576,7 @@ static bool neon_channel_recv_timeout_impl(neon_channel* ch, void* out, int64_t 
         pthread_mutex_unlock(&ch->mu);
         return neon_channel_recv_impl(ch, out); // a value or the drained null, no parking
     }
-    neon_channel_waiter w = {neon_fiber_current(), out, false, NULL};
+    neon_channel_waiter w = {neon_fiber_current(), out, false, NULL, NULL, 0};
     if (ch->rtail != NULL) {
         ch->rtail->next = &w;
     } else {
@@ -523,6 +611,57 @@ static bool neon_channel_recv_timeout_impl(neon_channel* ch, void* out, int64_t 
     }
     return got;
 }
+
+// ---- select: receive from whichever of several channels is ready first ----
+//
+// Block until ONE of N channels can hand over a value (or is closed-and-drained), take from
+// exactly that one, and leave the others untouched. It is recv's park/wake, widened from one
+// channel to N — with three problems N brings that one did not:
+//
+//   1. DEADLOCK. A select spans N per-channel mutexes, and two selects sharing channels in
+//      opposite orders would deadlock. So the locks are always taken in a canonical order —
+//      by body ADDRESS — and duplicates (the same channel listed twice) are locked once.
+//   2. EXACTLY-ONE DELIVERY. The waiter is linked into N receiver lists at once, so N senders
+//      could each try to hand it a value. A single atomic `claimed` on the shared control is
+//      the arbiter: the first channel to claim it (CAS 0->1) delivers; every other finds it
+//      already claimed and skips (neon_channel_pop_receiver / close's claim). One winner, one
+//      value, by construction.
+//   3. CLEANUP. The winner unlinks its own node when it pops it; the losers never touched
+//      theirs; a channel that skipped a stale node unlinked it too. On wake the select fiber
+//      walks all N channels and unlinks whatever remains, so every node is gone before the
+//      stack frame holding them dies — the crash-locals discipline recv's on-stack waiter
+//      follows, scaled to N.
+//
+// The waiter nodes, their bodies, and the sort scratch are VLAs on the select fiber's stack:
+// they die with the frame, no heap to leak on a mid-copy trap — the same choice the task body
+// makes for its result temporary, for the same reason. Returns true with a value in `out` and
+// the winning list index in `*out_index`; false (the drained-null outcome) with the index of
+// the closed channel. Priority: a ready VALUE anywhere beats a closed channel, and ties go to
+// the lowest list index — so a closed channel in the set never masks data still waiting, and
+// the outcome is deterministic.
+
+// Lock every DISTINCT body once, in the canonical (address) order `order` is pre-sorted into;
+// duplicates sit adjacent after the sort, so skipping equal-to-previous locks each body once.
+static void neon_channel_select_lock_all(neon_channel** order, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        if (i > 0 && order[i] == order[i - 1]) {
+            continue; // a duplicate body, already locked
+        }
+        pthread_mutex_lock(&order[i]->mu);
+    }
+}
+static void neon_channel_select_unlock_all(neon_channel** order, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        if (i > 0 && order[i] == order[i - 1]) {
+            continue;
+        }
+        pthread_mutex_unlock(&order[i]->mu);
+    }
+}
+
+// The impl itself derefs each list entry to its body, so it lives in the handle layer below,
+// past the neon_channel_ref definition; the public neon_channel_select_recv wrapper is beside
+// it.
 
 
 
@@ -791,6 +930,113 @@ bool neon_channel_is_closed(neon_channel_ref* r) {
     bool c = neon_channel_is_closed_impl(r->body);
     neon_release((neon_header*)r);
     return c;
+}
+
+// select_recv's body: see the block near the top of this file for the claim/lock-order/
+// cleanup argument. Here because it derefs each list entry's ref to its shared body.
+static bool neon_channel_select_recv_impl(neon_list* list, void* out, int64_t* out_index) {
+    size_t n = (size_t)list->len;
+    if (n == 0) {
+        // A select over nothing has nothing to wake it: refuse loudly rather than park a
+        // fiber the scheduler would then report as a deadlock.
+        neon_trap("channel::select_recv: the channel list is empty");
+    }
+    neon_channel* bodies[n]; // the body behind each list entry, by list index
+    neon_channel* order[n];  // the same bodies, sorted by address for lock ordering
+    neon_channel_waiter waiters[n];
+    for (size_t i = 0; i < n; i++) {
+        neon_channel_ref* ref = *(neon_channel_ref* const*)neon_list_at(list, (int64_t)i);
+        bodies[i] = ref->body;
+        order[i] = ref->body;
+    }
+    // Insertion sort `order` by address (a select's arity is small; this is not a hot path).
+    for (size_t i = 1; i < n; i++) {
+        neon_channel* key = order[i];
+        size_t j = i;
+        while (j > 0 && (uintptr_t)order[j - 1] > (uintptr_t)key) {
+            order[j] = order[j - 1];
+            j--;
+        }
+        order[j] = key;
+    }
+    neon_channel_select sel = {0, -1, false};
+
+    neon_channel_select_lock_all(order, n);
+    // Under all the locks, a consistent snapshot: a ready value first (lowest index wins),
+    // then failing that a closed channel. Holding every lock is what makes the decision and
+    // the registration below atomic — no send can slip a value in between "nothing ready" and
+    // "parked", the lost-wakeup every such design has to close.
+    for (size_t i = 0; i < n; i++) {
+        if (bodies[i]->len > 0) {
+            neon_channel_drain_locked(bodies[i], out);
+            neon_channel_select_unlock_all(order, n);
+            *out_index = (int64_t)i;
+            return true;
+        }
+    }
+    for (size_t i = 0; i < n; i++) {
+        if (bodies[i]->closed) { // len == 0 here — the value scan above found none
+            neon_channel_select_unlock_all(order, n);
+            *out_index = (int64_t)i;
+            return false; // closed-and-drained: the null outcome
+        }
+    }
+    // Nothing ready: link a receiver waiter onto every channel, then park. Each waiter points
+    // at the one shared `sel`; the first channel to deliver or close claims it and reports
+    // through it. Duplicate bodies get one waiter per list entry, both on that one list.
+    for (size_t i = 0; i < n; i++) {
+        neon_channel_waiter* w = &waiters[i];
+        w->fiber = neon_fiber_current();
+        w->slot = out;
+        w->delivered = false;
+        w->next = NULL;
+        w->select = &sel;
+        w->sel_index = (int64_t)i;
+        neon_channel* ch = bodies[i];
+        if (ch->rtail != NULL) {
+            ch->rtail->next = w;
+        } else {
+            ch->rhead = w;
+        }
+        ch->rtail = w;
+    }
+    neon_channel_select_unlock_all(order, n);
+    neon_fiber_park();
+    // Woken: exactly one channel claimed `sel` — its value already sits in `out` (rendezvous
+    // copy, into our arena) or it closed. Unlink our node from every channel it may still be
+    // on. Each iteration locks one body, unlinks one waiter, unlocks — never nested, so a
+    // duplicate body (locked, unlocked, re-locked) cannot deadlock against itself, and no
+    // canonical order is needed here.
+    for (size_t i = 0; i < n; i++) {
+        neon_channel* ch = bodies[i];
+        pthread_mutex_lock(&ch->mu);
+        neon_channel_waiter** link = &ch->rhead;
+        neon_channel_waiter* prev = NULL;
+        while (*link != NULL) {
+            if (*link == &waiters[i]) {
+                *link = waiters[i].next;
+                if (ch->rtail == &waiters[i]) {
+                    ch->rtail = prev;
+                }
+                break;
+            }
+            prev = *link;
+            link = &(*link)->next;
+        }
+        pthread_mutex_unlock(&ch->mu);
+    }
+    *out_index = sel.index;
+    return sel.delivered;
+}
+
+// select_recv borrows every channel body through the list for the duration, then consumes
+// the LIST — releasing it drops each per-holder ref it carries, exactly the native-consume
+// convention paid once on the aggregate. Released only after the impl returns, so no body can
+// die under a still-parked select waiter that references it.
+bool neon_channel_select_recv(neon_list* list, void* out, int64_t* out_index) {
+    bool got = neon_channel_select_recv_impl(list, out, out_index);
+    neon_release((neon_header*)list);
+    return got;
 }
 
 // The witness `copy` for a handle slot: a channel is an identity, so crossing fibers keeps

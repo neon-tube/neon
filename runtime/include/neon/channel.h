@@ -48,6 +48,7 @@ void neon_chan_free(neon_chan* ch);
 
 typedef struct neon_channel neon_channel;      // the shared body: ring, waiters, lock
 typedef struct neon_channel_ref neon_channel_ref; // the per-holder handle (see fiber_chan.c)
+typedef struct neon_list neon_list;               // select_recv's List[Channel[T]] argument
 
 // A fresh open channel for elements described by `w`. The caller owns the returned handle.
 neon_channel_ref* neon_channel_new(const neon_witness* w);
@@ -77,6 +78,16 @@ bool neon_channel_recv(neon_channel_ref* ch, void* out);
 // Close: wake every parked receiver empty-handed; later receives drain then return false.
 // Idempotent. Consumes the `ch` reference.
 void neon_channel_close(neon_channel_ref* ch);
+
+// select_recv over a `List[Channel[T]]`: block until one channel yields a value or is
+// closed-and-drained, take from exactly that one, leave the rest untouched. On return
+// `*out_index` is the winning list index; true means a value landed in `out` (owned by the
+// caller), false means that channel was closed (the null outcome). A ready value beats a
+// closed channel, ties go to the lowest index. Parks the calling fiber while every channel is
+// open and empty. Consumes the `list` reference (and, through it, every channel ref it
+// holds). Traps on an empty list. See the long comment in src/fiber_chan.c for the
+// claim/lock-order machinery.
+bool neon_channel_select_recv(neon_list* list, void* out, int64_t* out_index);
 
 // The witness `copy` for a channel-handle slot: retain + pointer copy (a channel is a
 // shared-heap identity). Used by emitted witness tables when a Channel crosses fibers.

@@ -87,3 +87,22 @@ fn send[T](ch: Channel[T], v: T) throws ClosedError {
 /// Receive with a deadline: a value, or `null` once the channel is closed and drained OR
 /// after `millis` with nothing arriving — `is_closed` tells the two apart when it matters.
 @native("neon_channel_recv_timeout") fn recv_timeout[T](ch: Channel[T], millis: i64) -> T | null
+
+/// Receive from whichever of several channels is ready first: block this fiber until one
+/// channel in `channels` hands over a value or is closed-and-drained, take from exactly that
+/// one, and leave the rest untouched. Returns the winning channel's index into `channels`
+/// paired with what it yielded — a value, or `null` when that channel was closed:
+///
+///     let (i, v) = channel::select_recv([left, right]);
+///     if v is i64 as n { io::println("channel #{i} -> #{n}"); }
+///     else { io::println("channel #{i} closed"); }
+///
+/// A ready VALUE anywhere beats a closed channel, and ties go to the lowest index, so a
+/// closed channel in the set never masks data still waiting elsewhere, and the choice is
+/// deterministic. Traps on an empty list — a select with nothing to wait on could only hang.
+///
+/// v1 is receive-only and requires every channel to carry the same element type `T`; a
+/// send-select and a heterogeneous select (which would need union machinery to say which
+/// type came back) are follow-ups. `select_recv_timeout` — the same with a deadline — is the
+/// natural next step: the runtime already parks on deadlines for `recv_timeout`.
+@native("neon_channel_select_recv") fn select_recv[T](channels: List[Channel[T]]) -> (i64, T | null)

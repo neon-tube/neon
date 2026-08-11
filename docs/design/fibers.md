@@ -260,6 +260,7 @@ fn bounded[T](n: i64) -> Channel[T]               // backpressure: a full send p
 fn send[T](ch: Channel[T], v: T)
 fn recv[T](ch: Channel[T]) -> T | null            // null == closed and drained
 fn recv_timeout[T](ch: Channel[T], millis: i64) -> T | null
+fn select_recv[T](channels: List[Channel[T]]) -> (i64, T | null) // index fired + value/null
 fn close[T](ch: Channel[T])
 fn is_closed[T](ch: Channel[T]) -> bool
 
@@ -364,9 +365,15 @@ Everything below is deliberate scope, not oversight. Each is independent of the 
 
 ### Semantics and API
 
-- **`select`.** Waiting on several channels at once. Needs an API decision first (a
-  `select`-expression versus a builder), and the runtime side is a multi-channel waiter
-  registration — the waiter lists already support the shape.
+- **Send-select and heterogeneous select.** Receive-select is built:
+  `channel::select_recv[T](List[Channel[T]]) -> (i64, T | null)` blocks until one channel
+  yields a value or closes, takes from exactly that one, and leaves the rest untouched — a
+  waiter linked into every channel's receiver list, a single atomic claim electing the one
+  winner, canonical (address-ordered) locking against deadlock, and a lazy unlink walk on
+  wake. What remains: a **send-select** (parking a value on whichever channel drains first),
+  a **heterogeneous** select over channels of different element types (which needs union
+  machinery to say which type came back), and `select_recv_timeout` (the deadline park the
+  runtime already has for `recv_timeout`).
 - **Cancellation.** A fiber carrying a token it checks, returning normally so its own cleanups
   run through the ordinary path. The safepoint machinery is exactly the place to poll one.
   Hard `kill(fiber)` is a separate, harder question and stays deferred.

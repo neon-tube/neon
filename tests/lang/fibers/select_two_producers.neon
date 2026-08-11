@@ -1,0 +1,42 @@
+use std::channel;
+use std::fiber;
+use std::io;
+
+// select_recv over two channels: two producers each feed their own channel, one consumer
+// selects — printing which channel fired and what it carried — and stops when a channel
+// comes back closed-and-drained (the null arm of the `(index, value)` it returns).
+//
+// runtime_on(1, ...) is a single seat, so the interleaving is fixed and the golden is
+// deterministic: the consumer parks on its first select and producer `a` rendezvouses with
+// it; everything after is already buffered. select prefers a ready VALUE over a closed
+// channel, and the lowest index on a tie — so `a`'s two values drain first, then `b`'s, then
+// the drained-closed `a` at index 0 ends the loop.
+fn main() {
+    fiber::runtime_on(1, () => {
+        let a: channel::Channel[i64] = channel::new();
+        let b: channel::Channel[i64] = channel::new();
+
+        fiber::spawn(() => {
+            while true {
+                let (i, v) = channel::select_recv([a, b]);
+                if v is i64 {
+                    io::println("fired #{i} = #{v}");
+                } else {
+                    io::println("fired #{i} closed");
+                    break;
+                }
+            }
+        });
+        fiber::spawn(() => {
+            try! channel::send(a, 1);
+            try! channel::send(a, 2);
+            channel::close(a);
+        });
+        fiber::spawn(() => {
+            try! channel::send(b, 10);
+            try! channel::send(b, 20);
+            channel::close(b);
+        });
+    });
+    io::println("done");
+}
