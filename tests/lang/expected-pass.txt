@@ -364,6 +364,10 @@ strings/unknown_escape_of_a_multibyte_char.neon
 strings/utf8_find_is_byte_offset.neon
 strings/utf8_len_is_bytes.neon
 strings/utf8_slice_splits_sequence.neon
+time/arithmetic.neon
+time/civil.neon
+time/iso_parse.neon
+time/now.neon
 types/a_module_path_may_not_be_forged.neon
 types/a_nominal_name_is_not_a_module_identity.neon
 types/a_union_is_one_layout_however_it_is_reached.neon

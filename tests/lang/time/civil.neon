@@ -1,0 +1,36 @@
+// The civil calendar is pure integer math (Hinnant's algorithms), so it is pinned against
+// KNOWN unix-millis instants rather than against itself: the epoch, two famous round
+// seconds, the millisecond before the epoch (the negative case the flooring exists for),
+// and a leap day. Each is decomposed with `from_unix_millis`, formatted, and the millis
+// recovered with `to_unix_millis` — the round trip is the correctness claim.
+
+use std::io;
+use std::time;
+
+fn show(ms: i64) {
+    let dt = time::from_unix_millis(ms);
+    let back = time::to_unix_millis(dt);
+    io::println("#{time::format_iso(dt)}  #{back == ms}");
+}
+
+fn main() {
+    show(0);                    // the epoch itself
+    show(1000);                 // one second in
+    show(86400000);             // one day in
+    show(1000000000000);        // 10^9 seconds: a well-known instant
+    show(1500000000000);        // 1.5*10^9 seconds
+    show(-1);                   // one millisecond BEFORE the epoch
+    show(-86400000);            // one day before
+
+    // A leap day survives the round trip: 2020-02-29 exists, and its neighbours are the
+    // 28th and March 1st.
+    let leap = time::DateTime {
+        year: 2020, month: 2, day: 29,
+        hour: 12, minute: 0, second: 0, millis: 0,
+    };
+    io::println("#{time::format_iso(leap)}");
+    io::println("#{time::format_iso(time::from_unix_millis(time::to_unix_millis(leap)))}");
+
+    // The `Date` view and its own Display.
+    io::println("#{time::to_date(leap)}");
+}
