@@ -13,6 +13,9 @@
 use std::string;
 use std::list;
 
+/// Thrown by `hex_decode`/`base64_decode` on malformed input -- a bad digit, an odd length,
+/// wrong padding. Declared here because a native can build neither the tagged result nor the
+/// error record.
 record DecodeError { message: str }
 impl Display for DecodeError { fn to_string(v: DecodeError) -> str { v.message } }
 impl Error for DecodeError { fn message(v: DecodeError) -> str { v.message } }

@@ -13,8 +13,13 @@
 use std::map;
 use std::string;
 
+/// An immutable, ordered sequence of `T`. Opaque: the storage is native, so every
+/// operation returns a fresh list rather than mutating. Covariant in `T`.
 opaque record List[T] {}
 
+/// The eager map/filter/fold protocol over a one-parameter container `C[_]`. Each returns
+/// a fresh `C` (or, for `fold`, the accumulator) -- there is nothing lazy to thread. A
+/// two-parameter type like `Map` is not a functor over one argument and iterates instead.
 protocol Mappable for C[_] {
     fn map[T, U](c: C[T], f: (T) -> U) -> C[U]
     fn filter[T](c: C[T], keep: (T) -> bool) -> C[T]
@@ -154,6 +159,7 @@ fn get[T](xs: List[T], i: i64) throws IndexError -> T {
     xs[i]
 }
 
+/// `xs` with index `i` replaced by `v`. Throws `IndexError` if `i` is out of range.
 @inline
 fn set[T](xs: List[T], i: i64, v: T) throws IndexError -> List[T] {
     if i < 0 or i >= len(xs) {
@@ -175,10 +181,14 @@ fn set[T](xs: List[T], i: i64, v: T) throws IndexError -> List[T] {
 // Stable: `merge` takes from the left whenever the two are equal, which is why the
 // test is `cmp(b, a) is :lt` rather than `cmp(a, b) is :gt`.
 
+/// `xs` ascending by `T`'s structural order. Stable, and a merge sort, so a comparison
+/// that lies -- a list holding NaN -- only misorders rather than reading out of bounds.
 fn sort[T](xs: List[T]) -> List[T] where T: Ord {
     sort_by(xs, (a: T, b: T) => if a < b { :lt } else if b < a { :gt } else { :eq })
 }
 
+/// `xs` ordered by `cmp`. Stable -- equal elements keep their input order -- for ordering
+/// a type by something other than its structural order, or one that has none.
 fn sort_by[T](xs: List[T], cmp: (T, T) -> Ordering) -> List[T] {
     let n = len(xs);
     if n <= 1 {
@@ -234,6 +244,7 @@ fn merge[T](a: List[T], b: List[T], cmp: (T, T) -> Ordering) -> List[T] {
 // neither takes a `where`. Both walk the whole list even once the answer is settled: they
 // are O(n) on a hit as well as a miss.
 
+/// Whether `xs` has no elements.
 fn is_empty[T](xs: List[T]) -> bool {
     len(xs) == 0
 }
@@ -245,10 +256,13 @@ fn first[T](xs: List[T]) -> T | null {
     if is_empty(xs) { null } else { xs[0] }
 }
 
+/// The last element, or `null` for the empty list -- the same shape as `first`.
 fn last[T](xs: List[T]) -> T | null {
     if is_empty(xs) { null } else { xs[len(xs) - 1] }
 }
 
+/// Whether some element equals `v`. Structural `==`, so no bound; walks the whole list, so
+/// O(n) on a hit as well as a miss.
 fn contains[T](xs: List[T], v: T) -> bool {
     let found = false;
     for x in xs {
@@ -275,6 +289,7 @@ fn find[T](xs: List[T], v: T) -> i64 | null {
 
 // ---- transformations ----
 
+/// `xs` with its elements in reverse order.
 fn reverse[T](xs: List[T]) -> List[T] {
     let out: List[T] = [];
     let i = len(xs);

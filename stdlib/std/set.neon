@@ -15,6 +15,8 @@ use std::list;
 use std::map;
 use std::string;
 
+/// An unordered collection of distinct `T`. A `Map` whose values are all `null`, wrapped
+/// so membership reads as membership; opaque so no caller can slip a non-null value in.
 opaque record Set[T] { m: Map[T, null] }
 
 /// Renders sorted, like `Map`'s impl and for the same reason: an unordered walk is not a
@@ -30,10 +32,12 @@ impl[T] Display for Set[T] where T: Display, T: Ord {
     }
 }
 
+/// An empty set.
 fn new[T]() -> Set[T] {
     Set { m: map::new[T, null]() }
 }
 
+/// A set of the distinct elements of `xs`; duplicates collapse.
 fn from_list[T](xs: List[T]) -> Set[T] {
     let s: Set[T] = new();
     for x in xs {
@@ -42,6 +46,7 @@ fn from_list[T](xs: List[T]) -> Set[T] {
     s
 }
 
+/// `s` with `v` added; a no-op if `v` is already a member.
 fn add[T](s: Set[T], v: T) -> Set[T] {
     Set { m: map::set(s.m, v, null) }
 }
@@ -52,14 +57,17 @@ fn remove[T](s: Set[T], v: T) -> Set[T] {
     Set { m: map::remove(s.m, v) }
 }
 
+/// Whether `v` is a member of `s`.
 fn contains[T](s: Set[T], v: T) -> bool {
     map::contains(s.m, v)
 }
 
+/// The number of members.
 fn len[T](s: Set[T]) -> i64 {
     map::len(s.m)
 }
 
+/// Whether `s` has no members.
 fn is_empty[T](s: Set[T]) -> bool {
     len(s) == 0
 }
@@ -69,6 +77,7 @@ fn to_list[T](s: Set[T]) -> List[T] {
     map::keys(s.m)
 }
 
+/// The members in either `a` or `b`.
 fn union[T](a: Set[T], b: Set[T]) -> Set[T] {
     let out = a;
     for v in to_list(b) {
@@ -77,6 +86,7 @@ fn union[T](a: Set[T], b: Set[T]) -> Set[T] {
     out
 }
 
+/// The members in both `a` and `b`.
 fn intersect[T](a: Set[T], b: Set[T]) -> Set[T] {
     let out: Set[T] = new();
     for v in to_list(a) {

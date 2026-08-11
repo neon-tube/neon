@@ -15,6 +15,9 @@ internal mod raw {
     @pure @native("neon_str_parse_int") fn parse_int(s: str) -> i64
 }
 
+/// The bytes `[from, to)` as a `str`, half-open and byte-oriented. Throws `IndexError`
+/// unless `0 <= from <= to <= byte_len(s)`; cutting through a multi-byte character yields
+/// a fragment that is not valid UTF-8 on its own.
 fn slice(s: str, from: i64, to: i64) throws IndexError -> str {
     if from < 0 or from > to or to > byte_len(s) {
         throw IndexError { message: "slice #{from}..#{to} out of range" };
@@ -132,6 +135,8 @@ internal mod raw_ws {
     }
 }
 
+/// `s` with leading whitespace (space, tab, `\n`, `\r`) removed. Byte-oriented -- a
+/// Unicode space is not whitespace here.
 fn trim_start(s: str) -> str {
     let i = 0;
     let n = byte_len(s);
@@ -141,6 +146,7 @@ fn trim_start(s: str) -> str {
     raw::slice_unchecked(s, i, n)
 }
 
+/// `s` with trailing whitespace removed, the same class `trim_start` strips.
 fn trim_end(s: str) -> str {
     let n = byte_len(s);
     while n > 0 and raw_ws::is_space(raw::char_at_unchecked(s, n - 1)) {
@@ -149,6 +155,7 @@ fn trim_end(s: str) -> str {
     raw::slice_unchecked(s, 0, n)
 }
 
+/// `s` with both leading and trailing whitespace removed.
 fn trim(s: str) -> str {
     trim_start(trim_end(s))
 }
