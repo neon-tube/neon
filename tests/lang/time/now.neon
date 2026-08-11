@@ -1,0 +1,27 @@
+// `now()` reads the wall clock, so it cannot be pinned to a golden value — the test prints
+// only STABLE facts about it: that it decomposes and recomposes to the same instant (the
+// round-trip identity), that it names a sane modern year (so it is wired to the clock and
+// not returning a constant), and that it agrees with `unix_millis`, the native it is built
+// on, to within a second.
+
+use std::io;
+use std::time;
+
+fn main() {
+    let ms = time::unix_millis();
+    let n = time::now();
+
+    // Decompose then recompose is the identity on the fields now() produced.
+    let round = time::from_unix_millis(time::to_unix_millis(n));
+    io::println("#{time::format_iso(n) == time::format_iso(round)}");
+
+    // A sane modern instant, field by field.
+    io::println("#{n.year >= 2020 and n.year < 2100}");
+    io::println("#{n.month >= 1 and n.month <= 12}");
+    io::println("#{n.day >= 1 and n.day <= 31}");
+    io::println("#{n.hour >= 0 and n.hour <= 23}");
+
+    // now() and unix_millis() are two reads of the same clock, taken a hair apart.
+    let skew = time::to_unix_millis(n) - ms;
+    io::println("#{skew >= 0 and skew < 1000}");
+}

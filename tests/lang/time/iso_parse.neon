@@ -1,0 +1,43 @@
+// `parse_iso` is the inverse of `format_iso` for a canonical string, and a strict reader
+// otherwise. This pins both halves: the accepted shapes (no fraction, a short fraction, an
+// over-long fraction truncated to millis, a numeric offset folded into UTC) and the
+// rejected ones (a missing zone, an out-of-range field, a byte where a separator belongs).
+// Errors are printed by message, so the test proves WHICH check fired, not merely that one did.
+
+use std::io;
+use std::time;
+
+fn roundtrip(s: str) {
+    try {
+        io::println(time::format_iso(time::parse_iso(s)));
+    } catch (e) {
+        io::println("error: #{e}");
+    }
+}
+
+fn same(s: str) {
+    try {
+        io::println("#{time::format_iso(time::parse_iso(s)) == s}");
+    } catch (e) {
+        io::println("error: #{e}");
+    }
+}
+
+fn main() {
+    roundtrip("1970-01-01T00:00:00.000Z");   // the epoch
+    roundtrip("2026-08-11T14:03:09Z");        // no fraction -> .000
+    roundtrip("2026-08-11T14:03:09.5Z");      // short fraction -> .500
+    roundtrip("2026-08-11T14:03:09.123456Z"); // long fraction truncated -> .123
+    roundtrip("2026-08-11T14:03:09+02:00");   // +02:00 local -> 12:03:09 UTC
+    roundtrip("2026-08-11T14:03:09-05:00");   // -05:00 local -> 19:03:09 UTC
+    roundtrip("2000-01-01T00:00:00+00:00");   // zero offset
+
+    roundtrip("2026-13-01T00:00:00Z");        // month out of range
+    roundtrip("2026-08-11T14:03:09");         // no zone at all
+    roundtrip("garbage");                     // separator mismatch
+    roundtrip("2026-08-11T25:03:09Z");        // hour out of range
+
+    // The round-trip property, stated as a boolean on canonical inputs.
+    same("2026-08-11T14:03:09.123Z");
+    same("1970-01-01T00:00:00.000Z");
+}

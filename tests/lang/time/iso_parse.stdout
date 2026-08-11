@@ -1,0 +1,13 @@
+1970-01-01T00:00:00.000Z
+2026-08-11T14:03:09.000Z
+2026-08-11T14:03:09.500Z
+2026-08-11T14:03:09.123Z
+2026-08-11T12:03:09.000Z
+2026-08-11T19:03:09.000Z
+2000-01-01T00:00:00.000Z
+error: month out of range
+error: missing time zone (`Z` or `+HH:MM`)
+error: expected `-`, found `a`
+error: hour out of range
+true
+true
