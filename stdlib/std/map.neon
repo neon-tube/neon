@@ -12,6 +12,9 @@
 use std::list;
 use std::string;
 
+/// An immutable, unordered map from `K` to `V`. Opaque: the storage is native, so every
+/// operation returns a new map. `keys`/`values` walk the table, so their order is a
+/// function of the hash and can shift when a `set` grows the table.
 opaque record Map[K, V] {}
 
 /// How a map renders, an ordinary library impl for the reason `List`'s is one.
@@ -58,6 +61,7 @@ fn get[K, V](m: Map[K, V], k: K) throws KeyError -> V {
 @pure @native("neon_map_keys") fn keys[K, V](m: Map[K, V]) -> List[K]
 @pure @native("neon_map_values") fn values[K, V](m: Map[K, V]) -> List[V]
 
+/// Whether `m` has no entries.
 fn is_empty[K, V](m: Map[K, V]) -> bool {
     len(m) == 0
 }

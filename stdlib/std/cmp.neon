@@ -7,10 +7,12 @@
 //
 // There is no overloading, so the two forms are two names rather than one.
 
+/// The greater of `a` and `b` by `T`'s structural order. Ties return `a`.
 fn max[T](a: T, b: T) -> T where T: Ord {
     if a < b { b } else { a }
 }
 
+/// The lesser of `a` and `b` by `T`'s structural order. Ties return `a`.
 fn min[T](a: T, b: T) -> T where T: Ord {
     if b < a { b } else { a }
 }
@@ -21,6 +23,7 @@ fn max_by[T](a: T, b: T, cmp: (T, T) -> Ordering) -> T {
     if cmp(a, b) is :lt { b } else { a }
 }
 
+/// The lesser of `a` and `b` by `cmp`. Ties return `a`.
 fn min_by[T](a: T, b: T, cmp: (T, T) -> Ordering) -> T {
     if cmp(b, a) is :lt { b } else { a }
 }

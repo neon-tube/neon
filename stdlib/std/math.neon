@@ -10,7 +10,9 @@
 //
 // There is no overloading, so the two `abs` are two names.
 
+/// π, to f64 precision -- the ratio of a circle's circumference to its diameter.
 const PI: f64 = 3.141592653589793
+/// e, to f64 precision -- the base of the natural logarithm.
 const E: f64 = 2.718281828459045
 
 @pure @native("neon_f64_sqrt") fn sqrt(x: f64) -> f64
