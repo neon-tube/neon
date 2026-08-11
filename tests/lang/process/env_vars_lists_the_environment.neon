@@ -1,0 +1,25 @@
+//@ env: NEON_ENVVARS_MARKER=present
+//@ env: NEON_ENVVARS_EQ=a=b
+// `os::env_vars` is the whole environment as `(name, value)` pairs. Each entry splits on the
+// FIRST `=`, so a value that itself contains `=` keeps the rest. `env` stays the
+// single-variable lookup that tells set-to-empty from unset; this is the full walk.
+
+use std::os;
+use std::io;
+
+fn lookup(name: str) -> str {
+    let found = "unset";
+    for pair in os::env_vars() {
+        let (k, v) = pair;
+        if k == name {
+            found = v;
+        };
+    };
+    found
+}
+
+fn main() {
+    io::println(lookup("NEON_ENVVARS_MARKER"));
+    io::println(lookup("NEON_ENVVARS_EQ"));
+    io::println(lookup("NEON_ENVVARS_NOBODY_SETS_THIS_ZZ"));
+}

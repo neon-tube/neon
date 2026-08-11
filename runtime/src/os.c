@@ -193,6 +193,124 @@ NEON_NORETURN void neon_os_exit(int64_t code) {
     neon_plat_exit_now((int)code);
 }
 
+// ---- process introspection (std::os) ----
+//
+// The working directory, host name, pid and the environment block. Each is an effectively
+// instant kernel query — no descriptor, no wait — so they are called straight rather than
+// routed through the fiber IO seam, and none of them installs any process-wide signal
+// state. The platform difference (POSIX against the Win32 spellings) lives in `platform.h`,
+// so there is one body per operation here. Paths and names cross the same lossy UTF-8 door
+// as argv and env values: a byte that is not UTF-8 becomes U+FFFD rather than a failure.
+
+// A NUL-terminated copy of a `neon_str`, for the C calls that demand one. `neon_str` is a
+// length-delimited view, so this cannot be skipped by passing its data pointer. Caller frees.
+static char* neon_os_cstr(neon_str s) {
+    size_t len = neon_str_len(&s);
+    char* p = (char*)malloc(len + 1);
+    if (p == NULL) {
+        neon_trap("out of memory");
+    }
+    if (len) {
+        memcpy(p, neon_str_data(&s), len);
+    }
+    p[len] = '\0';
+    return p;
+}
+
+// A failure code rendered as its `strerror` text — a pure function of the code, the same
+// door `std::fs` reaches for `IoError`, so `std::os` needs no state to build an `OsError`.
+neon_str neon_os_strerror(int64_t code) {
+    const char* m = strerror(code < 0 ? (int)-code : (int)code);
+    return neon_str_new(m, strlen(m));
+}
+
+// The working directory. `err` is the out-parameter: 0, or `-errno`. A path can outgrow any
+// fixed buffer, so this grows and retries on `ERANGE` rather than capping the answer.
+neon_str neon_os_cwd(int64_t* err) {
+    *err = 0;
+    size_t cap = 512;
+    char* buf = (char*)malloc(cap);
+    if (buf == NULL) {
+        neon_trap("out of memory");
+    }
+    for (;;) {
+        if (neon_plat_getcwd(buf, cap) != NULL) {
+            break;
+        }
+        if (errno != ERANGE) {
+            *err = -(int64_t)errno;
+            free(buf);
+            return neon_str_lit("", 0);
+        }
+        cap *= 2;
+        char* grown = (char*)realloc(buf, cap);
+        if (grown == NULL) {
+            neon_trap("out of memory");
+        }
+        buf = grown;
+    }
+    neon_str r = neon_os_lossy(buf, strlen(buf));
+    free(buf);
+    return r;
+}
+
+// Change the working directory. 0, or `-errno`; consumes `path`.
+int64_t neon_os_chdir(neon_str path) {
+    char* p = neon_os_cstr(path);
+    int64_t r = neon_plat_chdir(p) == 0 ? 0 : -(int64_t)errno;
+    free(p);
+    neon_str_release(path);
+    return r;
+}
+
+// The host name. `err` is the out-parameter: 0, or `-errno`. A short name is nobody's
+// 256-byte string; a longer one truncates (with a NUL still in place) rather than failing.
+neon_str neon_os_hostname(int64_t* err) {
+    *err = 0;
+    char buf[256];
+    if (neon_plat_hostname(buf, sizeof buf) != 0) {
+        *err = -(int64_t)errno;
+        return neon_str_lit("", 0);
+    }
+    return neon_os_lossy(buf, strlen(buf));
+}
+
+int64_t neon_os_pid(void) {
+    return neon_plat_getpid();
+}
+
+// The whole environment as one NUL-separated block of `KEY=VALUE` entries — the same shape
+// `neon_io_read_dir` uses, and for the same reason: a runtime function cannot build a `List`
+// (that needs an element witness only codegen has), and a NUL byte cannot occur inside an
+// environment string, so `std::os` splits on it losslessly. The block crosses the lossy
+// UTF-8 door in one pass; a NUL is an ordinary sub-0x80 byte to that converter, so the
+// separators survive it untouched.
+neon_str neon_os_environ(void) {
+    char** env = neon_plat_environ();
+    size_t len = 0, cap = 0;
+    char* buf = NULL;
+    if (env != NULL) {
+        for (size_t i = 0; env[i] != NULL; i++) {
+            size_t n = strlen(env[i]);
+            if (len + n + 1 > cap) {
+                cap = (len + n + 1) * 2;
+                char* grown = (char*)realloc(buf, cap);
+                if (grown == NULL) {
+                    neon_trap("out of memory");
+                }
+                buf = grown;
+            }
+            memcpy(buf + len, env[i], n);
+            len += n;
+            buf[len++] = '\0';
+        }
+    }
+    // Drop the trailing NUL so the split does not yield an empty last entry.
+    neon_str r = neon_os_lossy(buf == NULL ? "" : buf, len == 0 ? 0 : len - 1);
+    free(buf);
+    return r;
+}
+
 // ---- stdin ----
 //
 // `io::read_line` and `io::read_all`, same lossy boundary as args and env. The raw

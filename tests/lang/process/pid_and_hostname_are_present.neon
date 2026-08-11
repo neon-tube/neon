@@ -1,0 +1,13 @@
+// `os::pid` is this process's id -- always positive, never throwing. `os::hostname` is the
+// host's short name; it can fail in principle, so it throws, but on a normal system it is
+// there. Neither value is deterministic, so this asserts their shape, not their contents.
+
+use std::os;
+use std::io;
+use std::string;
+
+fn main() {
+    io::println(to_string(os::pid() > 0));
+    let h = try! os::hostname();
+    io::println(if string::is_empty(h) { "empty" } else { "nonempty" });
+}

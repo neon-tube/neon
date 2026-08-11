@@ -26,6 +26,16 @@ neon_str neon_os_env_get(neon_str name); // consumes name; "" when unset — gua
 
 NEON_NORETURN void neon_os_exit(int64_t code);
 
+// ---- process introspection (std::os) ----
+
+neon_str neon_os_strerror(int64_t code);   // pure: a failure code as its message
+neon_str neon_os_cwd(int64_t* err);        // *err: 0 or -errno
+int64_t neon_os_chdir(neon_str path);      // consumes path; 0 or -errno
+neon_str neon_os_hostname(int64_t* err);   // *err: 0 or -errno
+int64_t neon_os_pid(void);
+// The environment as one NUL-separated block of `KEY=VALUE` entries; `std::os` splits it.
+neon_str neon_os_environ(void);
+
 // The lossy UTF-8 boundary, for other subsystems receiving OS bytes: each invalid byte
 // becomes U+FFFD, and the result is always an owned copy.
 neon_str neon_os_lossy(const char* bytes, size_t len);

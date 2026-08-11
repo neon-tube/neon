@@ -223,6 +223,20 @@ int64_t neon_io_size(neon_str path) {
     return out;
 }
 
+// Size, kind and mtime together -- one `stat`, four answers. The status is the direct
+// return (0 or -errno); the four values travel through out-parameters, which codegen turns
+// into the tail of a Neon tuple, and `std::fs` assembles into a `FileStat` (or an `IoError`
+// on failure). `is_dir`/`is_file` are 0/1; `mtime_ms` is milliseconds since the Unix epoch.
+int64_t neon_io_stat(neon_str path, int64_t* size, int64_t* is_dir, int64_t* is_file,
+                     int64_t* mtime_ms) {
+    char* p = neon_cstr(path);
+    int64_t r =
+        neon_plat_stat(p, size, is_dir, is_file, mtime_ms) == 0 ? 0 : -(int64_t)errno;
+    free(p);
+    neon_str_release(path);
+    return r;
+}
+
 // Grow `*buf` and append `name` plus its NUL. Shared by both walks below.
 static void neon_dir_push(char** buf, size_t* len, size_t* cap, const char* name) {
     size_t n = strlen(name);

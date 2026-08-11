@@ -1,0 +1,31 @@
+// `os::cwd` reports the process's working directory, and `os::chdir` moves it -- a later
+// `cwd` reflects the move. A directory that is not there is an `OsError`, not a trap.
+
+use std::os;
+use std::io;
+use std::fs;
+use std::path;
+use std::string;
+
+fn moved(target: str) -> bool {
+    try os::chdir(target) catch (e) {
+        return false;
+    };
+    true
+}
+
+fn main() {
+    let start = try! os::cwd();
+    io::println(if string::is_empty(start) { "empty" } else { "nonempty" });
+
+    let d = path::of("/tmp/neon-os-cwd-corpus");
+    if fs::is_dir(d) { } else { try! fs::mkdir(d); };
+
+    io::println(to_string(moved("/tmp/neon-os-cwd-corpus")));
+
+    let here = try! os::cwd();
+    io::println(if string::find(here, "neon-os-cwd-corpus") is i64 { "moved" } else { "not moved" });
+
+    // A path that is not there fails as a value, not a trap.
+    io::println(to_string(moved("/no/such/dir/neon-cwd-A9F2")));
+}

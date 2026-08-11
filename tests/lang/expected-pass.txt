@@ -454,3 +454,7 @@ fibers/http_json.neon
 fibers/cancellation.neon
 fibers/cancel_scope.neon
 fibers/task_recover.neon
+process/cwd_moves_with_chdir.neon
+process/pid_and_hostname_are_present.neon
+process/env_vars_lists_the_environment.neon
+collections/fs_stat_and_is_file.neon

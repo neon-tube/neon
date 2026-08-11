@@ -10,6 +10,15 @@
 // process interface" in docs/decisions.md.
 
 use std::list;
+use std::string;
+
+/// The failure a process query reports: `cwd`, `chdir` and `hostname` reach the kernel and
+/// the kernel can say no (a deleted working directory, a path that is not a directory, a
+/// permission wall). Its `message` arrives fully assembled -- operation and `strerror` text
+/// -- so a caller has nothing to reconstruct, the same shape `std::io`'s `IoError` has.
+record OsError { message: str }
+impl Display for OsError { fn to_string(v: OsError) -> str { v.message } }
+impl Error for OsError { fn message(v: OsError) -> str { v.message } }
 
 internal mod raw {
     @native("neon_os_argc") fn argc() -> i64
@@ -19,6 +28,15 @@ internal mod raw {
     /// `""` when unset. `env` below asks `has_env` first, which is what keeps a variable
     /// set to the empty string distinguishable from one that is not set at all.
     @native("neon_os_env_get") fn env_get(name: str) -> str
+    /// The working directory and a status: the tuple's tail is a C out-parameter.
+    @native("neon_os_cwd") fn cwd() -> (str, i64)
+    @native("neon_os_chdir") fn chdir(path: str) -> i64
+    /// The host name and a status: the tuple's tail is a C out-parameter.
+    @native("neon_os_hostname") fn hostname() -> (str, i64)
+    @native("neon_os_pid") fn pid() -> i64
+    /// The environment as one NUL-separated block of `KEY=VALUE` entries; `env_vars` splits it.
+    @native("neon_os_environ") fn environ() -> str
+    @native("neon_os_strerror") fn strerror(code: i64) -> str
 }
 
 /// The command line, program path first: `args()[0]` is how the program was invoked and
@@ -40,6 +58,65 @@ fn args() -> List[str] {
 /// `""`, not `null`: the OS keeps the two states distinct and so does this.
 fn env(name: str) -> str | null {
     if raw::has_env(name) { raw::env_get(name) } else { null }
+}
+
+fn fail(code: i64, what: str) throws OsError {
+    throw OsError { message: "#{what}: #{raw::strerror(code)}" };
+}
+
+/// The process's current working directory, absolute. Throws when the kernel refuses --
+/// most concretely when the directory the process was in has since been removed.
+fn cwd() throws OsError -> str {
+    let (dir, code) = raw::cwd();
+    if code < 0 {
+        try fail(code, "cannot get working directory");
+    };
+    dir
+}
+
+/// Move the process to `path`. Every later relative path resolves against it, so this is
+/// process-wide state: a fiber that changes it changes it for all of them. Throws when
+/// `path` is missing, is not a directory, or is not reachable.
+fn chdir(path: str) throws OsError {
+    let code = raw::chdir(path);
+    if code < 0 {
+        try fail(code, "cannot change directory to `#{path}`");
+    };
+}
+
+/// The host's name -- the short name `hostname(1)` prints, not a fully-qualified domain.
+fn hostname() throws OsError -> str {
+    let (name, code) = raw::hostname();
+    if code < 0 {
+        try fail(code, "cannot get hostname");
+    };
+    name
+}
+
+/// This process's id. Total: a running process always has one, so there is nothing to throw.
+fn pid() -> i64 {
+    raw::pid()
+}
+
+/// Every environment variable as a `(name, value)` pair. Split on the FIRST `=`, which is
+/// the one the OS treats as the separator -- a value may contain further `=` and keeps them.
+/// An entry with no `=` at all is skipped rather than guessed at. Order is the OS's and is
+/// not sorted; use `env` for a single lookup, which stays distinct about set-to-empty versus
+/// unset in a way a flattened list cannot.
+fn env_vars() -> List[(str, str)] {
+    let out: List[(str, str)] = [];
+    let block = raw::environ();
+    if string::is_empty(block) {
+        return out;
+    };
+    for entry in string::split(block, "\0") {
+        let split = string::split_once(entry, "=");
+        if split is (str, str) {
+            let (name, value) = split;
+            out = list::push(out, (name, value));
+        };
+    };
+    out
 }
 
 /// Ends the process now, with `code` as its exit status. Buffered output is flushed;

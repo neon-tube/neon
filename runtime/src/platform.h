@@ -37,6 +37,7 @@ typedef int64_t neon_ssize;
 // Before <stdlib.h>: `rand_s` (the CRT's door to the OS CSPRNG) is only declared with it.
 #define _CRT_RAND_S
 
+#include <direct.h>
 #include <fcntl.h>
 #include <io.h>
 #include <limits.h>
@@ -266,6 +267,63 @@ static inline int neon_plat_size(const char* path, int64_t* out) {
     return 0;
 }
 
+// Size, kind and modification time in one attribute query. `is_file` is "not a directory",
+// which is the closest the attribute set gets to POSIX's "regular file". `mtime_ms` converts
+// the `FILETIME` (100ns ticks since 1601) to Unix milliseconds through the same 1601->1970
+// constant `neon_plat_unix_millis` uses.
+static inline int neon_plat_stat(const char* path, int64_t* size, int64_t* is_dir,
+                                 int64_t* is_file, int64_t* mtime_ms) {
+    wchar_t* w = neon_plat_widen(path);
+    if (w == NULL) return -1;
+    WIN32_FILE_ATTRIBUTE_DATA d;
+    int ok = GetFileAttributesExW(w, GetFileExInfoStandard, &d) ? 0 : -1;
+    free(w);
+    if (ok != 0) {
+        errno = neon_plat_errno_from_win32(GetLastError());
+        return -1;
+    }
+    *size = ((int64_t)d.nFileSizeHigh << 32) | (int64_t)d.nFileSizeLow;
+    *is_dir = (d.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 1 : 0;
+    *is_file = *is_dir ? 0 : 1;
+    uint64_t t = ((uint64_t)d.ftLastWriteTime.dwHighDateTime << 32) | d.ftLastWriteTime.dwLowDateTime;
+    *mtime_ms = (int64_t)((t - 116444736000000000ULL) / 10000ULL);
+    return 0;
+}
+
+// The narrow `_getcwd` matches POSIX `getcwd`'s shape closely enough (an `int` length in
+// place of `size_t`), and it decodes into the ANSI code page -- acceptable here because the
+// result is handed straight back through `neon_os_lossy`, which repairs any non-UTF-8 byte.
+static inline char* neon_plat_getcwd(char* buf, size_t n) {
+    return _getcwd(buf, (int)n);
+}
+
+static inline int neon_plat_chdir(const char* path) {
+    wchar_t* w = neon_plat_widen(path);
+    if (w == NULL) return -1;
+    int r = _wchdir(w);
+    free(w);
+    return r;
+}
+
+static inline int64_t neon_plat_getpid(void) {
+    return (int64_t)_getpid();
+}
+
+// `GetComputerNameExA` rather than winsock `gethostname`, which would need `WSAStartup`
+// first. The DNS host name is the same short name a POSIX `gethostname` returns.
+static inline int neon_plat_hostname(char* buf, size_t n) {
+    DWORD size = (DWORD)n;
+    if (!GetComputerNameExA(ComputerNameDnsHostname, buf, &size)) {
+        errno = neon_plat_errno_from_win32(GetLastError());
+        return -1;
+    }
+    return 0;
+}
+
+static inline char** neon_plat_environ(void) {
+    return _environ;
+}
+
 NEON_NORETURN static inline void neon_plat_exit_now(int code) {
     _exit(code);
 }
@@ -369,6 +427,58 @@ static inline int neon_plat_size(const char* path, int64_t* out) {
     if (stat(path, &st) != 0) return -1;
     *out = (int64_t)st.st_size;
     return 0;
+}
+
+// Size, kind and modification time in one `stat`. `is_file` is "regular file", so a
+// directory, symlink target that is a directory, socket or device answers 0 to both
+// questions -- a caller asking "is it a plain file" gets a straight no rather than a
+// surprise. `mtime_ms` is `st_mtime` (whole seconds) scaled to milliseconds, which is the
+// resolution POSIX guarantees everywhere; the sub-second `st_mtim` is not portable enough
+// to promise.
+static inline int neon_plat_stat(const char* path, int64_t* size, int64_t* is_dir,
+                                 int64_t* is_file, int64_t* mtime_ms) {
+    struct stat st;
+    if (stat(path, &st) != 0) return -1;
+    *size = (int64_t)st.st_size;
+    *is_dir = S_ISDIR(st.st_mode) ? 1 : 0;
+    *is_file = S_ISREG(st.st_mode) ? 1 : 0;
+    *mtime_ms = (int64_t)st.st_mtime * 1000;
+    return 0;
+}
+
+// The process's current directory into `buf`; NULL with `errno` (ERANGE when `buf` is too
+// small, which the caller answers by growing and retrying). Same shape as POSIX `getcwd`.
+static inline char* neon_plat_getcwd(char* buf, size_t n) {
+    return getcwd(buf, n);
+}
+
+static inline int neon_plat_chdir(const char* path) {
+    return chdir(path);
+}
+
+static inline int64_t neon_plat_getpid(void) {
+    return (int64_t)getpid();
+}
+
+// The host name into `buf`, always NUL-terminated even when the kernel truncates (POSIX
+// leaves termination unspecified on truncation, so this pins it). 0, or -1 with `errno`.
+static inline int neon_plat_hostname(char* buf, size_t n) {
+    if (n == 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (gethostname(buf, n) != 0) {
+        return -1;
+    }
+    buf[n - 1] = '\0';
+    return 0;
+}
+
+// The environment block: a NULL-terminated array of `KEY=VALUE` strings. `std::os` walks
+// it and splits each on the first `=`.
+static inline char** neon_plat_environ(void) {
+    extern char** environ;
+    return environ;
 }
 
 // Nothing to do: a POSIX stream never translates.
