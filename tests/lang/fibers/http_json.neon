@@ -1,0 +1,36 @@
+use std::channel;
+use std::fiber;
+use std::http;
+use std::io;
+use std::json;
+use std::net;
+
+fn api(req: http::Request) throws http::HttpError -> http::Response {
+    // parse the JSON request body, echo a field back as JSON
+    let doc = try json::parse(req.body) catch (e) { throw http::HttpError { message: e.message } };
+    let name: str = try json::from_json(try json::field(doc, "name")) catch (e) { throw http::HttpError { message: e.message } };
+    http::server::json_response(200, json::object([("hello", name), ("ok", true)]))
+}
+
+fn client_fiber(addr: str, done: channel::Channel[str]) {
+    let resp = http::client::new("http://#{addr}/api")
+        |> http::client::method(:post)
+        |> http::client::json(json::object([("name", "neon")]))
+        |> try! http::client::send();
+    let doc = try! json::parse(resp.body);
+    let hello: str = try! json::from_json(try! json::field(doc, "hello"));
+    try! channel::send(done, "hello=#{hello} status=#{resp.status}");
+}
+
+fn main() {
+    let l = try! net::tcp::listen("127.0.0.1:0");
+    let addr = try! net::tcp::local_addr(l);
+    fiber::runtime_on(1, move () => {
+        let done: channel::Channel[str] = channel::new();
+        fiber::spawn(() => client_fiber(addr, done));
+        let c = try! net::tcp::accept(l);
+        fiber::spawn(move () => { http::server::connection(c, api); });
+        io::println(channel::recv(done) orelse "?");
+    });
+    io::println("done");
+}

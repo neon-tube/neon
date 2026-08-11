@@ -210,6 +210,7 @@ fn reason(status: i64) -> str {
 mod server {
     use std::fiber;
     use std::io::IoError;
+    use std::json;
     use std::net;
     use std::string;
 
@@ -221,6 +222,12 @@ fn ok(body: str) -> Response {
 /// A response with the given status and a text body.
 fn respond(status: i64, body: str) -> Response {
     Response { status: status, headers: [], body: body }
+}
+
+/// A JSON response: serialise `j`, set `Content-Type: application/json`. A handler that
+/// reads a JSON request body parses it with `json::parse(req.body)`.
+fn json_response(status: i64, j: json::Json) -> Response {
+    Response { status: status, headers: [("Content-Type", "application/json")], body: json::stringify(j) }
 }
 
 /// Serve forever: one fiber per connection (`move` hands each accepted socket to its
@@ -295,6 +302,7 @@ fn connection(c: Conn, handler: (Request) throws HttpError -> Response) {
 
 mod client {
     use std::io::IoError;
+    use std::json;
     use std::list;
     use std::net;
     use std::string;
@@ -435,6 +443,13 @@ fn body(r: Req, b: str) -> Req {
 /// bound.
 fn timeout(r: Req, millis: i64) -> Req {
     Req { timeout_ms: millis, ..r }
+}
+
+/// Set a JSON body: serialise `j` and add `Content-Type: application/json`. The reading
+/// side needs no helper — a response body is parsed with `json::parse(resp.body)`.
+fn json(r: Req, j: json::Json) -> Req {
+    let with_body = Req { body: json::stringify(j), ..r };
+    header(with_body, "Content-Type", "application/json")
 }
 
 /// Rebuild `base`'s URL with `p` as its path+query, keeping the scheme and authority.

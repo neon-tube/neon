@@ -1,0 +1,5 @@
+{"esc":"a\nbé😀","n":42,"name":"neon","nil":null,"ok":true,"pi":3.5,"xs":[1,2,3]}
+name=neon n=42
+{"esc":"a\nbé😀","n":42,"name":"neon","nil":null,"ok":true,"pi":3.5,"xs":[1,2,3]}
+bad: unexpected byte at 6, no value here
+done

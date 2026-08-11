@@ -310,3 +310,247 @@ fn field(j: Json, name: str) throws JsonError -> Json {
         _ => throw JsonError { message: "expected an object, found #{what::of(j)}" },
     }
 }
+
+// ---- parsing: text into a `Json` value ----
+//
+// A recursive-descent parser, the mirror of `stringify`. It threads a byte index through
+// each step (no `mut`; every step returns the value it read and the index just past it)
+// and throws `JsonError` naming the offset on the first thing that is not JSON. Numbers
+// with a `.` or an exponent become `f64`, the rest `i64` — the same split the `Json` union
+// draws, and the one place a decoder must guess intent from syntax.
+//
+//     let doc = try json::parse("{\"n\": 1, \"xs\": [true, null]}");
+//     let n: i64 = try json::from_json(try json::field(doc, "n"));
+
+/// The byte at `i`, or -1 at end of input — so scanning never has to special-case the
+/// bounds check against a throw.
+fn byte(s: str, i: i64) -> i64 {
+    if i >= string::byte_len(s) { -1 } else { try! string::byte_at(s, i) }
+}
+
+/// Advance past JSON whitespace (space, tab, newline, carriage return).
+fn skip_ws(s: str, i: i64) -> i64 {
+    let j = i;
+    while byte(s, j) == 32 or byte(s, j) == 9 or byte(s, j) == 10 or byte(s, j) == 13 {
+        j = j + 1;
+    };
+    j
+}
+
+/// Parse a complete document: one value, optional surrounding whitespace, nothing after.
+fn parse(s: str) throws JsonError -> Json {
+    let (v, i) = try parse_value(s, skip_ws(s, 0));
+    let end = skip_ws(s, i);
+    if end != string::byte_len(s) {
+        throw JsonError { message: "unexpected trailing content at byte #{end}" };
+    };
+    v
+}
+
+/// One value at `i` (whitespace already skipped): dispatch on the first byte.
+fn parse_value(s: str, i: i64) throws JsonError -> (Json, i64) {
+    let b = byte(s, i);
+    if b == 123 {           // '{'
+        try parse_object(s, i)
+    } else if b == 91 {     // '['
+        try parse_array(s, i)
+    } else if b == 34 {     // '"'
+        let (str_val, j) = try parse_string(s, i);
+        let v: Json = str_val;
+        (v, j)
+    } else if b == 116 {    // 't' — true
+        try parse_literal(s, i, "true", true)
+    } else if b == 102 {    // 'f' — false
+        try parse_literal(s, i, "false", false)
+    } else if b == 110 {    // 'n' — null
+        try parse_literal(s, i, "null", null)
+    } else if b == 45 or (b >= 48 and b <= 57) {  // '-' or a digit
+        try parse_number(s, i)
+    } else {
+        throw JsonError { message: "unexpected byte at #{i}, no value here" }
+    }
+}
+
+/// Match a keyword (`true`/`false`/`null`) and yield the value it stands for.
+fn parse_literal(s: str, i: i64, word: str, v: Json) throws JsonError -> (Json, i64) {
+    let end = i + string::byte_len(word);
+    if end > string::byte_len(s) or try! string::slice(s, i, end) != word {
+        throw JsonError { message: "invalid literal at byte #{i}" };
+    };
+    (v, end)
+}
+
+/// A string at `i` (which is the opening quote): decode escapes into the value. Returns the
+/// decoded `str` and the index past the closing quote.
+fn parse_string(s: str, i: i64) throws JsonError -> (str, i64) {
+    let out = "";
+    let j = i + 1; // past the opening quote
+    while true {
+        let b = byte(s, j);
+        if b == -1 {
+            throw JsonError { message: "unterminated string from byte #{i}" };
+        };
+        if b == 34 {  // closing '"'
+            return (out, j + 1);
+        };
+        if b == 92 {  // '\' escape
+            let e = byte(s, j + 1);
+            if e == 34 { out = string::concat(out, "\""); j = j + 2; }
+            else if e == 92 { out = string::concat(out, "\\"); j = j + 2; }
+            else if e == 47 { out = string::concat(out, "/"); j = j + 2; }
+            else if e == 110 { out = string::concat(out, "\n"); j = j + 2; }
+            else if e == 116 { out = string::concat(out, "\t"); j = j + 2; }
+            else if e == 114 { out = string::concat(out, "\r"); j = j + 2; }
+            else if e == 98 { out = string::concat(out, byte_str(8)); j = j + 2; }
+            else if e == 102 { out = string::concat(out, byte_str(12)); j = j + 2; }
+            else if e == 117 {  // \uXXXX
+                let (ch, nj) = try parse_unicode_escape(s, j + 2);
+                out = string::concat(out, ch);
+                j = nj;
+            }
+            else { throw JsonError { message: "invalid escape at byte #{j}" }; };
+        } else {
+            // A raw byte (including a UTF-8 continuation): copy it through. `str` is bytes,
+            // so a multi-byte character is copied a byte at a time and reassembles.
+            out = string::concat(out, try! string::slice(s, j, j + 1));
+            j = j + 1;
+        };
+    };
+    (out, j) // unreachable
+}
+
+/// `\uXXXX` at `i` (past the `u`): four hex digits into a UTF-8 encoding. A surrogate pair
+/// (`\uD800`–`\uDBFF` followed by `\uDC00`–`\uDFFF`) is decoded as one code point.
+fn parse_unicode_escape(s: str, i: i64) throws JsonError -> (str, i64) {
+    let hi = try hex4(s, i);
+    if hi >= 55296 and hi <= 56319 {  // high surrogate
+        if byte(s, i + 4) != 92 or byte(s, i + 5) != 117 {
+            throw JsonError { message: "lone surrogate at byte #{i}" };
+        };
+        let lo = try hex4(s, i + 6);
+        if lo < 56320 or lo > 57343 {
+            throw JsonError { message: "invalid low surrogate at byte #{i + 6}" };
+        };
+        let cp = 65536 + (hi - 55296) * 1024 + (lo - 56320);
+        (encode_utf8(cp), i + 10)
+    } else {
+        (encode_utf8(hi), i + 4)
+    }
+}
+
+fn hex4(s: str, i: i64) throws JsonError -> i64 {
+    let v = 0;
+    let k = 0;
+    while k < 4 {
+        let d = hex_digit(byte(s, i + k));
+        if d < 0 {
+            throw JsonError { message: "invalid \\u escape at byte #{i}" };
+        };
+        v = v * 16 + d;
+        k = k + 1;
+    };
+    v
+}
+
+fn hex_digit(b: i64) -> i64 {
+    if b >= 48 and b <= 57 { b - 48 }
+    else if b >= 97 and b <= 102 { b - 97 + 10 }
+    else if b >= 65 and b <= 70 { b - 65 + 10 }
+    else { -1 }
+}
+
+/// A code point as UTF-8 bytes, assembled one byte at a time.
+fn encode_utf8(cp: i64) -> str {
+    if cp < 128 {
+        byte_str(cp)
+    } else if cp < 2048 {
+        string::concat(byte_str(192 + cp / 64), byte_str(128 + cp % 64))
+    } else if cp < 65536 {
+        string::concat(string::concat(byte_str(224 + cp / 4096), byte_str(128 + (cp / 64) % 64)), byte_str(128 + cp % 64))
+    } else {
+        string::concat(string::concat(byte_str(240 + cp / 262144), byte_str(128 + (cp / 4096) % 64)), string::concat(byte_str(128 + (cp / 64) % 64), byte_str(128 + cp % 64)))
+    }
+}
+
+/// A single byte value as a one-byte string.
+@native("neon_str_from_byte") fn byte_str(b: i64) -> str
+
+/// A number at `i`: scan the JSON number token, then read it as `i64` if it is an integer,
+/// `f64` if it has a fraction or exponent.
+fn parse_number(s: str, i: i64) throws JsonError -> (Json, i64) {
+    let j = i;
+    let is_float = false;
+    if byte(s, j) == 45 { j = j + 1; };  // leading '-'
+    while byte(s, j) >= 48 and byte(s, j) <= 57 { j = j + 1; };
+    if byte(s, j) == 46 {  // '.'
+        is_float = true;
+        j = j + 1;
+        while byte(s, j) >= 48 and byte(s, j) <= 57 { j = j + 1; };
+    };
+    if byte(s, j) == 101 or byte(s, j) == 69 {  // 'e' / 'E'
+        is_float = true;
+        j = j + 1;
+        if byte(s, j) == 43 or byte(s, j) == 45 { j = j + 1; };
+        while byte(s, j) >= 48 and byte(s, j) <= 57 { j = j + 1; };
+    };
+    let tok = try! string::slice(s, i, j);
+    if tok == "" or tok == "-" {
+        throw JsonError { message: "expected a number at byte #{i}" };
+    };
+    let val: Json = if is_float {
+        try string::to_float(tok) catch (e) { throw JsonError { message: "bad number `#{tok}`" } }
+    } else {
+        try string::to_int(tok) catch (e) { throw JsonError { message: "bad number `#{tok}`" } }
+    };
+    (val, j)
+}
+
+/// An array at `i` (the opening `[`).
+fn parse_array(s: str, i: i64) throws JsonError -> (Json, i64) {
+    let items: List[Json] = [];
+    let j = skip_ws(s, i + 1);
+    if byte(s, j) == 93 {  // empty ']'
+        return (items, j + 1);
+    };
+    while true {
+        let (v, nj) = try parse_value(s, j);
+        items = list::push(items, v);
+        let k = skip_ws(s, nj);
+        let b = byte(s, k);
+        if b == 93 { return (items, k + 1); };  // ']'
+        if b != 44 {  // ','
+            throw JsonError { message: "expected `,` or `]` at byte #{k}" };
+        };
+        j = skip_ws(s, k + 1);
+    };
+    (items, j) // unreachable
+}
+
+/// An object at `i` (the opening `{`).
+fn parse_object(s: str, i: i64) throws JsonError -> (Json, i64) {
+    let obj: Map[str, Json] = map::new[str, Json]();
+    let j = skip_ws(s, i + 1);
+    if byte(s, j) == 125 {  // empty '}'
+        return (obj, j + 1);
+    };
+    while true {
+        if byte(s, j) != 34 {  // a key must be a string
+            throw JsonError { message: "expected a string key at byte #{j}" };
+        };
+        let (key, kj) = try parse_string(s, j);
+        let colon = skip_ws(s, kj);
+        if byte(s, colon) != 58 {  // ':'
+            throw JsonError { message: "expected `:` at byte #{colon}" };
+        };
+        let (v, vj) = try parse_value(s, skip_ws(s, colon + 1));
+        obj = map::set(obj, key, v);
+        let k = skip_ws(s, vj);
+        let b = byte(s, k);
+        if b == 125 { return (obj, k + 1); };  // '}'
+        if b != 44 {  // ','
+            throw JsonError { message: "expected `,` or `}` at byte #{k}" };
+        };
+        j = skip_ws(s, k + 1);
+    };
+    (obj, j) // unreachable
+}

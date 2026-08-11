@@ -197,6 +197,14 @@ neon_str neon_str_char_at_unchecked(neon_str s, int64_t i) {
     return r;
 }
 
+// A one-byte string from a byte value (0..=255, masked). The low-level inverse of
+// `byte_at`: a decoder that has assembled a UTF-8 byte from an escape emits it with this,
+// and reassembling a character byte-by-byte is how `str`-as-bytes stays honest.
+neon_str neon_str_from_byte(int64_t b) {
+    char c = (char)(unsigned char)(b & 0xFF);
+    return neon_str_new(&c, 1);
+}
+
 // The same byte as `neon_str_char_at_unchecked`, as its numeric value rather than as a
 // one-byte string. Unsigned, so a byte above 0x7F reads as 128..=255 rather than as a
 // negative — the caller is classifying bytes, and a sign here would make every non-ASCII

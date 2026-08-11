@@ -38,6 +38,7 @@ bool neon_str_ends_with(neon_str s, neon_str suffix);
 // error live in Neon and these do the raw work.
 neon_str neon_str_slice_unchecked(neon_str s, int64_t from, int64_t to);
 neon_str neon_str_char_at_unchecked(neon_str s, int64_t i);
+neon_str neon_str_from_byte(int64_t b);
 int64_t neon_str_byte_at_unchecked(neon_str s, int64_t i); // 0..=255, never negative
 int64_t neon_str_index_of(neon_str s, neon_str needle); // -1 when absent
 bool neon_str_is_int(neon_str s);

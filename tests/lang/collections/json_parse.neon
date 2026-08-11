@@ -1,0 +1,21 @@
+// json::parse: text into a Json value — the mirror of stringify. Numbers split i64/f64 by
+// syntax, strings decode escapes (including \uXXXX and surrogate pairs), and a round trip
+// through stringify->parse->stringify is stable.
+use std::io;
+use std::json;
+
+fn main() {
+    let doc = try! json::parse("{\"name\": \"neon\", \"n\": 42, \"pi\": 3.5, \"ok\": true, \"xs\": [1, 2, 3], \"nil\": null, \"esc\": \"a\\nb\\u00e9\\ud83d\\ude00\"}");
+    io::println(json::stringify(doc));
+
+    let name: str = try! json::from_json(try! json::field(doc, "name"));
+    let n: i64 = try! json::from_json(try! json::field(doc, "n"));
+    io::println("name=#{name} n=#{n}");
+
+    // round trip is stable
+    io::println(json::stringify(try! json::parse(json::stringify(doc))));
+
+    // a malformed document names the offense
+    let bad = try json::parse("[1, 2,]") catch (e) { io::println("bad: #{e.message}"); json::object([]) };
+    io::println("done");
+}
