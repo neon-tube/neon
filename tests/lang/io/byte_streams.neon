@@ -1,0 +1,31 @@
+// `Read`/`Write` as a common shape. A `BufReader` splits lines out of an in-memory source
+// exactly as it would out of a file, and `copy` drains any source into any sink -- with no
+// descriptor in sight, because `StringReader`/`StringWriter` are the in-memory implementors
+// that make the protocol testable. State threads on the left, the way `random` does.
+
+use std::io;
+use std::string;
+
+fn main() {
+    // A BufReader over a string yields its lines, newline stripped; the last line, which has
+    // no trailing newline, still comes back once before the `null`.
+    let b0 = io::buffered(io::string_reader("alpha\nbeta\ngamma"));
+    let (b1, l1) = try! io::next_line(b0);
+    let (b2, l2) = try! io::next_line(b1);
+    let (b3, l3) = try! io::next_line(b2);
+    let (_b4, l4) = try! io::next_line(b3);
+    io::println(l1 orelse "<none>");
+    io::println(l2 orelse "<none>");
+    io::println(l3 orelse "<none>");
+    io::println("#{l4 is null}");
+
+    // read_to_end drains the rest in one string; eight bytes here (two lines with newlines).
+    let (_r, all) = try! io::read_to_end(io::string_reader("one\ntwo\n"));
+    io::println("#{string::byte_len(all)}");
+
+    // copy: any Read into any Write. Drain a reader into a StringWriter and read it back.
+    let payload = "payload-bytes";
+    let (_r2, w) = try! io::copy(io::string_reader(payload), io::string_writer());
+    io::println("#{io::written(w) == payload}");
+    io::println(io::written(w));
+}

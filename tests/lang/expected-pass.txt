@@ -211,6 +211,7 @@ integers/shift_negative_amount.neon
 integers/wrapping_add_sub.neon
 integers/wrapping_mul.neon
 integers/wrapping_neg.neon
+io/byte_streams.neon
 match/arm_below_a_binder_is_diagnosed.neon
 match/arm_rebinds_an_outer_local.neon
 match/atom_patterns.neon

@@ -54,3 +54,144 @@ fn read_line() -> str | null {
 fn read_all() -> str {
     raw::read_all()
 }
+
+// ---- byte streams: one shape for reading, one for writing ----
+//
+// `Read` and `Write` are the two-method spine every byte source and sink shares, so a line
+// splitter, a copy loop or a parser is written once against the protocol and runs over a
+// file, a socket, a subprocess pipe or an in-memory buffer. This is Go's io.Reader /
+// io.Writer -- the most reused interface in a standard library, because everything
+// downstream composes on it. `std::fs`'s `File` and `std::net`'s connections are the
+// descriptor-backed implementors; the two below are the in-memory ones that make any
+// `Read`/`Write` consumer testable without one.
+//
+// State-first, the way `std::random` threads its generator: a read hands back the ADVANCED
+// reader beside the bytes, a write hands back the grown writer. An effectful source (a
+// descriptor) threads a handle whose bytes come from the kernel; a pure source (a string in
+// memory) threads a real cursor. One signature covers both because the caller rebinds
+// either the same way -- `let (r, chunk) = io::read(r, 4096)`.
+
+/// A byte source read incrementally. `read` returns the advanced reader and up to `max`
+/// bytes; an EMPTY chunk means end of input -- "done" is a value, the total convention
+/// `read_line` already uses for stdin. A genuine fault is an `IoError`.
+protocol Read for R {
+    fn read(r: R, max: i64) throws IoError -> (R, str)
+}
+
+/// A byte sink. `write` returns the advanced writer, having consumed all of `data`. A short
+/// write is the implementor's to finish, not the caller's to notice.
+protocol Write for W {
+    fn write(w: W, data: str) throws IoError -> W
+}
+
+/// The bite size the buffered helpers pull in. Big enough that a line is almost always one
+/// read; small enough that draining a huge source does not buffer it whole.
+const CHUNK: i64 = 4096
+
+/// A `Read` over a string already in memory: the reference source, and what lets a `Read`
+/// consumer be exercised without a descriptor. The cursor is a byte offset threaded like any
+/// other state; reading at or past the end yields `""`.
+sealed record StringReader { data: str, at: i64 }
+
+fn string_reader(s: str) -> StringReader { StringReader { data: s, at: 0 } }
+
+impl Read for StringReader {
+    fn read(r: StringReader, max: i64) throws IoError -> (StringReader, str) {
+        let left = string::byte_len(r.data) - r.at;
+        let n = if max < left { max } else { left };
+        if n <= 0 {
+            (r, "")
+        } else {
+            // Bounds are the min just taken, so the slice cannot be out of range -- `try!`
+            // states that, rather than folding an impossible `IndexError` into `IoError`.
+            let chunk = try! string::slice(r.data, r.at, r.at + n);
+            (StringReader { data: r.data, at: r.at + n }, chunk)
+        }
+    }
+}
+
+/// A `Write` that accumulates into a string in memory -- the sink half of `StringReader`, and
+/// the way to render something that speaks `Write` without a descriptor. `written` reads the
+/// bytes collected so far.
+sealed record StringWriter { data: str }
+
+fn string_writer() -> StringWriter { StringWriter { data: "" } }
+
+fn written(w: StringWriter) -> str { w.data }
+
+impl Write for StringWriter {
+    fn write(w: StringWriter, data: str) throws IoError -> StringWriter {
+        StringWriter { data: "#{w.data}#{data}" }
+    }
+}
+
+/// A buffered reader over any `Read`: it pulls a `CHUNK` at a time and hands back whole
+/// lines, so a consumer is not calling `read` per byte. State-first -- `read_line` returns
+/// the advanced buffer beside the line.
+sealed record BufReader[R] { inner: R, buf: str, eof: bool }
+
+fn buffered[R](r: R) -> BufReader[R] where R: Read {
+    BufReader { inner: r, buf: "", eof: false }
+}
+
+/// The next line WITHOUT its `\n`, or `null` once the source is drained. Fills from the inner
+/// reader in `CHUNK`-sized bites until a newline is buffered or the source ends; a final line
+/// with no trailing newline is returned once, before the `null`. Named apart from the no-arg
+/// `read_line` that reads stdin -- this language does not overload, and the two are different
+/// operations, not one spelled two ways.
+fn next_line[R](b: BufReader[R]) throws IoError -> (BufReader[R], str | null) where R: Read {
+    let inner = b.inner;
+    let buf = b.buf;
+    let eof = b.eof;
+    while (string::find(buf, "\n") is null) and !eof {
+        let (inner2, chunk) = try read(inner, CHUNK);
+        inner = inner2;
+        if string::is_empty(chunk) {
+            eof = true;
+        } else {
+            buf = "#{buf}#{chunk}";
+        };
+    };
+    let nl = string::find(buf, "\n");
+    if nl is i64 {
+        let line = try! string::slice(buf, 0, nl);
+        let rest = try! string::slice(buf, nl + 1, string::byte_len(buf));
+        (BufReader { inner: inner, buf: rest, eof: eof }, line)
+    } else if string::is_empty(buf) {
+        (BufReader { inner: inner, buf: "", eof: eof }, null)
+    } else {
+        (BufReader { inner: inner, buf: "", eof: eof }, buf)
+    }
+}
+
+/// Everything the source has left, in one string -- `read_line`'s sibling for when structure
+/// does not matter. Reads in `CHUNK`s to end of input.
+fn read_to_end[R](r: R) throws IoError -> (R, str) where R: Read {
+    let inner = r;
+    let acc = "";
+    let done = false;
+    while !done {
+        let (inner2, chunk) = try read(inner, CHUNK);
+        inner = inner2;
+        if string::is_empty(chunk) { done = true; } else { acc = "#{acc}#{chunk}"; };
+    };
+    (inner, acc)
+}
+
+/// Drain a source into a sink, `CHUNK` bytes at a time, handing both back advanced. The one
+/// loop every "send this file to that socket" reduces to, once both ends speak the protocol.
+fn copy[R, W](src: R, dst: W) throws IoError -> (R, W) where R: Read, W: Write {
+    let r = src;
+    let w = dst;
+    let done = false;
+    while !done {
+        let (r2, chunk) = try read(r, CHUNK);
+        r = r2;
+        if string::is_empty(chunk) {
+            done = true;
+        } else {
+            w = try write(w, chunk);
+        };
+    };
+    (r, w)
+}
