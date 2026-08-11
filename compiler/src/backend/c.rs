@@ -426,6 +426,46 @@ fn emit_inst(out: &mut String, types: &TypeTable, f: &Func, inst: &crate::ir::ss
                 var(r),
             );
         }
+        // select_recv is recv widened to a tuple: the runtime writes the element into a
+        // temporary and the winning index into an out-parameter, and this emitter — the only
+        // place that knows the element's C type and the `(i64, T | null)` shape — coerces the
+        // element into the union arm and packs the pair. Same union coercion as recv above.
+        Op::Native { symbol, args } if symbol == "neon_channel_select_recv" => {
+            let Some(r) = inst.result else {
+                return;
+            };
+            // T from the `List[Channel[T]]` argument: a list whose element is a channel.
+            let e = match types.resolve(f.value_repr(args[0])) {
+                Repr::List(inner) => match types.resolve(inner) {
+                    Repr::Runtime { args: ca, .. } if ca.len() == 1 => ca[0].clone(),
+                    other => ice(
+                        other,
+                        "select_recv over a list whose element is not a channel",
+                    ),
+                },
+                other => ice(other, "select_recv on a non-list argument"),
+            };
+            let ec = types.c_type(&e);
+            let res = types.resolve(f.value_repr(r)).clone();
+            let elems = match &res {
+                Repr::Tuple(elems) if elems.len() == 2 => elems,
+                other => ice(other, "select_recv result is not an (index, value) tuple"),
+            };
+            let union = &elems[1];
+            let got = coerce_expr(types, "_crv", &e, union);
+            let none = coerce_expr(types, "((neon_unit){0})", &Repr::Null, union);
+            let tty = types.c_type(&res);
+            let _ = writeln!(
+                out,
+                "{{ {ec} _crv; int64_t _sidx; \
+                 if (neon_channel_select_recv({}, &_crv, &_sidx)) \
+                 {{ {} = ({tty}){{ ._0 = _sidx, ._1 = {got} }}; }} \
+                 else {{ {} = ({tty}){{ ._0 = _sidx, ._1 = {none} }}; }} }}",
+                var(args[0]),
+                var(r),
+                var(r),
+            );
+        }
         Op::Native { symbol, args } if is_list_builder(symbol) => {
             emit_list_builder(out, types, f, inst.result, symbol, args)
         }
