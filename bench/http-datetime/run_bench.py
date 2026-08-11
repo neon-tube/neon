@@ -28,7 +28,7 @@ LANGS = [
     ("C# (.NET)",  ["dotnet", "publish", "dotnet/httpdt.csproj", "-c", "Release", "-o", "dotnet/build"], None, ["./dotnet/build/httpdt"], "dotnet"),
     ("Java",       ["javac", "-d", "java", "java/Main.java"], None, ["java", "-cp", "java", "Main"], "javac"),
     ("Haskell",    ["ghc", "-O2", "-outputdir", "haskell/out", "-o", "haskell/httpdt", "haskell/Main.hs"], None, ["./haskell/httpdt"], "ghc"),
-    ("OCaml",      ["ocamlfind", "ocamlopt", "-package", "unix", "-linkpkg", "ocaml/main.ml", "-o", "ocaml/httpdt"], None, ["./ocaml/httpdt"], "ocamlfind"),
+    ("OCaml",      ["ocamlopt", "-I", "+unix", "unix.cmxa", "ocaml/main.ml", "-o", "ocaml/httpdt"], None, ["./ocaml/httpdt"], "ocamlopt"),
     ("Python",     None, None, ["python3", "python/main.py"], "python3"),
     ("JS (Node)",  None, None, ["node", "js/main.js"], "node"),
     ("JS (Bun)",   None, None, ["bun", "js/main.js"], "bun"),
