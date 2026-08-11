@@ -222,6 +222,140 @@ int64_t neon_str_index_of(neon_str s, neon_str needle) {
     return r;
 }
 
+// ---- codepoints (UTF-8 decode) ----
+//
+// The one decoder every `codepoint_*` native shares, so they can never disagree about where
+// a scalar ends or whether it is valid. It decodes the unit beginning at `d[off]` (with
+// `off < len` assumed) and returns the number of bytes it spans. On a well-formed scalar
+// `*valid` is true and `*cp` is the scalar value; on ANY malformation — a stray
+// continuation byte, a truncated tail, an overlong encoding, a surrogate, or a value past
+// U+10FFFF — it consumes exactly ONE byte, sets `*valid` false and `*cp` to U+FFFD. That
+// one-byte-at-a-time recovery is the whole replacement contract in a single place: it always
+// makes progress and is fully deterministic, so `codepoint_len` counts and `codepoints`
+// emits the same units `is_valid_utf8` judges.
+static size_t utf8_decode(const unsigned char* d, size_t len, size_t off, uint32_t* cp,
+                          bool* valid) {
+    unsigned char b0 = d[off];
+    if (b0 < 0x80) {
+        *cp = b0;
+        *valid = true;
+        return 1;
+    }
+    size_t need;
+    uint32_t c, min;
+    if ((b0 & 0xE0) == 0xC0) {
+        need = 1;
+        c = b0 & 0x1Fu;
+        min = 0x80;
+    } else if ((b0 & 0xF0) == 0xE0) {
+        need = 2;
+        c = b0 & 0x0Fu;
+        min = 0x800;
+    } else if ((b0 & 0xF8) == 0xF0) {
+        need = 3;
+        c = b0 & 0x07u;
+        min = 0x10000;
+    } else {
+        // A continuation byte (0x80..0xBF) or a 5/6-byte lead (0xF8..0xFF) begins nothing.
+        *cp = 0xFFFD;
+        *valid = false;
+        return 1;
+    }
+    if (off + 1 + need > len) { // truncated: the tail runs past the end of the string
+        *cp = 0xFFFD;
+        *valid = false;
+        return 1;
+    }
+    for (size_t k = 1; k <= need; k++) {
+        unsigned char bk = d[off + k];
+        if ((bk & 0xC0) != 0x80) { // a byte that is not a continuation cuts the sequence short
+            *cp = 0xFFFD;
+            *valid = false;
+            return 1;
+        }
+        c = (c << 6) | (uint32_t)(bk & 0x3Fu);
+    }
+    if (c < min || c > 0x10FFFF || (c >= 0xD800 && c <= 0xDFFF)) { // overlong, out of range, surrogate
+        *cp = 0xFFFD;
+        *valid = false;
+        return 1;
+    }
+    *cp = c;
+    *valid = true;
+    return 1 + need;
+}
+
+// The number of Unicode scalar values, decoding by the replacement rule so a byte string
+// that is not UTF-8 still gets a definite count rather than an error — one per scalar, plus
+// one per malformed byte. `byte_len` is the byte twin; the two agree only on ASCII.
+int64_t neon_str_codepoint_len(neon_str s) {
+    const unsigned char* d = (const unsigned char*)neon_str_data(&s);
+    size_t len = neon_str_len(&s), i = 0;
+    int64_t n = 0;
+    while (i < len) {
+        uint32_t cp;
+        bool valid;
+        i += utf8_decode(d, len, i, &cp, &valid);
+        n++;
+    }
+    neon_str_release(s);
+    return n;
+}
+
+// Strict validity: every unit decodes clean, with no replacement anywhere. This is the
+// honest check the replacement-tolerant `codepoint_*` functions deliberately do not make, so
+// a caller that must reject non-UTF-8 input asks here.
+bool neon_str_is_valid_utf8(neon_str s) {
+    const unsigned char* d = (const unsigned char*)neon_str_data(&s);
+    size_t len = neon_str_len(&s), i = 0;
+    bool ok = true;
+    while (i < len) {
+        uint32_t cp;
+        bool valid;
+        i += utf8_decode(d, len, i, &cp, &valid);
+        if (!valid) {
+            ok = false;
+            break;
+        }
+    }
+    neon_str_release(s);
+    return ok;
+}
+
+// The byte width of the scalar at byte offset `off` (1..=4, or 1 for a malformed unit).
+// Paired with `codepoint_here`, this is the advance that keeps `codepoints()` a single
+// linear pass: the loop emits the scalar here and steps `off` on by this.
+int64_t neon_str_utf8_seq_len(neon_str s, int64_t off) {
+    const unsigned char* d = (const unsigned char*)neon_str_data(&s);
+    size_t len = neon_str_len(&s);
+    uint32_t cp;
+    bool valid;
+    size_t w = utf8_decode(d, len, (size_t)off, &cp, &valid);
+    neon_str_release(s);
+    return (int64_t)w;
+}
+
+// The scalar at byte offset `off` as a fresh one-codepoint `str`. A well-formed scalar comes
+// back as its own bytes verbatim — so `codepoints` joined back together reproduces valid
+// input exactly — and a malformed unit comes back as U+FFFD, the replacement character, the
+// same substitution `codepoint_len` counted.
+neon_str neon_str_codepoint_here(neon_str s, int64_t off) {
+    const unsigned char* d = (const unsigned char*)neon_str_data(&s);
+    size_t len = neon_str_len(&s);
+    uint32_t cp;
+    bool valid;
+    size_t w = utf8_decode(d, len, (size_t)off, &cp, &valid);
+    neon_str r;
+    if (valid) {
+        r = neon_str_new((const char*)d + off, w);
+    } else {
+        static const char repl[3] = {(char)0xEF, (char)0xBF, (char)0xBD}; // U+FFFD in UTF-8
+        r = neon_str_new(repl, sizeof repl);
+    }
+    neon_str_release(s);
+    return r;
+}
+
 // Whether the whole string is a decimal integer, optionally signed. Kept separate from
 // parsing so the Neon wrapper decides what to throw.
 bool neon_str_is_int(neon_str s) {

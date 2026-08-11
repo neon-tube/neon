@@ -1,0 +1,30 @@
+// `codepoint_at` indexes CHARACTERS, not bytes: on "héllo", index 1 is the whole two-byte
+// `é`, where `char_at(_, 1)` would hand back its lead byte alone. Out of range — negative,
+// or at or past the codepoint count — throws `IndexError`, which `try?` turns into `null`.
+
+use std::io;
+use std::string;
+
+fn at(s: str, i: i64) {
+    io::println(try? string::codepoint_at(s, i) orelse "OUT OF RANGE");
+}
+
+fn main() {
+    let s = "héllo";
+    at(s, 0);   // h
+    at(s, 1);   // é — the whole character, not a fragment
+    at(s, 2);   // l
+    at(s, 4);   // o
+    at(s, 5);   // OUT OF RANGE — five codepoints, index 5 is past the end
+    at(s, -1);  // OUT OF RANGE — negative throws rather than wrapping
+
+    // One codepoint of each UTF-8 width, indexed by character.
+    let m = "aé€😀";
+    at(m, 0);   // a
+    at(m, 1);   // é
+    at(m, 2);   // €
+    at(m, 3);   // 😀
+    at(m, 4);   // OUT OF RANGE
+
+    at("", 0);  // OUT OF RANGE — the empty string has no codepoint 0
+}

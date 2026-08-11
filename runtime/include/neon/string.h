@@ -46,6 +46,23 @@ int64_t neon_str_parse_int(neon_str s);
 bool neon_str_is_float(neon_str s);      // strtod's grammar, whole string, no trimming
 double neon_str_parse_float(neon_str s);
 
+// The codepoint (Unicode scalar value) layer behind `std::string`'s `codepoint_*` API.
+// `str` is byte-indexed everywhere else here; these read it as UTF-8. Invalid UTF-8 is not
+// an error at this seam — it is decoded by the U+FFFD REPLACEMENT convention: each byte that
+// does not begin or complete a valid scalar is consumed one at a time and counts as a single
+// replacement scalar. So `codepoint_len` and `codepoints` never fail on garbage; the honest
+// "is this actually UTF-8" question is `neon_str_is_valid_utf8`, which the caller asks when
+// it cares.
+int64_t neon_str_codepoint_len(neon_str s);         // scalar-value count, replacement rule
+bool neon_str_is_valid_utf8(neon_str s);            // strict: no replacement, whole string
+// The two primitives that let `codepoints()` run in one linear pass. `utf8_seq_len` is the
+// byte width consumed by the scalar at byte offset `off` (1..=4; 1 for an invalid unit), and
+// `codepoint_here` is that scalar as a fresh one-codepoint `str` (U+FFFD when the unit is
+// invalid). Advancing by the first and emitting the second walks a string codepoint by
+// codepoint without re-decoding from the start.
+int64_t neon_str_utf8_seq_len(neon_str s, int64_t off);
+neon_str neon_str_codepoint_here(neon_str s, int64_t off);
+
 neon_str neon_str_join(neon_list* parts, neon_str sep); // consumes both; List[str] -> str
 
 // Conversions to `str`.
