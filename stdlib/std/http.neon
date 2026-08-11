@@ -364,25 +364,36 @@ fn post(url: str, body: str) throws HttpError | IoError | net::TlsError -> Respo
 // Headers accumulate in call order and are sent in that order; nothing dedups or
 // normalises them, because a request may legitimately repeat a field and the wire order
 // is occasionally load-bearing. `Content-Length` is still added by `send` — don't set it
-// by hand. A `send` with no `url` set throws, rather than the URL parser's less obvious
-// complaint about the empty string.
+// by hand.
+//
+// `new` takes the URL, so a request always has a target by construction. `path` is for
+// the API-client shape — a base URL set once, the path varied per call — and REPLACES the
+// path (and query) of the base, keeping scheme/host/port:
+//
+//     let base = client::new("https://api.example.com");
+//     let a = base |> client::path("/v1/things") |> try! client::send();
+//     let b = base |> client::path("/v1/users")  |> try! client::send();
 
 record Req {
     url: str,
+    // "" means "use the url's own path"; anything else replaces it (resolved in `send`,
+    // where a bad base already has a throw to ride on, so the setter stays non-throwing).
+    path: str,
     method: Method,
     headers: List[(str, str)],
     body: str,
 }
 
-/// A blank request: GET, no url, no headers, empty body. Set what you need through the
-/// pipe; `url` is the one thing `send` requires.
-fn new() -> Req {
-    Req { url: "", method: :get, headers: [], body: "" }
+/// A request to `url` — `http://` or `https://`, the scheme picking the transport — GET,
+/// no headers, empty body, until the pipe says otherwise.
+fn new(url: str) -> Req {
+    Req { url: url, path: "", method: :get, headers: [], body: "" }
 }
 
-/// The target URL. `http://` or `https://`; the scheme picks the transport.
-fn url(r: Req, u: str) -> Req {
-    Req { url: u, ..r }
+/// Replace the path (and query) of the request's URL, keeping scheme/host/port. `p` is a
+/// raw request-target — a leading `/`, percent-encoded, an optional `?query`.
+fn path(r: Req, p: str) -> Req {
+    Req { path: p, ..r }
 }
 
 /// The method: an atom for a standard verb (`:post`, `:put`, ...) or a raw string for an
@@ -402,11 +413,16 @@ fn body(r: Req, b: str) -> Req {
     Req { body: b, ..r }
 }
 
+/// Rebuild `base`'s URL with `p` as its path+query, keeping the scheme and authority.
+fn with_path(base: str, p: str) throws HttpError -> str {
+    let u = try url::parse(base) catch (e) { throw HttpError { message: e.message } };
+    let authority = if u.port == -1 { "#{u.scheme}://#{u.host}" } else { "#{u.scheme}://#{u.host}:#{u.port}" };
+    "#{authority}#{p}"
+}
+
 /// Send the built request and read the full response. The terminal of the pipe.
 fn send(r: Req) throws HttpError | IoError | net::TlsError -> Response {
-    if r.url == "" {
-        throw HttpError { message: "request has no url; set one with `client::url(..)`" };
-    };
-    try request(r.method, r.url, r.headers, r.body)
+    let target = if r.path == "" { r.url } else { try with_path(r.url, r.path) };
+    try request(r.method, target, r.headers, r.body)
 }
 }

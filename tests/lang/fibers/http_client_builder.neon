@@ -17,8 +17,9 @@ fn reflect(req: http::Request) throws http::HttpError -> http::Response {
 }
 
 fn client(addr: str, done: channel::Channel[str]) {
-    let resp = http::client::new()
-        |> http::client::url("http://#{addr}/thing")
+    // new(base) + path(): exercises the base-plus-path split.
+    let resp = http::client::new("http://#{addr}")
+        |> http::client::path("/thing")
         |> http::client::method(:put)
         |> http::client::header("X-Token", "sesame")
         |> http::client::body("payload-here")
