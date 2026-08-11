@@ -225,6 +225,8 @@ fn is_absolute(p: Path) -> bool {
     !plat::root_of(p.s) is null
 }
 
+/// The negation of `is_absolute`: a path that resolves against some other directory rather
+/// than at a root.
 fn is_relative(p: Path) -> bool {
     !is_absolute(p)
 }

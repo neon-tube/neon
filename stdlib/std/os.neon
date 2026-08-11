@@ -60,6 +60,8 @@ fn env(name: str) -> str | null {
     if raw::has_env(name) { raw::env_get(name) } else { null }
 }
 
+/// Throw an `OsError` reading `what`, followed by the `strerror` text for errno `code` -- the
+/// shared failure path for the calls in this module.
 fn fail(code: i64, what: str) throws OsError {
     throw OsError { message: "#{what}: #{raw::strerror(code)}" };
 }

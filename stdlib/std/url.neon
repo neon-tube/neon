@@ -10,9 +10,12 @@
 //     u.query    // "x=1" (no '?'; "" when absent)
 //     u.fragment // "top" (no '#'; "" when absent)
 
+/// Thrown by `parse` when the string is not a URL. The message quotes what was handed in.
 record UrlError { message: str }
 impl Error for UrlError { fn message(v: UrlError) -> str { v.message } }
 
+/// A parsed URL, components RAW (still percent-encoded). `port` is `-1` when the URL names
+/// none; `query` and `fragment` carry no `?`/`#` and are `""` when absent.
 record Url {
     scheme: str,
     host: str,
@@ -28,6 +31,8 @@ internal mod raw {
     @native("neon_url_decode") fn decode(s: str) -> str
 }
 
+/// Parse `s` into a `Url` by RFC 3986, components left raw. Throws `UrlError` when `s` is not
+/// a URL; `decode` is the separate step for reading a component's contents.
 fn parse(s: str) throws UrlError -> Url {
     let (ok, scheme, host, port, path, query, fragment) = raw::parse(s);
     if !ok {

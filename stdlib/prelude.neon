@@ -71,6 +71,8 @@ marker Ord
 
 // ---- the protocols ----
 
+/// How a value renders as text. `to_string` answers "what does this look like", the question
+/// string interpolation and printing ask -- distinct from `Error`'s "what went wrong" below.
 protocol Display for T {
     fn to_string(v: T) -> str
 }
