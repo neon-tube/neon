@@ -55,7 +55,11 @@ fn method_token(m: Method) -> str {
     else { "PATCH" }
 }
 
+/// A received request: the method verbatim off the wire, the request-target, the headers in
+/// the order they arrived, and the fully-buffered body.
 record Request { method: str, target: str, headers: List[(str, str)], body: str }
+/// A response: status code, headers, and the fully-buffered body -- the shape a handler
+/// returns and a client gets back.
 record Response { status: i64, headers: List[(str, str)], body: str }
 
 /// The llhttp accumulator (see `runtime/include/neon/http.h`). Fiber-local by design: the
@@ -89,6 +93,8 @@ type Conn = net::tcp::Stream | net::tls::Stream
 
 // `timeout_ms` of 0 means "wait forever" (the server's per-connection reads); a positive
 // value bounds each read so a client request cannot hang on a peer gone silent.
+/// Read up to `max` bytes off either transport. `timeout_ms` of 0 waits forever; a positive
+/// value bounds the read and throws `TimeoutError` past it.
 fn conn_read(c: Conn, max: i64, timeout_ms: i64) throws IoError | net::TlsError | net::TimeoutError -> str {
     if timeout_ms <= 0 {
         match c {
@@ -103,6 +109,7 @@ fn conn_read(c: Conn, max: i64, timeout_ms: i64) throws IoError | net::TlsError 
     }
 }
 
+/// Write all of `data` to either transport.
 fn conn_write(c: Conn, data: str) throws IoError | net::TlsError {
     match c {
         is net::tcp::Stream => try net::tcp::write(c, data),
@@ -110,6 +117,7 @@ fn conn_write(c: Conn, data: str) throws IoError | net::TlsError {
     };
 }
 
+/// Close the connection on either transport.
 fn conn_close(c: Conn) throws IoError {
     match c {
         is net::tcp::Stream => try net::tcp::close(c),
@@ -147,6 +155,7 @@ fn read_message(c: Conn, p: Parser, pending: str, timeout_ms: i64) throws HttpEr
     "" // unreachable: the loop returns or throws
 }
 
+/// The parser's headers as `(name, value)` pairs, in the order they were received.
 fn collect_headers(p: Parser) -> List[(str, str)] {
     let out: List[(str, str)] = [];
     let n = raw::header_count(p);
@@ -174,6 +183,8 @@ fn header(headers: List[(str, str)], name: str) -> str | null {
 
 // ---- serialisation ----
 
+/// Render `headers` as CRLF-terminated field lines, then a `Content-Length` for `body`, the
+/// blank line, and the body. Content-Length is always added -- do not put it in `headers`.
 fn serialize_headers(headers: List[(str, str)], body: str) -> str {
     let out = "";
     let i = 0;
@@ -356,14 +367,17 @@ fn request_timeout(method: Method, url: str, headers: List[(str, str)], body: st
     resp
 }
 
+/// One request with no timeout -- `request_timeout` with a bound of 0.
 fn request(method: Method, url: str, headers: List[(str, str)], body: str) throws HttpError | IoError | net::TlsError | net::TimeoutError -> Response {
     try request_timeout(method, url, headers, body, 0)
 }
 
+/// GET `url` with no extra headers and an empty body.
 fn get(url: str) throws HttpError | IoError | net::TlsError | net::TimeoutError -> Response {
     try request(:get, url, [], "")
 }
 
+/// POST `body` to `url` with no extra headers.
 fn post(url: str, body: str) throws HttpError | IoError | net::TlsError | net::TimeoutError -> Response {
     try request(:post, url, [], body)
 }
@@ -397,6 +411,9 @@ fn post(url: str, body: str) throws HttpError | IoError | net::TlsError | net::T
 //     let a = base |> client::path("/v1/things") |> try! client::send();
 //     let b = base |> client::path("/v1/users")  |> try! client::send();
 
+/// A request being built up through the pipe: the URL, an optional path override, the method,
+/// the accumulated headers, the body, and a timeout. `send` is the terminal that goes to the
+/// network.
 record Req {
     url: str,
     // "" means "use the url's own path"; anything else replaces it (resolved in `send`,
