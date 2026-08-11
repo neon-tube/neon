@@ -1,0 +1,31 @@
+// Thousands grouping inserts a separator between every run of three digits, counted from
+// the right, with the sign kept outside the grouping. Numbers under a thousand come back
+// untouched, an exact thousand gets exactly one separator, and `i64::MIN` groups like any
+// other negative -- its magnitude is never formed.
+
+use std::io;
+use std::fmt;
+
+fn show(s: str) { io::println(s); }
+
+fn main() {
+    // Under a thousand: nothing to group.
+    show(fmt::group(0));
+    show(fmt::group(7));
+    show(fmt::group(999));
+
+    // An exact thousand: one separator.
+    show(fmt::group(1000));
+
+    // Longer runs, and one that starts a fresh group at the boundary.
+    show(fmt::group(1234567));
+    show(fmt::group(1000000));
+
+    // Negatives keep the sign in front of the grouped magnitude.
+    show(fmt::group(-1234567));
+    show(fmt::group(-9223372036854775808));
+
+    // A different separator.
+    show(fmt::group_with(1234567, "_"));
+    show(fmt::group_with(1234567, " "));
+}

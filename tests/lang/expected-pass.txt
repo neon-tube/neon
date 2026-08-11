@@ -181,6 +181,10 @@ fibers/spawn_and_yield.neon
 fibers/sys_introspection.neon
 fibers/task_await.neon
 fibers/task_crash_propagates.neon
+fmt/format.neon
+fmt/group.neon
+fmt/radix.neon
+fmt/sign_pad_percent.neon
 functions/declaration.neon
 functions/dot_call_rejected.neon
 functions/explicit_type_arguments.neon

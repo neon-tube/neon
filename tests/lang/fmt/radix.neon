@@ -1,0 +1,37 @@
+// Integer radix formatting is sign-and-magnitude: the digits of the absolute value in the
+// base, with a leading `-` for negatives, never two's-complement. The magnitude is never
+// formed as a number -- `-i64::MIN` overflows and would trap -- so `i64::MIN` renders like
+// any other value, which is the case worth pinning.
+
+use std::io;
+use std::fmt;
+
+fn show(s: str) { io::println(s); }
+
+fn main() {
+    // Zero is a single digit, not the empty string.
+    show(fmt::hex(0));
+    show(fmt::oct(0));
+    show(fmt::bin(0));
+
+    // Ordinary positives.
+    show(fmt::hex(255));
+    show(fmt::oct(64));
+    show(fmt::bin(10));
+
+    // Negatives: a leading minus, the magnitude in the base.
+    show(fmt::hex(-42));
+    show(fmt::oct(-8));
+    show(fmt::bin(-5));
+
+    // i64::MIN: magnitude 2^63, never negated.
+    show(fmt::hex(-9223372036854775808));
+    show(fmt::oct(-9223372036854775808));
+    show(fmt::bin(-9223372036854775808));
+
+    // Prefixed variants put the base marker after any sign.
+    show(fmt::hex_prefixed(255));
+    show(fmt::hex_prefixed(-42));
+    show(fmt::oct_prefixed(64));
+    show(fmt::bin_prefixed(-5));
+}
