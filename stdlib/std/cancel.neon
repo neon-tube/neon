@@ -1,0 +1,68 @@
+// Cooperative cancellation: a token a parent hands its children, sets when it wants them
+// to stop, and that they check to unwind cleanly through their own cleanups.
+//
+// A `Token` is a channel that carries no values and is only ever CLOSED. `cancel` closes
+// it; `is_cancelled` is "closed?"; `check` throws so a `try` boundary unwinds. That reuse
+// is the whole implementation, and it buys the important property for free: a fiber
+// blocked on work can wait on its own channel AND the token's at once, so cancellation
+// wakes it out of the block instead of being noticed only after —
+//
+//     // a worker that stops promptly on cancel, even mid-wait:
+//     while true {
+//         let (which, v) = channel::select_recv([work, cancel::channel(token)]);
+//         if which == 1 { return; };            // the token fired: unwind
+//         handle(v orelse break);
+//     }
+//
+// This is Go's context-cancellation model: cooperative (a fiber that never checks is never
+// stopped), propagating (hand the same token down; a child token that also closes when its
+// parent does is a `child` below), and unwinding through ordinary control flow so every
+// `resource` and `defer`-shaped combinator runs. There is no forced kill — a hard
+// `kill(fiber)` is a different, harder question the runtime leaves alone.
+
+use std::channel;
+
+/// Something stopped because its cancellation token fired — not a failure of the work, a
+/// decision to abandon it. Catchable, so a caller can distinguish an abort from an error.
+record Cancelled { message: str }
+impl Error for Cancelled { fn message(v: Cancelled) -> str { v.message } }
+
+/// A cancellation token: shared by copy like the channel it wraps, so a parent and every
+/// child it is handed to see the one signal.
+record Token { ch: channel::Channel[i64] }
+
+/// A fresh, un-cancelled token.
+fn new() -> Token {
+    Token { ch: channel::new() }
+}
+
+/// Signal cancellation. Idempotent — cancelling an already-cancelled token is a no-op, so
+/// two racing cancellers are fine.
+fn cancel(t: Token) {
+    channel::close(t.ch)
+}
+
+/// Whether cancellation has been signalled.
+fn is_cancelled(t: Token) -> bool {
+    channel::is_closed(t.ch)
+}
+
+/// Throw `Cancelled` if the token has fired, so a `try check(t)` at a loop top or before
+/// expensive work unwinds the fiber through its cleanups. Does nothing otherwise.
+fn check(t: Token) throws Cancelled {
+    if is_cancelled(t) {
+        throw Cancelled { message: "operation was cancelled" };
+    }
+}
+
+/// The token's underlying channel, to hand to `channel::select_recv` alongside a work
+/// channel: the token firing means "stop", and cancellation interrupts the wait rather
+/// than being seen only after it. The channel only ever closes, never delivers, so a
+/// select on it returns `(_, null)` exactly when cancellation happens.
+///
+/// (A `child` token that also fires when a parent does — the context tree — is a follow-up:
+/// it needs a watcher fiber whose lifetime is bounded so a never-cancelled parent cannot
+/// leave it blocked forever and keep the runtime from draining.)
+fn channel(t: Token) -> channel::Channel[i64] {
+    t.ch
+}

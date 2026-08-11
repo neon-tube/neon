@@ -450,3 +450,4 @@ fibers/http_client_builder.neon
 fibers/net_timeout.neon
 collections/json_parse.neon
 fibers/http_json.neon
+fibers/cancellation.neon

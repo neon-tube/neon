@@ -1,0 +1,39 @@
+use std::cancel;
+use std::channel;
+use std::fiber;
+use std::io;
+
+// A worker that loops on work OR the cancel token, stopping promptly when cancelled.
+fn worker(work: channel::Channel[i64], token: cancel::Token, done: channel::Channel[str]) {
+    let count = 0;
+    while true {
+        let (which, v) = channel::select_recv([work, cancel::channel(token)]);
+        if which == 1 {
+            try! channel::send(done, "cancelled after #{count} items");
+            return;
+        };
+        if v is i64 as n {
+            count = count + 1;
+        };
+    };
+}
+
+fn main() {
+    fiber::runtime_on(1, () => {
+        let work: channel::Channel[i64] = channel::new();
+        let token = cancel::new();
+        let done: channel::Channel[str] = channel::new();
+        fiber::spawn(() => worker(work, token, done));
+
+        try! channel::send(work, 10);
+        try! channel::send(work, 20);
+        io::println("cancelled before? #{cancel::is_cancelled(token)}");
+        cancel::cancel(token);       // interrupts the worker's select mid-wait
+        io::println("cancelled after? #{cancel::is_cancelled(token)}");
+        io::println(channel::recv(done) orelse "?");
+
+        // check() throws for a try boundary
+        try cancel::check(token) catch (e) { io::println("check threw: #{e.message}") };
+    });
+    io::println("done");
+}

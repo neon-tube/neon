@@ -1,0 +1,5 @@
+cancelled before? false
+cancelled after? true
+cancelled after 2 items
+check threw: operation was cancelled
+done
