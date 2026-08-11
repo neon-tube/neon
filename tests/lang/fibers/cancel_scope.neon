@@ -1,0 +1,24 @@
+use std::cancel;
+use std::channel;
+use std::fiber;
+use std::io;
+
+fn worker(token: cancel::Token, done: channel::Channel[str]) {
+    // block on the token; wake when the scope cancels it
+    channel::recv(cancel::channel(token));
+    try! channel::send(done, "worker stopped");
+}
+
+fn main() {
+    fiber::runtime_on(1, () => {
+        let done: channel::Channel[str] = channel::new();
+        try! cancel::scope((token: cancel::Token) => {
+            fiber::spawn(() => worker(token, done));
+            fiber::yield();
+            io::println("scope body done");
+            // returns here -> token auto-cancelled -> worker wakes
+        });
+        io::println(channel::recv(done) orelse "?");
+    });
+    io::println("done");
+}

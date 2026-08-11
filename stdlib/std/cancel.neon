@@ -21,6 +21,7 @@
 // `kill(fiber)` is a different, harder question the runtime leaves alone.
 
 use std::channel;
+use std::resource;
 
 /// Something stopped because its cancellation token fired — not a failure of the work, a
 /// decision to abandon it. Catchable, so a caller can distinguish an abort from an error.
@@ -65,4 +66,28 @@ fn check(t: Token) throws Cancelled {
 /// leave it blocked forever and keep the runtime from draining.)
 fn channel(t: Token) -> channel::Channel[i64] {
     t.ch
+}
+
+/// Run `body` with a fresh token, cancelling it the moment the region ends — a normal
+/// return OR an unwinding throw. Any fiber `body` spawned with the token is signalled to
+/// stop as `scope` returns, so a subtree cannot outlive the call that owns it. This is the
+/// structured half: cancellation is scoped, not left to leak.
+///
+///     cancel::scope((token) => {
+///         fiber::spawn(() => worker(job, token));  // stops when scope returns
+///         wait_for_result();
+///     });
+///
+/// `body` does not itself throw here (it usually just spawns and waits); a `body` that
+/// spawns joined children and surfaces their failure needs the task-join layer, which
+/// waits on `Task` gaining a catchable failure (today an awaited crash traps). The
+/// cancel-on-exit is throw-safe regardless: a throw THROUGH the scope still fires the
+/// token, because the guarding resource's cleanup runs on the unwinding edge.
+fn scope[R](body: (Token) -> R) throws resource::ReleasedError | resource::NotOwnerError -> R {
+    let t = new();
+    // A resource whose cleanup cancels the token: `using` runs that cleanup when the
+    // body's region ends either way, and keeps it alive across the body (the last-use
+    // trick `using` exists for). `E` is `never` — cancel cannot fail — so no `E` escapes.
+    let guard = resource::new(t, (tok: Token) => { cancel(tok); });
+    try resource::using(guard, body)
 }
