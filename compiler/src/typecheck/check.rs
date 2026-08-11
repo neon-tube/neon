@@ -692,6 +692,7 @@ impl Checker<'_> {
                     // would not resolve as a type.
                     self.fn_body(module, f, &[]);
                     stale_write_lint(self.env, module, f, &mut self.result.warnings);
+                    stale_thread_lint(self.env, module, f, &mut self.result.warnings);
                 }
                 ast::DeclKind::Impl(i) => {
                     // The impl's own `where`s hold throughout its bodies: inside
@@ -713,6 +714,7 @@ impl Checker<'_> {
                     for m in &i.methods {
                         self.fn_body_with_bounds(module, m, &i.generics, extra.clone());
                         stale_write_lint(self.env, module, m, &mut self.result.warnings);
+                        stale_thread_lint(self.env, module, m, &mut self.result.warnings);
                     }
                 }
                 ast::DeclKind::Protocol(p) => {
@@ -4190,6 +4192,174 @@ fn stale_write_lint(
         warnings,
     };
     finder.fn_decl(f);
+}
+
+/// A read of state after a threading call captured its ADVANCE under another name.
+///
+/// `let (rng2, x) = random::int(rng, ..)` produces the advanced generator as `rng2`; a later
+/// read of the pre-advance `rng` in the same block is almost always where `rng2` was meant.
+/// This is the one mechanical cost of state-as-a-value the type checker cannot catch, because
+/// both names hold a perfectly good `Rng`. It fires only when
+///  - the callee THREADS: its first parameter's type is the first element of its tuple return
+///    (`f(s, ..) -> (s, ..)`), the state-first shape every reader, `next` and `Rng` op wears;
+///  - the advance is bound to a REAL fresh name -- not `_`, not a `_`-prefixed
+///    intentionally-unused one (the spelling a deliberate FORK from one state uses), and not
+///    the same name (`let (rng, x) = int(rng, ..)`, the correct rebind);
+///  - and the old name is read later in the block, before it is reassigned. The common
+///    capture-then-assign-back idiom (`let (r2, x) = f(r, ..); r = r2;`) reassigns first, so
+///    it never fires.
+///
+/// `@allow(stale_thread)` opts a function out, for the rare case where reading the earlier
+/// state is the intent.
+fn stale_thread_lint(
+    env: &Env,
+    module: &[String],
+    f: &ast::FnDecl,
+    warnings: &mut Vec<super::result::Warning>,
+) {
+    use crate::ast::visit::{self, Visitor};
+
+    if crate::lint::allows(&f.annotations, crate::lint::Lint::StaleThread) {
+        return;
+    }
+
+    /// Peel `try` / `try!` / `try?` off a value to reach the call underneath.
+    fn peel(e: &ast::Expr) -> &ast::Expr {
+        match &e.kind {
+            ast::ExprKind::Try { body, .. } => peel(body),
+            _ => e,
+        }
+    }
+
+    /// If `e` is `g(s, ..)` with `g` a state threader and `s` a bare local, its name.
+    fn threaded_arg<'a>(env: &Env, module: &[String], e: &'a ast::Expr) -> Option<&'a str> {
+        let ast::ExprKind::Call { callee, args, .. } = &e.kind else {
+            return None;
+        };
+        let ast::ExprKind::Path(p) = &callee.kind else {
+            return None;
+        };
+        let ast::ExprKind::Path(a) = &args.first()?.kind else {
+            return None;
+        };
+        let [s] = a.as_slice() else { return None };
+        let sig = env.fn_named(module, p)?;
+        // Threads iff the first parameter's type is the first element of the tuple return AND
+        // that type is a NOMINAL record. The nominal check is what keeps a parser helper like
+        // `parse_string(s: str, i) -> (str, i)` out: it shares `str` between input and result
+        // by coincidence, where a threader carries a distinct owned state -- a `Rng`, a
+        // `BufReader` -- never a primitive two unrelated positions happen to agree on.
+        let param0 = sig.params.first()?.1;
+        let elems = env.solver.t.as_tuple(sig.ret)?;
+        if *elems.first()? != param0 {
+            return None;
+        }
+        // The state must be a nominal record, and NOT a collection. `List`/`Map`/`Set` are
+        // persistent values a function like `list::partition(xs, ..) -> (List, List)` SPLITS
+        // and the caller legitimately keeps using -- that shares the type by structure, not by
+        // threading. A threaded state is a resource-like identity (`Rng`, a reader) that a
+        // fresh successor is meant to replace. Types cannot tell splitting from threading, so
+        // the collections -- the whole population of the false positive -- are named out.
+        let head = dispatch::nominal_head(env, param0)?;
+        // `nominal_head` is qualified (`std::list::List`), so match the last segment.
+        let last = head.rsplit("::").next().unwrap_or(&head);
+        if matches!(last, "List" | "Map" | "Set") {
+            return None;
+        }
+        Some(s.as_str())
+    }
+
+    /// The name a tuple pattern binds the state (first element) to, if it is a real one --
+    /// `_` and `_`-prefixed names are the author saying the advance is deliberately unused.
+    fn state_binding(pat: &ast::Pattern) -> Option<&str> {
+        let ast::PatternKind::Tuple(ps) = &pat.kind else {
+            return None;
+        };
+        match &ps.first()?.kind {
+            ast::PatternKind::Bind(n) if !n.starts_with('_') => Some(n),
+            _ => None,
+        }
+    }
+
+    /// The first bare read of `name` anywhere in a statement's expressions.
+    struct ReadFinder<'n> {
+        name: &'n str,
+        found: Option<Span>,
+    }
+    impl<'a, 'n> Visitor<'a> for ReadFinder<'n> {
+        fn expr(&mut self, e: &'a Expr) {
+            if self.found.is_some() {
+                return;
+            }
+            if let ExprKind::Path(p) = &e.kind {
+                if let [one] = p.as_slice() {
+                    if one == self.name {
+                        self.found = Some(e.span.clone());
+                        return;
+                    }
+                }
+            }
+            visit::walk_expr(self, e);
+        }
+    }
+
+    struct Walker<'e> {
+        env: &'e Env,
+        module: &'e [String],
+        warnings: &'e mut Vec<super::result::Warning>,
+    }
+    impl<'a, 'e> Visitor<'a> for Walker<'e> {
+        fn block(&mut self, b: &'a ast::Block) {
+            for (i, stmt) in b.stmts.iter().enumerate() {
+                let ast::StmtKind::Let { pat, value, .. } = &stmt.kind else {
+                    continue;
+                };
+                let Some(s2) = state_binding(pat) else {
+                    continue;
+                };
+                let Some(s) = threaded_arg(self.env, self.module, peel(value)) else {
+                    continue;
+                };
+                if s2 == s {
+                    continue; // the correct same-name rebind
+                }
+                // Scan the rest of the block for a read of `s`, stopping once it is reassigned.
+                let mut read = ReadFinder { name: s, found: None };
+                for later in &b.stmts[i + 1..] {
+                    read.stmt(later);
+                    if read.found.is_some() || rebinds(later, s) {
+                        break;
+                    }
+                }
+                if read.found.is_none() {
+                    if let Some(tail) = &b.tail {
+                        read.expr(tail);
+                    }
+                }
+                if let Some(span) = read.found {
+                    self.warnings.push(super::result::Warning {
+                        lint: crate::lint::Lint::StaleThread,
+                        module: self.module.to_vec(),
+                        span,
+                        message: format!(
+                            "`{s}` is read here after a call threaded its advance into `{s2}`. \
+                             This reads the state from BEFORE that call, which is almost always \
+                             where `{s2}` was meant. Thread `{s2}` on instead, or \
+                             `@allow(stale_thread)` if reading the earlier state is deliberate"
+                        ),
+                    });
+                }
+            }
+            visit::walk_block(self, b);
+        }
+    }
+
+    let mut w = Walker {
+        env,
+        module,
+        warnings,
+    };
+    w.fn_decl(f);
 }
 
 /// Whether a statement rebinds `name`: an assignment to it, or a `let` whose pattern

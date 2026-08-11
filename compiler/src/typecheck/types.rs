@@ -767,6 +767,26 @@ impl Types {
         }
     }
 
+    /// The element types of `ty` if it is exactly ONE tuple -- `(A, B)` gives `[A, B]`. `None`
+    /// for a union of tuples, a tuple mixed with anything else, or a non-tuple: a caller that
+    /// wants "the tuple this definitely is" gets it, and everything ambiguous is not a tuple
+    /// for its purposes. The mirror of `as_arrow`, and it shares that method's exactness.
+    pub fn as_tuple(&self, ty: TyId) -> Option<Vec<TyId>> {
+        let d = self.data(ty);
+        if d.base != 0 || d.records != bdd::FALSE || d.arrows != bdd::FALSE {
+            return None;
+        }
+        if !self.atomset_of(d.atoms).is_empty_set() || !self.atomset_of(d.vars).is_empty_set() {
+            return None;
+        }
+        match self.tup_bdd.paths(d.tuples).as_slice() {
+            [(pos, neg)] if neg.is_empty() && pos.len() == 1 => {
+                Some(self.tup_atoms[pos[0] as usize].elems.clone())
+            }
+            _ => None,
+        }
+    }
+
     /// An open structural record: `{x: i64}`, which nominal records satisfy.
     /// `#nominal` is unconstrained, so a `Red` with an `x: i64` is a member.
     pub fn struct_ty(&mut self, fields: Vec<(NameId, TyId)>) -> TyId {

@@ -15,17 +15,22 @@ pub enum Lint {
     /// the old list stays live, so every iteration clones. See `check.rs`'s
     /// `stale_write_lint`.
     StaleWrite,
+    /// A read of state after a threading call captured its ADVANCE under a different name:
+    /// `let (rng2, x) = random::int(rng, ..); .. rng ..` reads the pre-advance `rng`, almost
+    /// always where `rng2` was meant. See `check.rs`'s `stale_thread_lint`.
+    StaleThread,
 }
 
 /// Every lint. The `@allow` error message enumerates this, so a new variant is
 /// user-discoverable the day it lands.
-pub const ALL: &[Lint] = &[Lint::StaleWrite];
+pub const ALL: &[Lint] = &[Lint::StaleWrite, Lint::StaleThread];
 
 impl Lint {
     /// The name `@allow` suppresses this lint under.
     pub fn name(self) -> &'static str {
         match self {
             Lint::StaleWrite => "stale_write",
+            Lint::StaleThread => "stale_thread",
         }
     }
 
