@@ -1,0 +1,17 @@
+// std::regex over PCRE2: literal text, anchors, character classes and word boundaries.
+
+use std::io;
+use std::regex;
+
+fn show(v: bool) { io::println(if v { "yes" } else { "no" }); }
+
+fn main() {
+    let anchored = try! regex::compile("^a[0-9]+z$");
+    show(regex::is_match(anchored, "a123z")); // yes
+    show(regex::is_match(anchored, "a123"));  // no: the $ anchor
+    show(regex::is_match(anchored, "xa1z"));  // no: the ^ anchor
+
+    let word = try! regex::compile("\\bcat\\b");
+    show(regex::is_match(word, "the cat sat")); // yes
+    show(regex::is_match(word, "concatenate")); // no: not a whole word
+}

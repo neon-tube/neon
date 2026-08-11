@@ -30,6 +30,7 @@ set(NEON_RT_SOURCES
     src/os.c
     src/process.c
     src/random.c
+    src/regex.c
     src/time.c
 )
 
@@ -124,6 +125,82 @@ if(MSVC)
     set_source_files_properties(${NEON_RT_MBEDTLS_SOURCES} PROPERTIES COMPILE_OPTIONS "/w")
 else()
     set_source_files_properties(${NEON_RT_MBEDTLS_SOURCES} PROPERTIES COMPILE_OPTIONS "-w;-fno-lto")
+endif()
+
+# PCRE2: the regex engine behind `std::regex` (src/regex.c wraps it). Same treatment as the
+# three parsers above — pinned release tarball, populate-only, the vendored sources compiled
+# straight into every archive variant with warnings suppressed and `-fno-lto`, so the symbols
+# land in the one `libneon_rt*.a` the compiler links (a STATIC add_subdirectory would build a
+# separate libpcre2-8.a and merge nothing, the mbedTLS lesson).
+#
+# Deliberately trimmed: only the 8-bit width, JIT OFF (no sljit — portable and
+# archive-linkable, so matching is the interpreted `pcre2_match`), and none of
+# pcre2grep/pcre2test/the table-generator tool. The release tarball ships the pre-generated
+# `config.h.generic`/`pcre2.h.generic` and the default C-locale `pcre2_chartables.c.dist`, so
+# there is no configure step and nothing depends on PCRE2's build tooling. Unicode is turned
+# on by define (the generic config leaves it off) — `PCRE2_UTF|PCRE2_UCP` need it.
+FetchContent_Declare(
+    pcre2
+    URL      https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.44/pcre2-10.44.tar.bz2
+    URL_HASH SHA256=d34f02e113cf7193a1ebf2770d3ac527088d485d4e047ed10e5d217c6ef5de96
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    SOURCE_SUBDIR  do-not-build
+)
+FetchContent_MakeAvailable(pcre2)
+# The generic (pre-generated) config and public header, plus the default character tables,
+# put where both the vendored sources' quoted includes and our wrapper find them.
+set(NEON_RT_PCRE2_CONFIG ${CMAKE_BINARY_DIR}/pcre2-config)
+configure_file(${pcre2_SOURCE_DIR}/src/config.h.generic
+    ${NEON_RT_PCRE2_CONFIG}/config.h COPYONLY)
+configure_file(${pcre2_SOURCE_DIR}/src/pcre2.h.generic
+    ${NEON_RT_PCRE2_CONFIG}/pcre2.h COPYONLY)
+configure_file(${pcre2_SOURCE_DIR}/src/pcre2_chartables.c.dist
+    ${NEON_RT_PCRE2_CONFIG}/pcre2_chartables.c COPYONLY)
+# The 8-bit interpreted library's standalone sources for 10.44, named explicitly rather than
+# globbed: the tool programs (pcre2_dftables, pcre2test-only fragments), the fuzz harness and
+# the JIT fragments live in the same directory and must not be compiled in. `pcre2_jit_compile.c`
+# stays — without SUPPORT_JIT it compiles to the small stub the rest of the library links against.
+set(NEON_RT_PCRE2_SOURCES
+    ${pcre2_SOURCE_DIR}/src/pcre2_auto_possess.c
+    ${pcre2_SOURCE_DIR}/src/pcre2_chkdint.c
+    ${pcre2_SOURCE_DIR}/src/pcre2_compile.c
+    ${pcre2_SOURCE_DIR}/src/pcre2_config.c
+    ${pcre2_SOURCE_DIR}/src/pcre2_context.c
+    ${pcre2_SOURCE_DIR}/src/pcre2_convert.c
+    ${pcre2_SOURCE_DIR}/src/pcre2_dfa_match.c
+    ${pcre2_SOURCE_DIR}/src/pcre2_error.c
+    ${pcre2_SOURCE_DIR}/src/pcre2_extuni.c
+    ${pcre2_SOURCE_DIR}/src/pcre2_find_bracket.c
+    ${pcre2_SOURCE_DIR}/src/pcre2_jit_compile.c
+    ${pcre2_SOURCE_DIR}/src/pcre2_maketables.c
+    ${pcre2_SOURCE_DIR}/src/pcre2_match.c
+    ${pcre2_SOURCE_DIR}/src/pcre2_match_data.c
+    ${pcre2_SOURCE_DIR}/src/pcre2_newline.c
+    ${pcre2_SOURCE_DIR}/src/pcre2_ord2utf.c
+    ${pcre2_SOURCE_DIR}/src/pcre2_pattern_info.c
+    ${pcre2_SOURCE_DIR}/src/pcre2_script_run.c
+    ${pcre2_SOURCE_DIR}/src/pcre2_serialize.c
+    ${pcre2_SOURCE_DIR}/src/pcre2_string_utils.c
+    ${pcre2_SOURCE_DIR}/src/pcre2_study.c
+    ${pcre2_SOURCE_DIR}/src/pcre2_substitute.c
+    ${pcre2_SOURCE_DIR}/src/pcre2_substring.c
+    ${pcre2_SOURCE_DIR}/src/pcre2_tables.c
+    ${pcre2_SOURCE_DIR}/src/pcre2_ucd.c
+    ${pcre2_SOURCE_DIR}/src/pcre2_valid_utf.c
+    ${pcre2_SOURCE_DIR}/src/pcre2_xclass.c
+    ${NEON_RT_PCRE2_CONFIG}/pcre2_chartables.c
+)
+# 8-bit width, its own config, static linkage, and Unicode — set on the vendored sources
+# only. `src/regex.c` defines the width and static macros itself (it is our code and reads on
+# its own), so it takes none of these.
+set(NEON_RT_PCRE2_DEFS PCRE2_CODE_UNIT_WIDTH=8 HAVE_CONFIG_H PCRE2_STATIC SUPPORT_UNICODE
+    SUPPORT_PCRE2_8)
+if(MSVC)
+    set_source_files_properties(${NEON_RT_PCRE2_SOURCES} PROPERTIES
+        COMPILE_OPTIONS "/w" COMPILE_DEFINITIONS "${NEON_RT_PCRE2_DEFS}")
+else()
+    set_source_files_properties(${NEON_RT_PCRE2_SOURCES} PROPERTIES
+        COMPILE_OPTIONS "-w;-fno-lto" COMPILE_DEFINITIONS "${NEON_RT_PCRE2_DEFS}")
 endif()
 
 # Fibers (docs/design/fibers.md). The swap gadget is per-ABI assembly; x86-64 System V is the
@@ -285,13 +362,15 @@ unset(CMAKE_REQUIRED_LINK_OPTIONS)
 
 function(neon_rt_variant name)
     add_library(${name} STATIC ${NEON_RT_SOURCES} ${NEON_RT_LLHTTP_SOURCES}
-                ${NEON_RT_URIPARSER_SOURCES} ${NEON_RT_MBEDTLS_SOURCES})
+                ${NEON_RT_URIPARSER_SOURCES} ${NEON_RT_MBEDTLS_SOURCES} ${NEON_RT_PCRE2_SOURCES})
     target_include_directories(${name} PUBLIC include)
     # mbedTLS's `library/` is on the path for its own sources (they include "common.h"
-    # sideways); `src/tls.c` uses only the public `include/`.
+    # sideways); `src/tls.c` uses only the public `include/`. The PCRE2 config dir carries the
+    # generic config.h and pcre2.h for both the vendored sources and `src/regex.c`.
     target_include_directories(${name} PRIVATE ${llhttp_SOURCE_DIR}/include
         ${uriparser_SOURCE_DIR}/include ${CMAKE_BINARY_DIR}/uriparser-config
-        ${mbedtls_SOURCE_DIR}/include ${mbedtls_SOURCE_DIR}/library)
+        ${mbedtls_SOURCE_DIR}/include ${mbedtls_SOURCE_DIR}/library
+        ${NEON_RT_PCRE2_CONFIG} ${pcre2_SOURCE_DIR}/src)
     # Warnings-as-errors on every variant: the runtime is warning-clean in all three
     # shapes, and a variant that is only ever built in CI is exactly where rot would go
     # unnoticed.
@@ -378,6 +457,7 @@ if(NEON_RT_TESTS)
         ${NEON_RT_LLHTTP_SOURCES}
         ${NEON_RT_URIPARSER_SOURCES}
         ${NEON_RT_MBEDTLS_SOURCES}
+        ${NEON_RT_PCRE2_SOURCES}
         ${tinyunit_SOURCE_DIR}/tinyunit.c
         tests/init.c
         tests/arith_test.c
@@ -400,6 +480,7 @@ if(NEON_RT_TESTS)
         tests/http_test.c
         tests/url_test.c
         tests/tls_test.c
+        tests/regex_test.c
     )
     # The fiber tests only build where the swap gadget does.
     if(NEON_RT_HAS_FIBERS)
@@ -410,7 +491,7 @@ if(NEON_RT_TESTS)
     endif()
     # The rich assertion and TEST macros use GNU C (__auto_type, constructors, _Generic).
     set_target_properties(neon_rt_tests PROPERTIES C_STANDARD 11 C_EXTENSIONS ON)
-    target_include_directories(neon_rt_tests PRIVATE include src ${tinyunit_SOURCE_DIR} ${llhttp_SOURCE_DIR}/include ${uriparser_SOURCE_DIR}/include ${CMAKE_BINARY_DIR}/uriparser-config ${mbedtls_SOURCE_DIR}/include ${mbedtls_SOURCE_DIR}/library)
+    target_include_directories(neon_rt_tests PRIVATE include src ${tinyunit_SOURCE_DIR} ${llhttp_SOURCE_DIR}/include ${uriparser_SOURCE_DIR}/include ${CMAKE_BINARY_DIR}/uriparser-config ${mbedtls_SOURCE_DIR}/include ${mbedtls_SOURCE_DIR}/library ${NEON_RT_PCRE2_CONFIG} ${pcre2_SOURCE_DIR}/src)
     # `std::math` bottoms out in libm, a separate library on Linux. Not on Windows, where
     # the math functions are in the CRT and there is no `m` to find.
     if(NOT WIN32)

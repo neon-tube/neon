@@ -1,0 +1,24 @@
+// split cuts the subject on each non-empty match of the pattern. A separator at either end
+// yields an empty part there, mirroring string::split.
+
+use std::io;
+use std::list;
+use std::regex;
+
+fn dump(parts: List[str]) {
+    io::println("n=#{list::len(parts)}");
+    for p in parts {
+        io::println("[#{p}]");
+    };
+}
+
+fn main() {
+    let comma = try! regex::compile(",\\s*");
+    dump(regex::split(comma, "a, b,c,  d"));
+
+    let ws = try! regex::compile("\\s+");
+    dump(regex::split(ws, "one two   three"));
+
+    let c = try! regex::compile(",");
+    dump(regex::split(c, ",a,"));
+}

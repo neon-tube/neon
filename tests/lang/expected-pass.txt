@@ -344,6 +344,13 @@ records/union_typed_field.neon
 records/unit_record.neon
 records/value_and_heap_records_same_semantics.neon
 records/value_record_through_any.neon
+regex/bad_pattern.neon
+regex/captures.neon
+regex/find_and_find_all.neon
+regex/literal_anchors_classes.neon
+regex/replace.neon
+regex/split.neon
+regex/utf8.neon
 resources/resource_cleanup_runs_at_last_use.neon
 resources/resource_lifecycle.neon
 resources/resource_with_refcounted_payload.neon

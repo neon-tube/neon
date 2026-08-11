@@ -30,6 +30,7 @@
 #include "neon/portability.h"
 #include "neon/process.h"
 #include "neon/random.h"
+#include "neon/regex.h"
 #include "neon/resource.h"
 #include "neon/string.h"
 #include "neon/time.h"

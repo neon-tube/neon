@@ -1,0 +1,25 @@
+// UTF-8 subjects: PCRE2 runs with UTF | UCP, so `.` spans a whole character and `\w`
+// matches an accented letter — while the offsets a Match reports stay BYTE offsets.
+
+use std::io;
+use std::regex;
+
+fn show(v: bool) { io::println(if v { "yes" } else { "no" }); }
+
+fn main() {
+    // "é" is two bytes, so the "x" after it begins at byte offset 2.
+    let x = try! regex::compile("x");
+    let m = regex::find(x, "éx");
+    if m is regex::Match {
+        io::println("#{m.start} #{m.end} #{m.text}");
+    } else {
+        io::println("none");
+    };
+
+    let word = try! regex::compile("^\\w+$");
+    show(regex::is_match(word, "café")); // \w matches é under UCP
+
+    // `.` matches one character, not one byte: two characters, two replacements.
+    let any = try! regex::compile(".");
+    io::println(regex::replace_all(any, "aé", "#"));
+}

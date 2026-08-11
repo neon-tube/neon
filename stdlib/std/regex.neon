@@ -1,0 +1,195 @@
+// Regular expressions, by PCRE2 (`runtime/src/regex.c` wraps it). Compile a pattern once
+// into a `Regex` and reuse it; the string-pattern helpers in `regex::quick` compile on every
+// call and suit a one-shot match.
+//
+//     let re = try regex::compile("(\\w+)@(\\w+)");
+//     regex::is_match(re, "a@b")          // true
+//     regex::find(re, "x a@b y")          // Match { start: 2, end: 5, text: "a@b" }
+//     regex::captures(re, "a@b")          // ["a@b", "a", "b"]
+//     regex::replace_all(re, "a@b c@d", "$2.$1")   // "b.a d.c"
+//     regex::split(try regex::compile(",\\s*"), "a, b,c")  // ["a", "b", "c"]
+//
+// UTF-8 AND BYTES. Patterns run with PCRE2_UTF | PCRE2_UCP, so `.`, `\w` and the character
+// classes understand UTF-8 subjects and Unicode properties (`\w` matches `é`). Every offset
+// a `Match` reports — and every offset used internally — is a BYTE offset into the subject,
+// the same unit `std::string` counts in.
+//
+// REPLACEMENT SYNTAX (PCRE2's): `$0`/`${0}` is the whole match, `$1`..`$n`/`${n}` a numbered
+// group (an unset group expands to nothing), and `$$` is a literal `$`.
+
+use std::list;
+use std::string;
+
+/// A compiled pattern — an immutable, shareable value (not a resource). Build it with
+/// `compile`; every operation here takes one.
+@runtime("neon_regex") sealed opaque record Regex {}
+
+/// A pattern that PCRE2 rejected, carrying its byte `offset` into the pattern and its
+/// message.
+record CompileError { message: str, offset: i64 }
+impl Display for CompileError {
+    fn to_string(v: CompileError) -> str { "regex compile error at #{v.offset}: #{v.message}" }
+}
+impl Error for CompileError {
+    fn message(v: CompileError) -> str { v.message }
+}
+
+/// One match's span: byte offsets `start`..`end` into the subject, and the matched `text`.
+record Match { start: i64, end: i64, text: str }
+
+internal mod raw {
+    /// The transient result of one match: the ovector, copied out. Read with `match_group`.
+    @runtime("neon_regex_match") sealed opaque record MatchData {}
+
+    /// (regex, ok, offset, message): the compiled object is the head, the gate rides the
+    /// tail as PCRE2's out-parameters. On failure `ok` is false and the returned object
+    /// wraps no code — the language throws before touching it.
+    @native("neon_regex_compile") fn compile(pattern: str) -> (Regex, bool, i64, str)
+    @native("neon_regex_is_match") fn is_match(re: Regex, subject: str) -> bool
+    /// Group count including group 0 (PCRE2's capture count plus one) — a pattern property.
+    @native("neon_regex_group_count") fn group_count(re: Regex) -> i64
+    /// The leftmost match at or after byte `start`. Never null: a non-match is group 0 not
+    /// participating.
+    @native("neon_regex_exec") fn exec(re: Regex, subject: str, start: i64) -> MatchData
+    /// (participated, start, end) for one group of a match.
+    @native("neon_regex_match_group") fn match_group(m: MatchData, group: i64) -> (bool, i64, i64)
+    @native("neon_regex_substitute")
+    fn substitute(re: Regex, subject: str, replacement: str, global: bool) -> str
+}
+
+/// Compile `pattern`, or throw `CompileError` with PCRE2's offset and message.
+fn compile(pattern: str) throws CompileError -> Regex {
+    let (re, ok, offset, message) = raw::compile(pattern);
+    if !ok {
+        throw CompileError { message: message, offset: offset };
+    };
+    re
+}
+
+/// Whether `re` matches anywhere in `subject`.
+fn is_match(re: Regex, subject: str) -> bool {
+    raw::is_match(re, subject)
+}
+
+/// The first match, or `null`. Offsets are byte offsets; `text` is that byte slice.
+fn find(re: Regex, subject: str) -> Match | null {
+    let m = raw::exec(re, subject, 0);
+    let (matched, s, e) = raw::match_group(m, 0);
+    if matched {
+        Match { start: s, end: e, text: try! string::slice(subject, s, e) }
+    } else {
+        null
+    }
+}
+
+/// Every non-overlapping match, left to right. An empty match still counts once; the search
+/// then steps one character past it (by UTF-8 boundary) so it cannot loop forever.
+fn find_all(re: Regex, subject: str) -> List[Match] {
+    let out: List[Match] = [];
+    let n = string::byte_len(subject);
+    let pos = 0;
+    while pos <= n {
+        let m = raw::exec(re, subject, pos);
+        let (matched, s, e) = raw::match_group(m, 0);
+        if !matched {
+            break;
+        };
+        out = list::push(out, Match { start: s, end: e, text: try! string::slice(subject, s, e) });
+        pos = if e > s { e } else { advance(subject, e) };
+    };
+    out
+}
+
+/// Group 0 (the whole match) plus each numbered group of the FIRST match, or `null` when the
+/// pattern does not match. A group that did not participate — the absent side of an
+/// alternation, an unmatched optional — is `null`.
+fn captures(re: Regex, subject: str) -> List[str | null] | null {
+    let count = raw::group_count(re);
+    let m = raw::exec(re, subject, 0);
+    let out: List[str | null] = [];
+    let i = 0;
+    while i < count {
+        let (part, gs, ge) = raw::match_group(m, i);
+        if i == 0 and !part {
+            return null;
+        };
+        let piece: str | null = if part { try! string::slice(subject, gs, ge) } else { null };
+        out = list::push(out, piece);
+        i = i + 1;
+    };
+    out
+}
+
+/// Replace the first match with `replacement` (group refs as documented at the top of this
+/// module). No match leaves `subject` unchanged.
+fn replace(re: Regex, subject: str, replacement: str) -> str {
+    raw::substitute(re, subject, replacement, false)
+}
+
+/// Replace every non-overlapping match with `replacement`.
+fn replace_all(re: Regex, subject: str, replacement: str) -> str {
+    raw::substitute(re, subject, replacement, true)
+}
+
+/// The parts of `subject` between matches of `re`, left to right. A separator must consume
+/// at least one byte: an empty match is not a split point (the search steps past it), so a
+/// pattern that can match nothing returns `[subject]`. A separator at either end yields an
+/// empty part there, mirroring `string::split`.
+fn split(re: Regex, subject: str) -> List[str] {
+    let out: List[str] = [];
+    let n = string::byte_len(subject);
+    let last = 0;
+    let pos = 0;
+    while pos <= n {
+        let m = raw::exec(re, subject, pos);
+        let (matched, s, e) = raw::match_group(m, 0);
+        if !matched {
+            break;
+        };
+        if e == s {
+            pos = advance(subject, s);
+        } else {
+            out = list::push(out, try! string::slice(subject, last, s));
+            last = e;
+            pos = e;
+        };
+    };
+    list::push(out, try! string::slice(subject, last, n))
+}
+
+/// One UTF-8 character past `pos` (past a byte, at the string's end), so a startoffset after
+/// an empty match lands on a character boundary — PCRE2 in UTF mode rejects a mid-character
+/// one. Same byte-length classification `string::chars` uses.
+fn advance(subject: str, pos: i64) -> i64 {
+    let n = string::byte_len(subject);
+    if pos >= n {
+        pos + 1
+    } else {
+        let b = try! string::byte_at(subject, pos);
+        let take = if b < 128 {
+            1
+        } else if b >= 240 { 4 } else if b >= 224 { 3 } else if b >= 192 { 2 } else { 1 };
+        pos + take
+    }
+}
+
+/// String-pattern convenience: compile the pattern, then run one operation. Each throws
+/// `CompileError`. Compiling on every call is the cost; reach for `compile` plus the
+/// `Regex`-taking forms when the same pattern is reused.
+mod quick {
+    fn is_match(pattern: str, subject: str) throws std::regex::CompileError -> bool {
+        std::regex::is_match(try std::regex::compile(pattern), subject)
+    }
+    fn find(pattern: str, subject: str) throws std::regex::CompileError -> std::regex::Match | null {
+        std::regex::find(try std::regex::compile(pattern), subject)
+    }
+    fn find_all(pattern: str, subject: str) throws std::regex::CompileError -> List[std::regex::Match] {
+        std::regex::find_all(try std::regex::compile(pattern), subject)
+    }
+    fn replace_all(pattern: str, subject: str, replacement: str) throws std::regex::CompileError -> str {
+        std::regex::replace_all(try std::regex::compile(pattern), subject, replacement)
+    }
+    fn split(pattern: str, subject: str) throws std::regex::CompileError -> List[str] {
+        std::regex::split(try std::regex::compile(pattern), subject)
+    }
+}
