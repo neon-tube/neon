@@ -145,6 +145,17 @@ impl Repr {
             return true;
         }
         match (self, target) {
+            // A `Recursive` target is a `mu` back-edge: a widening flow into a recursive
+            // position, which the emitter resolves (`TypeTable::resolve`) to the union that
+            // `TyId` names and injects the source into at its variant tag, exactly as it
+            // would for the union written out. The union sits behind a `TyId` this pure
+            // relation cannot unfold, and the source's membership was already settled by the
+            // checker, so — like the `Any` boundary above — this is a place the emitter
+            // handles rather than a shape the static relation enumerates. It surfaces when a
+            // recursive type appears NESTED (a `Recursive` element rather than the expanded
+            // union `repr_of` gives at the root): `(str, i64)` joining to `(J, i64)` passes
+            // `Str` into a `Recursive(J)` tuple slot, and `Str` is one of `J`'s arms.
+            (_, Repr::Recursive(_)) => true,
             (src, Repr::Union(vs)) => {
                 vs.iter().any(|v| v == src)
                     || matches!(src, Repr::Union(from) if from.iter().any(|f| vs.contains(f)))

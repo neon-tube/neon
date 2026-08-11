@@ -360,6 +360,7 @@ types/atom_union.neon
 types/atom_union_mixed_with_other_types.neon
 types/bare_cast_must_be_infallible.neon
 types/cast_triad.neon
+types/element_wise_tuple_join.neon
 types/erased_closure_is_checks_its_signature.neon
 types/erased_generic_is_checks_arguments.neon
 types/erased_generic_map_is_checks_arguments.neon

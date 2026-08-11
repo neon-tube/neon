@@ -90,7 +90,15 @@ pub fn resolve(env: &mut Env, scope: &Scope, spec: &TypeSpec) -> TyId {
         }
         TypeSpecKind::Union(xs) => {
             let ts = resolve_all(env, scope, xs);
-            or_poison(env, &ts, |e| e.solver.t.union_all(&ts))
+            // Absorb a written union of same-arity tuples to its maximal arm, exactly as a
+            // branch join does: `(str,i64) | (J,i64)` is `(J,i64)`, and leaving the two as
+            // distinct tuple leaves makes `repr` emit a union-of-tuples whose coercion to
+            // the joined tuple reads the wrong arm. `absorb_tuple_union` no-ops while a
+            // reserved `mu` id is still pending, so a union inside a recursive body is safe.
+            or_poison(env, &ts, |e| {
+                let u = e.solver.t.union_all(&ts);
+                e.solver.absorb_tuple_union(u)
+            })
         }
         TypeSpecKind::Intersect(xs) => {
             let ts = resolve_all(env, scope, xs);
