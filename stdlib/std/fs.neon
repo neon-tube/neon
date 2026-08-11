@@ -103,12 +103,15 @@ fn exists(p: path::Path) -> bool {
     probe::exists(path::to_str(p))
 }
 
+/// Assemble and throw an `IoError` for `code`: `what` names the operation, `path` the file,
+/// and `strerror` supplies the system message.
 fn fail(code: i64, what: str, path: str) throws IoError {
     throw IoError { message: "#{what} `#{path}`: #{raw::strerror(code)}" };
 }
 
 // ---- handles ----
 
+/// Open `p` for reading. Throws `IoError` if it cannot be opened.
 fn open(p: path::Path) throws IoError -> File {
     let fd = raw::open(path::to_str(p), 0);
     if fd < 0 {
@@ -117,6 +120,7 @@ fn open(p: path::Path) throws IoError -> File {
     raw::guard(fd)
 }
 
+/// Open `p` for writing, creating it or truncating an existing file. Throws `IoError` on failure.
 fn create(p: path::Path) throws IoError -> File {
     let fd = raw::open(path::to_str(p), 1);
     if fd < 0 {
@@ -125,6 +129,7 @@ fn create(p: path::Path) throws IoError -> File {
     raw::guard(fd)
 }
 
+/// Open `p` for appending, creating it if absent -- writes go to the end. Throws `IoError` on failure.
 fn open_append(p: path::Path) throws IoError -> File {
     let fd = raw::open(path::to_str(p), 2);
     if fd < 0 {
@@ -151,6 +156,7 @@ fn fd_of(f: File) throws IoError -> i64 {
 
 // ---- reading and writing through a handle ----
 
+/// The whole file from the current position to EOF, as a `str`. Throws `IoError` on a read error.
 fn read_all(f: File) throws IoError -> str {
     let fd = try fd_of(f);
     let (data, code) = raw::read_all(fd);
@@ -212,24 +218,29 @@ fn read(p: path::Path) throws IoError -> str {
     try read_all(f)
 }
 
+/// The whole file as `Bytes` -- the same bytes as `read`, typed as not-text.
 fn read_bytes(p: path::Path) throws IoError -> Bytes {
     (try read(p)) as Bytes
 }
 
+/// The whole file, split into lines.
 fn read_lines(p: path::Path) throws IoError -> List[str] {
     string::lines(try read(p))
 }
 
+/// Create or truncate `p` and write `data`, opening and closing per call. Throws `IoError` on failure.
 fn write(p: path::Path, data: IoList) throws IoError {
     let f = try create(p);
     try write_all(f, data);
 }
 
+/// Append `data` to `p`, creating it if absent, opening and closing per call. Throws `IoError` on failure.
 fn append(p: path::Path, data: IoList) throws IoError {
     let f = try open_append(p);
     try write_all(f, data);
 }
 
+/// Delete `p`. Throws `IoError` if it cannot be removed.
 fn remove(p: path::Path) throws IoError {
     let code = raw::remove(path::to_str(p));
     if code < 0 {
@@ -249,6 +260,7 @@ fn remove(p: path::Path) throws IoError {
 // runs, so the Windows half could be written against something that executes rather than
 // something that only type-checks. `verify/windows.sh` is that path.
 
+/// Create the directory `p`. Throws `IoError` if it cannot be created -- including when it already exists.
 fn mkdir(p: path::Path) throws IoError {
     let code = raw::mkdir(path::to_str(p));
     if code < 0 {

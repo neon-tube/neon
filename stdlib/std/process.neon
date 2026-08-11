@@ -29,6 +29,8 @@ use std::map;
 use std::resource;
 use std::string;
 
+/// The machinery failed -- no such program, a dead pipe, a wait with nothing to reap. A
+/// child's nonzero exit code is a value, not this.
 record ProcessError { message: str }
 impl Display for ProcessError { fn to_string(v: ProcessError) -> str { v.message } }
 impl Error for ProcessError { fn message(v: ProcessError) -> str { v.message } }
@@ -161,6 +163,7 @@ fn spawn_with(program: str, args: List[str], opts: {
     }
 }
 
+/// The child's process id.
 fn pid(c: Child) -> i64 {
     c.pid
 }
@@ -170,10 +173,12 @@ fn stdin(c: Child) -> Pipe | null {
     c.in_p
 }
 
+/// The read end of the child's stdout, present exactly when it was spawned `:piped`.
 fn stdout(c: Child) -> Pipe | null {
     c.out_p
 }
 
+/// The read end of the child's stderr, present exactly when it was spawned `:piped`.
 fn stderr(c: Child) -> Pipe | null {
     c.err_p
 }
