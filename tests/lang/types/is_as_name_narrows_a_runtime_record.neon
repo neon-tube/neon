@@ -20,7 +20,7 @@ use std::resource;
 // same way.
 fn maybe(present: bool) -> resource::Resource[i64, resource::ReleasedError] | null {
     if present {
-        resource::new[i64, resource::ReleasedError](7, (n: i64) => { io::println("cleanup #{n}"); null })
+        resource::new[i64, resource::ReleasedError](7, (n: i64) => { io::println("cleanup #{n}"); })
     } else {
         null
     }

@@ -29,7 +29,6 @@ fn write_via_handle(p: path::Path, doc: fs::IoList) throws io::IoError {
     try fs::write_all(f, doc);
     try fs::write_all(f, ["more", ["and", "more"]]);
     try fs::close(f);
-    null
 }
 
 fn main() {
