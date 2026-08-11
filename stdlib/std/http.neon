@@ -353,7 +353,8 @@ fn post(url: str, body: str) throws HttpError | IoError | net::TlsError -> Respo
 // rebuilds with one field changed), and `send` is the terminal that actually goes to the
 // network:
 //
-//     let resp = client::to("https://api.example.com/things")
+//     let resp = client::new()
+//         |> client::url("https://api.example.com/things")
 //         |> client::method(:post)
 //         |> client::header("Authorization", "Bearer #{token}")
 //         |> client::header("Content-Type", "application/json")
@@ -363,7 +364,8 @@ fn post(url: str, body: str) throws HttpError | IoError | net::TlsError -> Respo
 // Headers accumulate in call order and are sent in that order; nothing dedups or
 // normalises them, because a request may legitimately repeat a field and the wire order
 // is occasionally load-bearing. `Content-Length` is still added by `send` — don't set it
-// by hand.
+// by hand. A `send` with no `url` set throws, rather than the URL parser's less obvious
+// complaint about the empty string.
 
 record Req {
     url: str,
@@ -372,9 +374,15 @@ record Req {
     body: str,
 }
 
-/// Begin a request to `url`: GET, no headers, empty body, until the pipe says otherwise.
-fn to(url: str) -> Req {
-    Req { url: url, method: :get, headers: [], body: "" }
+/// A blank request: GET, no url, no headers, empty body. Set what you need through the
+/// pipe; `url` is the one thing `send` requires.
+fn new() -> Req {
+    Req { url: "", method: :get, headers: [], body: "" }
+}
+
+/// The target URL. `http://` or `https://`; the scheme picks the transport.
+fn url(r: Req, u: str) -> Req {
+    Req { url: u, ..r }
 }
 
 /// The method: an atom for a standard verb (`:post`, `:put`, ...) or a raw string for an
@@ -396,6 +404,9 @@ fn body(r: Req, b: str) -> Req {
 
 /// Send the built request and read the full response. The terminal of the pipe.
 fn send(r: Req) throws HttpError | IoError | net::TlsError -> Response {
+    if r.url == "" {
+        throw HttpError { message: "request has no url; set one with `client::url(..)`" };
+    };
     try request(r.method, r.url, r.headers, r.body)
 }
 }
