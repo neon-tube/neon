@@ -1,0 +1,31 @@
+// `format` fills each `{}` hole from `args`, left to right. Braces are literal everywhere
+// else in the language, so a bare `{}` is the one sequence it reads as a hole -- no escape
+// and none needed. The argument count must match the hole count exactly; too few or too
+// many both throw `FormatError`, which the last two lines catch and print.
+
+use std::io;
+use std::fmt;
+
+fn show(s: str) { io::println(s); }
+
+fn main() {
+    // The motivating shape: pre-stringified args, one per hole.
+    show(try! fmt::format("{} of {}", ["1,000", "2,000"]));
+
+    // No holes and no args is the template verbatim.
+    show(try! fmt::format("no holes", []));
+
+    // Adjacent holes, a single hole, and holes with text on both sides.
+    show(try! fmt::format("{}{}", ["a", "b"]));
+    show(try! fmt::format("{}", ["x"]));
+    show(try! fmt::format("a{}b{}c", ["-", "+"]));
+
+    // Composed with the helpers above.
+    show(try! fmt::format("{} of {}", [fmt::group(1234567), fmt::group(1000)]));
+
+    // Too few arguments: the count mismatch throws, and the message names both counts.
+    show(try fmt::format("{} {}", ["only one"]) catch (e) { to_string(e) });
+
+    // Too many arguments throws the same way.
+    show(try fmt::format("{}", ["a", "b"]) catch (e) { to_string(e) });
+}

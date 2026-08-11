@@ -11,6 +11,7 @@
 // would be lying -- see "Names count what they say".
 
 use std::string;
+use std::list;
 
 /// Pad on the right to at least `width` bytes. Longer input is returned unchanged: padding
 /// never truncates, because silently losing data to a layout decision is worse than a
@@ -41,4 +42,176 @@ fn pad_left_with(s: str, width: i64, fill: str) -> str {
 /// A float with exactly `places` digits after the point. `to_string` uses `%g`, which is
 /// right for "show me this number" and wrong for a column, where every row must be the same
 /// width. Clamped to [0, 17]: beyond 17 the digits are noise from the binary representation.
+///
+/// Carries the sign, so a column of it lines up on the point, and rounds half to even --
+/// both from the `%.*f` underneath: `fixed(-2.5, 0)` is `"-2"` and `fixed(0.125, 2)` is
+/// `"0.12"`, the even neighbour in each tie.
 @pure @native("neon_f64_to_fixed") fn fixed(x: f64, places: i64) -> str
+
+/// A ratio as a percentage: `percent(0.1234, 1)` is `"12.3%"`. Multiplies by 100 and hands
+/// the rest to `fixed`, so the sign and the rounding are `fixed`'s -- `percent(-0.5, 0)` is
+/// `"-50%"`.
+fn percent(x: f64, decimals: i64) -> str {
+    string::concat(fixed(x * 100.0, decimals), "%")
+}
+
+// ---- integers ----
+//
+// Radix and grouping are integer math and string building, no native of their own. The one
+// primitive borrowed is `neon_byte_to_str`, which turns a digit's byte value into a
+// one-byte `str`; everything else is division and concatenation.
+//
+// Negatives and `i64::MIN` are the whole reason these are written carefully. The magnitude
+// is never negated -- `-i64::MIN` overflows and traps -- so each digit comes from the
+// remainder directly: `%` takes the sign of the dividend, so a negative number yields
+// non-positive remainders, and the digit is that remainder's magnitude. Division truncates
+// toward zero, which walks the value to `0` from either side without ever touching the
+// forbidden `i64::MIN / -1`.
+
+internal mod raw {
+    /// One byte 0..=255 as a one-byte `str`. The inverse of `string::byte_at`.
+    @pure @native("neon_byte_to_str") fn from_byte(b: i64) -> str
+
+    /// A single digit 0..=15 as its lowercase character: `0-9` then `a-f`. `48` is `'0'`
+    /// and `87 + 10` is `'a'`, so the two ranges meet with no table.
+    fn digit(d: i64) -> str {
+        if d < 10 { from_byte(48 + d) } else { from_byte(87 + d) }
+    }
+
+    /// `n` in `base` (2..=16), lowercase, no prefix, with a leading `-` for negatives. Zero
+    /// is `"0"`, not the empty string. Builds most-significant digit last and prepends, so
+    /// the digits come out in reading order.
+    fn to_base(n: i64, base: i64) -> str {
+        if n == 0 {
+            "0"
+        } else {
+            let neg = n < 0;
+            let m = n;
+            let out = "";
+            while m != 0 {
+                let r = m % base;
+                let d = if r < 0 { -r } else { r };
+                out = string::concat(digit(d), out);
+                m = m / base;
+            };
+            if neg { string::concat("-", out) } else { out }
+        }
+    }
+
+    /// Put `p` after any leading `-`, so a signed number reads `-0x2a`, not `0x-2a`.
+    fn with_prefix(s: str, p: str) -> str {
+        if string::starts_with(s, "-") {
+            string::concat(string::concat("-", p), string::strip_prefix(s, "-"))
+        } else {
+            string::concat(p, s)
+        }
+    }
+}
+
+/// Lowercase hexadecimal, no `0x`: `hex(255)` is `"ff"`, `hex(-42)` is `"-2a"`. The
+/// magnitude is rendered in base 16 with the sign out front -- not two's-complement, which
+/// would make `hex(-1)` a wall of `f`s and depend on the width. `i64::MIN` is safe: its
+/// magnitude is never formed.
+fn hex(n: i64) -> str { raw::to_base(n, 16) }
+
+/// Octal, no `0o`: `oct(64)` is `"100"`. Sign-and-magnitude like `hex`.
+fn oct(n: i64) -> str { raw::to_base(n, 8) }
+
+/// Binary, no `0b`: `bin(10)` is `"1010"`, `bin(0)` is `"0"`. Sign-and-magnitude like `hex`.
+fn bin(n: i64) -> str { raw::to_base(n, 2) }
+
+/// `hex` with a `0x`, after the sign: `hex_prefixed(-42)` is `"-0x2a"`.
+fn hex_prefixed(n: i64) -> str { raw::with_prefix(hex(n), "0x") }
+
+/// `oct` with a `0o`, after the sign.
+fn oct_prefixed(n: i64) -> str { raw::with_prefix(oct(n), "0o") }
+
+/// `bin` with a `0b`, after the sign.
+fn bin_prefixed(n: i64) -> str { raw::with_prefix(bin(n), "0b") }
+
+/// A decimal integer with `sep` between each group of three digits, counted from the right:
+/// `group_with(1234567, ",")` is `"1,234,567"`. The sign sits outside the grouping, so
+/// `group_with(-1234, ",")` is `"-1,234"`, and numbers under a thousand are returned as-is.
+fn group_with(n: i64, sep: str) -> str {
+    let s = raw::to_base(n, 10);
+    let neg = string::starts_with(s, "-");
+    let digits = if neg { string::strip_prefix(s, "-") } else { s };
+    let cs = string::chars(digits);
+    let total = list::len(cs);
+    let out = "";
+    let i = 0;
+    while i < total {
+        // A separator goes before every position whose distance from the right is a
+        // non-zero multiple of three -- i.e. at the front of each full group but not at
+        // the very start of the number.
+        if i > 0 and (total - i) % 3 == 0 {
+            out = string::concat(out, sep);
+        };
+        out = string::concat(out, cs[i]);
+        i = i + 1;
+    };
+    if neg { string::concat("-", out) } else { out }
+}
+
+/// Thousands separators with a comma: `group(1234567)` is `"1,234,567"`. `group_with` for
+/// any other separator, such as a locale's `.` or a thin space.
+fn group(n: i64) -> str { group_with(n, ",") }
+
+/// The sign of `n` as a character: `"-"` when negative, `"+"` otherwise -- zero counts as
+/// non-negative and reads `"+"`. For the number itself carrying a forced sign, use `signed`.
+fn sign(n: i64) -> str {
+    if n < 0 { "-" } else { "+" }
+}
+
+/// The number with an explicit sign always shown: `signed(42)` is `"+42"`, `signed(-42)` is
+/// `"-42"`, `signed(0)` is `"+0"`. Negatives already print their `-`, so only the
+/// non-negative case gains a `+`.
+fn signed(n: i64) -> str {
+    let s = raw::to_base(n, 10);
+    if string::starts_with(s, "-") { s } else { string::concat("+", s) }
+}
+
+/// A decimal integer zero-padded on the left to at least `width` bytes, the sign included in
+/// the width: `pad_int(42, 4)` is `"0042"` and `pad_int(-42, 4)` is `"-042"`. The zeros go
+/// between the sign and the digits, where a leading zero belongs; a number already `width`
+/// wide or wider is returned unchanged, because padding never truncates.
+fn pad_int(n: i64, width: i64) -> str {
+    let s = raw::to_base(n, 10);
+    let neg = string::starts_with(s, "-");
+    let prefix = if neg { "-" } else { "" };
+    let digits = if neg { string::strip_prefix(s, "-") } else { s };
+    string::concat(prefix, pad_left_with(digits, width - string::byte_len(prefix), "0"))
+}
+
+/// Thrown by `format` when the number of `{}` holes does not match the number of arguments.
+/// Substitution is all-or-nothing: a mismatch is a bug in the call, not something to paper
+/// over by dropping an argument or leaving a hole.
+record FormatError { message: str }
+impl Display for FormatError { fn to_string(v: FormatError) -> str { v.message } }
+impl Error for FormatError { fn message(v: FormatError) -> str { v.message } }
+
+/// A positional template: each `{}` in `template` is replaced, left to right, by the
+/// matching entry of `args` -- `format("#{} of #{}", [group(a), group(b)])`. Kept to
+/// `List[str]` on purpose, so the caller stringifies each value through `#{}` or a helper
+/// here and nothing needs a heterogeneous `Any`.
+///
+/// There is no `{}` escape: `{` and `}` are literal everywhere else in the language (see
+/// interpolation), and a two-character `{}` is the one sequence this reads as a hole. The
+/// count must match exactly -- too few or too many arguments both throw `FormatError`.
+fn format(template: str, args: List[str]) throws FormatError -> str {
+    // Splitting on `{}` gives one more part than there are holes: the text around them.
+    let parts = string::split(template, "{}");
+    let holes = list::len(parts) - 1;
+    let n = list::len(args);
+    if holes != n {
+        throw FormatError { message: "template has #{holes} `{}` hole(s) but #{n} argument(s) given" };
+    };
+    let out = parts[0];
+    let i = 0;
+    while i < n {
+        out = string::concat(out, args[i]);
+        out = string::concat(out, parts[i + 1]);
+        i = i + 1;
+    };
+    out
+}
