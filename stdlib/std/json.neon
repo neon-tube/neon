@@ -355,9 +355,7 @@ fn parse_value(s: str, i: i64) throws JsonError -> (Json, i64) {
     } else if b == 91 {     // '['
         try parse_array(s, i)
     } else if b == 34 {     // '"'
-        let (str_val, j) = try parse_string(s, i);
-        let v: Json = str_val;
-        (v, j)
+        try parse_string(s, i)
     } else if b == 116 {    // 't' — true
         try parse_literal(s, i, "true", true)
     } else if b == 102 {    // 'f' — false
