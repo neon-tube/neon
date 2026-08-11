@@ -43,7 +43,12 @@ fn compile(src: &str, stage: Stage) -> ir::ssa::Program {
     let tokens = lexer::lex(src).expect("lexes");
     let (module, perrs) = parser::parse(&tokens, src.len());
     assert!(perrs.is_empty(), "parses: {perrs:?}");
-    let mut module = module.expect("a module");
+    let module = module.expect("a module");
+    // Expand before numbering, as `frontend.rs::parse_one` does, so `@derive` has run and a
+    // derived impl exists to lower against (see `expand.rs`'s "forgotten in one pipeline").
+    let ecfg = neon_compiler::expand::Config::for_host(std::iter::empty());
+    let (mut module, _em, eerrs) = neon_compiler::expand::expand(module, &ecfg);
+    assert!(eerrs.is_empty(), "expands: {eerrs:?}");
     neon_compiler::ast::number_exprs_from(&mut module, next_id);
     let mut modules: Vec<(Vec<String>, &_)> =
         std_owned.iter().map(|(p, m)| (p.clone(), m)).collect();

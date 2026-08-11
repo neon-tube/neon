@@ -84,7 +84,15 @@ fn report() {
         if !perrs.is_empty() {
             continue;
         }
-        let Some(mut module) = module else { continue };
+        let Some(module) = module else { continue };
+        // Expand before numbering, as `frontend.rs::parse_one` does -- this runs `@derive`,
+        // so a derived impl exists to lower a dispatch against (see `expand.rs`'s "forgotten
+        // in one pipeline"). `parse_from` already expands the stdlib.
+        let ecfg = neon_compiler::expand::Config::for_host(std::iter::empty());
+        let (mut module, _em, eerrs) = neon_compiler::expand::expand(module, &ecfg);
+        if !eerrs.is_empty() {
+            continue;
+        }
         neon_compiler::ast::number_exprs_from(&mut module, next_id);
         let mut modules: Vec<(Vec<String>, &_)> =
             std_owned.iter().map(|(p, m)| (p.clone(), m)).collect();

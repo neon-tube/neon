@@ -1,7 +1,8 @@
 // `json::decode[T]` / `encode` — wire text straight to a value and back. The turbofish is
 // the dispatch subject `from_json` otherwise takes from an expected type, so a decode needs
 // no `let x: T` annotation and works in expression position, where there is nothing to
-// annotate.
+// annotate. Config carries DERIVED impls, so this is also the first corpus program to route
+// a derived impl through bound dispatch (`decode[Config]`, `encode`'s `where T: ToJson`).
 
 use std::io;
 use std::json;

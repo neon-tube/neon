@@ -73,7 +73,19 @@ fn lowered_corpus() -> Vec<(String, Program, neon_compiler::typecheck::types::Ty
         if !perrs.is_empty() {
             continue;
         }
-        let Some(mut module) = module else { continue };
+        let Some(module) = module else { continue };
+
+        // EXPAND the program module, exactly as `frontend.rs::parse_one` does before
+        // numbering -- this is the pass that runs `@derive`, so a derived impl exists in
+        // the table to lower a bound- or direct-dispatch call against. Omitting it (this
+        // harness did) makes every derived-impl-at-lowering call miss: precisely the
+        // "forgotten in one pipeline" failure `expand.rs` warns about. `parse_from` already
+        // expands the stdlib modules; the program module has to be expanded here too.
+        let ecfg = neon_compiler::expand::Config::for_host(std::iter::empty());
+        let (mut module, _emeta, eerrs) = neon_compiler::expand::expand(module, &ecfg);
+        if !eerrs.is_empty() {
+            continue;
+        }
 
         // The real pipeline: stdlib numbered from 0, the program numbered after it, so
         // one `TypecheckResult` covers both and stdlib bodies are checked and lowered.
