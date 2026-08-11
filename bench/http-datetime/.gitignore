@@ -1,0 +1,16 @@
+# build outputs
+*/httpdt
+neon/_neon/
+neon/target/
+rust/target/
+dotnet/build/
+dotnet/obj/
+dotnet/bin/
+haskell/out/
+haskell/*.o
+haskell/*.hi
+ocaml/*.o
+ocaml/*.cm*
+zig/.zig-cache/
+c/httpdt
+cpp/httpdt

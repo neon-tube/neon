@@ -1,0 +1,21 @@
+// A static HTTP server that answers every request with the current time in ISO 8601.
+// The whole neon networking stack in one program: `fiber::runtime` takes every core and
+// accepts on the TCP seam, llhttp parses each request behind `http::server::serve`, and
+// `time::now` reads the wall clock for the reply. Each connection runs on its own fiber,
+// so a blocking read parks that fiber and never the thread.
+
+use std::net;
+use std::http;
+use std::time;
+use std::fiber;
+use std::os;
+
+fn main() {
+    let port = os::env("PORT") orelse "18080";
+    fiber::runtime(() => {
+        let l = try! net::tcp::listen("127.0.0.1:#{port}");
+        try! http::server::serve(l, (req: http::Request) => {
+            http::server::ok(time::format_iso(time::now()))
+        });
+    });
+}
