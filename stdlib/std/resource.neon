@@ -70,6 +70,9 @@ internal mod raw {
     @native("neon_resource_cleanup") fn cleanup[T, E](r: Resource[T, E]) -> (T) throws E -> ()
 }
 
+/// Wrap `payload` and its `cleanup` into a resource owned by this fiber. `cleanup` runs once,
+/// on the first `release` (or `take` disarms it unrun); its error type `E` is the one
+/// `release` throws.
 fn new[T, E](payload: T, cleanup: (T) throws E -> ()) -> Resource[T, E] {
     raw::new(payload, cleanup)
 }
@@ -112,6 +115,8 @@ fn take[T, E](r: Resource[T, E]) -> T | null {
     if code == 0 { payload } else { null }
 }
 
+/// Whether `r` still holds a payload whose cleanup has not run -- false once it has been
+/// released or taken.
 fn is_live[T, E](r: Resource[T, E]) -> bool {
     raw::is_live(r)
 }

@@ -462,6 +462,8 @@ fn parse_unicode_escape(s: str, i: i64) throws JsonError -> (str, i64) {
     }
 }
 
+/// The four hex digits at byte `i` as a number. Throws `JsonError` if any of them is not a
+/// hex digit -- the callers use it to read a `\uXXXX` code unit.
 fn hex4(s: str, i: i64) throws JsonError -> i64 {
     let v = 0;
     let k = 0;
@@ -476,6 +478,8 @@ fn hex4(s: str, i: i64) throws JsonError -> i64 {
     v
 }
 
+/// The value 0–15 of an ASCII hex-digit byte `b` (`0`–`9`, `a`–`f`, `A`–`F`), or `-1` when
+/// `b` is not one.
 fn hex_digit(b: i64) -> i64 {
     if b >= 48 and b <= 57 { b - 48 }
     else if b >= 97 and b <= 102 { b - 97 + 10 }
