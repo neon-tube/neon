@@ -1087,6 +1087,57 @@ void neon_task_lang_await(neon_task_ref* r, void* out) {
     neon_release((neon_header*)r);
 }
 
+// RECOVER: await, but a crashed task is OBSERVED rather than propagated. Returns true with
+// the result in `out`, or false when the body crashed — leaving `out` zeroed so a
+// pointer-typed result reads as a release-safe NULL. This is the recover mechanism the
+// language's crash model wants: no longjmp (which would trip glibc's __longjmp_chk and
+// side-step the ASan fiber annotations — the same reason crash isolation uses the swap
+// gadget), and no partial-stack unwind. The recoverable work already ran in its OWN fiber,
+// whose arena the scheduler tore down on the crash through the ordinary teardown walk, so
+// there is nothing here to clean up and nothing leaked; recover simply reads `failed`. A
+// crash stays OUT of the `throws` channel — it is a bug, not a reactable condition — and
+// surfaces to a supervisor as a distinct outcome instead.
+static bool neon_task_lang_recover_impl(neon_task_lang* t, void* out) {
+    pthread_mutex_lock(&t->mu);
+    if (!t->done && !t->failed) {
+        t->awaiter = neon_fiber_current();
+        pthread_mutex_unlock(&t->mu);
+        neon_fiber_park();
+        pthread_mutex_lock(&t->mu);
+    }
+    bool failed = t->failed;
+    bool lost = !failed && t->taken;
+    if (!failed && !lost) {
+        t->taken = true;
+    }
+    pthread_mutex_unlock(&t->mu);
+    if (lost) {
+        // A taken result is a usage bug, the same as double await — a trap, not a recover.
+        neon_trap("task::recover: a task's result can be taken once");
+    }
+    if (failed) {
+        memset(out, 0, t->w->size);
+        return false;
+    }
+    neon_transfer_begin();
+    if (t->w->copy) {
+        t->w->copy((const void*)(t + 1), out);
+    } else {
+        memcpy(out, (const void*)(t + 1), t->w->size);
+    }
+    neon_transfer_end();
+    if (t->w->release) {
+        t->w->release((void*)(t + 1));
+    }
+    return true;
+}
+
+bool neon_task_lang_recover(neon_task_ref* r, void* out) {
+    bool ok = neon_task_lang_recover_impl(r->body, out);
+    neon_release((neon_header*)r);
+    return ok;
+}
+
 void neon_wcopy_task(const void* src, void* dst) {
     neon_task_ref* r = *(neon_task_ref* const*)src;
     neon_retain_shared((neon_header*)r->body);

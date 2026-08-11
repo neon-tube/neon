@@ -1,0 +1,31 @@
+// task::recover — supervision, not error handling. A crashed task body (a trap, a bug) is
+// OBSERVED as `Panic` rather than propagated, so the supervisor carries on; a task that
+// completes recovers to its value. The crash stays out of the `throws` channel entirely,
+// and there is no longjmp — the crashed work ran in its own fiber, torn down cleanly by
+// crash isolation. (The trap's own report goes to stderr; stdout is the golden.)
+use std::fiber;
+use std::io;
+use std::task;
+
+fn crashy() -> i64 {
+    let xs = [1, 2, 3];
+    xs[99]  // bounds trap: the body crashes
+}
+fn good() -> i64 { 42 }
+
+fn main() {
+    fiber::runtime_on(1, () => {
+        let r1 = task::recover(task::spawn(crashy));
+        match r1 {
+            is task::Panic => io::println("recovered a crash, carrying on"),
+            is i64 => io::println("got #{r1}"),
+        };
+        let r2 = task::recover(task::spawn(good));
+        match r2 {
+            is task::Panic => io::println("crashed?!"),
+            is i64 => io::println("good -> #{r2}"),
+        };
+        io::println("supervisor still alive");
+    });
+    io::println("done");
+}

@@ -115,6 +115,10 @@ neon_task_ref* neon_task_lang_spawn(neon_closure body, const neon_witness* w,
 // One-shot: a second await traps, and awaiting a task whose body CRASHED traps too — the
 // failure propagates along await edges. Consumes the handle reference.
 void neon_task_lang_await(neon_task_ref* t, void* out);
+// Await, but observe a crash rather than propagating it: true with the result in `out`,
+// false when the body crashed (`out` left zeroed). The recover mechanism — no longjmp, no
+// partial unwind; the crashed work's own fiber was already torn down. Consumes `t`.
+bool neon_task_lang_recover(neon_task_ref* t, void* out);
 
 // The witness `copy` for a task-handle slot: retain + pointer copy (a shared identity,
 // like a channel). Used by emitted witness tables when a Task crosses fibers.

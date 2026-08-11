@@ -26,4 +26,36 @@
 @native("neon_task_lang_spawn") fn spawn[T](body: () -> T) -> Task[T]
 
 /// Block this fiber until the task completes, then return its result. One-shot.
+///
+/// If the task's body CRASHED (a trap — a bug, not a reactable condition), `await`
+/// propagates it: this fiber crashes too, and the failure travels up the await edge. That
+/// is the "let it crash" default a linked child wants. To SUPERVISE a child — observe a
+/// crash and carry on — use `recover` instead.
 @native("neon_task_lang_await") fn await[T](t: Task[T]) -> T
+
+/// A task's body crashed. NOT an `Error`: a crash is a bug, not one of the expected,
+/// reactable conditions `throws` is for, so it never enters the error channel — a
+/// supervisor observes it as this distinct outcome and decides what to do (restart, log,
+/// escalate). It carries no cause today; capturing the trap message into it is a follow-up.
+record Panic {}
+
+internal mod raw {
+    /// (ok, value): ok true with the result, false when the body crashed (value zeroed).
+    @native("neon_task_lang_recover") fn recover[T](t: Task[T]) -> (bool, T)
+}
+
+/// Await, but RECOVER a crash instead of propagating it: the task's result, or `Panic`
+/// when its body crashed. This is supervision — the crash is caught at the await edge
+/// (the body ran in its own fiber, already torn down cleanly by crash isolation; there is
+/// no longjmp and no half-unwound stack), and stays OUT of the `throws` channel:
+///
+///     match task::recover(t) {
+///         is Panic => restart(),
+///         is i64 as n => use(n),
+///     }
+///
+/// One-shot, like `await`; recovering an already-taken task traps (a usage bug).
+fn recover[T](t: Task[T]) -> T | Panic {
+    let (ok, value) = raw::recover(t);
+    if ok { value } else { Panic {} }
+}
