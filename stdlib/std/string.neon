@@ -100,6 +100,50 @@ fn find(s: str, needle: str) -> i64 | null {
 @pure @native("neon_str_repeat") fn repeat(s: str, n: i64) -> str
 @pure @native("neon_str_is_empty") fn is_empty(s: str) -> bool
 
+// ---- padding to a width ----
+//
+// Widths are in BYTES: right for a monospace column of ASCII, a deliberate simplification
+// for anything wider, where a multi-byte codepoint counts as its byte length rather than one
+// column. Nothing truncates -- a string already at or over the width is returned unchanged.
+// `std::fmt` re-exports these under its column-formatting names (`pad`/`pad_left`).
+
+/// Padded on the RIGHT to `width` with spaces (left-justified). Python's `ljust`,
+/// JavaScript's `padEnd`.
+fn pad_end(s: str, width: i64) -> str {
+    pad_end_with(s, width, " ")
+}
+
+/// Padded on the LEFT to `width` with spaces (right-justified) -- what a column of numbers
+/// wants. Python's `rjust`, JavaScript's `padStart`.
+fn pad_start(s: str, width: i64) -> str {
+    pad_start_with(s, width, " ")
+}
+
+/// `pad_end` with `fill` instead of spaces. An empty `fill` cannot reach the width, so the
+/// input is returned unchanged; `fill` is repeated whole, so a multi-byte one can overshoot.
+fn pad_end_with(s: str, width: i64, fill: str) -> str {
+    let n = byte_len(s);
+    if n >= width or is_empty(fill) { s } else { concat(s, repeat(fill, width - n)) }
+}
+
+/// `pad_start` with `fill`: `pad_start_with("7", 3, "0")` is `"007"`. Same overshoot rule.
+fn pad_start_with(s: str, width: i64, fill: str) -> str {
+    let n = byte_len(s);
+    if n >= width or is_empty(fill) { s } else { concat(repeat(fill, width - n), s) }
+}
+
+/// Centred in `width` with spaces, an odd byte going on the RIGHT. Python's `center`.
+fn pad_center(s: str, width: i64) -> str {
+    let n = byte_len(s);
+    if n >= width {
+        s
+    } else {
+        let total = width - n;
+        let left = total / 2;
+        concat(concat(repeat(" ", left), s), repeat(" ", total - left))
+    }
+}
+
 // ---- splitting and trimming ----
 //
 // Written here rather than as natives: each returns a `List[str]` or builds one, and a C

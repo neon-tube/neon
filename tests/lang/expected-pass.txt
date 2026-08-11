@@ -375,6 +375,7 @@ strings/interpolation_record_literal_in_hole.neon
 strings/interpolation_unterminated_fails.neon
 strings/invalid_utf8.neon
 strings/literals_and_escapes.neon
+strings/padding.neon
 strings/unknown_escape_of_a_multibyte_char.neon
 strings/utf8_find_is_byte_offset.neon
 strings/utf8_len_is_bytes.neon

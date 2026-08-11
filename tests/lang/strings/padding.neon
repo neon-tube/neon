@@ -1,0 +1,28 @@
+// Padding to a width lives in `std::string` (where `ljust`/`rjust` live in every other
+// language); `std::fmt` re-exports the same thing under its column names. Widths are bytes,
+// nothing truncates. Brackets bound the output so the trailing spaces are visible.
+
+use std::io;
+use std::string;
+use std::fmt;
+
+fn show(s: str) {
+    io::println("[#{s}]");
+}
+
+fn main() {
+    let hi = "hi";
+    show(string::pad_end(hi, 5));
+    show(string::pad_start(hi, 5));
+    show(string::pad_start_with("7", 3, "0"));
+    show(string::pad_end_with("7", 3, "0"));
+    show(string::pad_center(hi, 6));
+    show(string::pad_center(hi, 5));
+    // Over-width is returned unchanged, never cut.
+    show(string::pad_end("toolong", 3));
+
+    // fmt's column names delegate to the same implementation.
+    show(fmt::pad(hi, 5));
+    show(fmt::pad_left(hi, 5));
+    show(fmt::pad_left_with("7", 3, "0"));
+}
