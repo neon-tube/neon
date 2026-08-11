@@ -109,6 +109,12 @@ pub enum TypeErrorKind {
     },
     /// An `if` with no `else`, consumed as a value.
     IfWithoutElse,
+    /// A function whose return type is `()` ends its body in `null`. `null` is a value
+    /// and `()` is the absence of one, so this is the `-> null` mistake wearing a tail:
+    /// a procedure returns nothing and needs no `null` to say so. Rejected here to match
+    /// the annotated lambda `(n) => null`, which the arrow's `()` return already rejects
+    /// — the two are the same position and were enforced on only one path.
+    NullReturnsUnit,
     /// `x as T` where the value could never be a `T`.
     ImpossibleCast {
         from: String,
@@ -489,6 +495,11 @@ impl fmt::Display for TypeError {
             TypeErrorKind::IfWithoutElse => write!(
                 f,
                 "this `if` is used as a value, so it needs an `else` branch"
+            ),
+            TypeErrorKind::NullReturnsUnit => write!(
+                f,
+                "this returns `null` but its type is `()`; a procedure with no value \
+                 needs no `null`"
             ),
             TypeErrorKind::ImpossibleCast { from, to } => write!(
                 f,

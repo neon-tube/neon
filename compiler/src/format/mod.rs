@@ -1335,10 +1335,14 @@ impl<'a> Fmt<'a> {
                     self.advance(c.span.end);
                 }
             }
-            ExprKind::Is { lhs, ty } => {
+            ExprKind::Is { lhs, ty, binder } => {
                 self.expr(lhs, P_POSTFIX);
                 self.push(" is ");
                 self.ty(ty, TP_ANY);
+                if let Some(name) = binder {
+                    self.push(" as ");
+                    self.push(name);
+                }
             }
             ExprKind::As { form, lhs, ty } => {
                 self.expr(lhs, P_POSTFIX);

@@ -1698,7 +1698,7 @@ where
         Call(Vec<TypeSpec>, Vec<Expr>),
         Index(Expr),
         Field(String),
-        Is(TypeSpec),
+        Is(TypeSpec, Option<String>),
         As(CastForm, TypeSpec),
     }
 
@@ -1733,9 +1733,17 @@ where
         .ignore_then(ident())
         .map(Post::Field)
         .boxed();
+    // `is T`, and `is T as name`. The `as name` right after `is T` is claimed for the
+    // narrowing binder rather than left to fold into a cast: `(x is T) as name` would be
+    // a cast of a `bool` to a *type* `name`, which is never anything but a typo — a
+    // `bool` casts only to `bool`. So the binder steals nothing a program wanted, and it
+    // is what makes `while recv(c) is T as r { .. }` narrow a call result inline. The
+    // bound name is an identifier, distinguished from a following cast target (which is a
+    // type) by sitting in the one position where a cast could never do useful work.
     let is_op = just(Token::Is)
         .ignore_then(ty.clone())
-        .map(Post::Is)
+        .then(just(Token::As).ignore_then(ident()).or_not())
+        .map(|(ty, binder)| Post::Is(ty, binder))
         .boxed();
     // The cast triad, distinguished exactly as `try`/`try?`/`try!` is: a `?` or `!`
     // token straight after `as`.
@@ -1766,9 +1774,10 @@ where
                     base: Box::new(lhs),
                     name,
                 },
-                Post::Is(ty) => ExprKind::Is {
+                Post::Is(ty, binder) => ExprKind::Is {
                     lhs: Box::new(lhs),
                     ty,
+                    binder,
                 },
                 Post::As(form, ty) => ExprKind::As {
                     form,

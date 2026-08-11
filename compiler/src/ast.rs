@@ -493,10 +493,16 @@ pub enum ExprKind {
         body: Box<Expr>,
         catch: Option<CatchArm>,
     },
-    /// `x is T`
+    /// `x is T`, and `x is T as name` — the binder form, which additionally names the
+    /// scrutinee narrowed to `T` in the branch the test guards. The binder is what lets
+    /// an *arbitrary* scrutinee narrow inline: a bare local narrows in place (`if x is T`
+    /// refines `x`), but a call result has no binding to refine, so `while recv(c) is T
+    /// as r { .. }` is the only way to reach the narrowed value without a preceding `let`.
+    /// `None` is the plain test; `Some(name)` binds `name` in the guarded branch.
     Is {
         lhs: Box<Expr>,
         ty: TypeSpec,
+        binder: Option<String>,
     },
     /// `x as T`, `x as? T`, `x as! T`
     As {

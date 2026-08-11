@@ -1017,6 +1017,24 @@ impl Checker<'_> {
         let unit = self.env.solver.t.tuple(vec![]);
         let want = if ret == unit { None } else { Some(ret) };
         self.block(module, body, want);
+        // ...with one thing still required: the tail may run for effect and yield any
+        // type, but it may not be `null`. `null` is a value where `()` is the absence of
+        // one, so a `null` tail is the banished `-> null` in disguise (`decisions.md`:
+        // unit is the procedure return). The annotated lambda `(n) => null` is already
+        // rejected against a `-> ()` arrow because that path checks the body against
+        // `()`; a unit fn's tail was the one position where the check was skipped, so the
+        // rule held on one path and not the other. `null` is the only value type barred
+        // here — an effectful `g()` returning `i64` stays a legal discarded tail — and
+        // the literal is the only way to reach it, since there is no `-> null` left to
+        // produce a `null`-typed expression any other way.
+        if ret == unit {
+            if let Some(tail) = &body.tail {
+                let null = self.env.solver.t.null();
+                if self.result.ty(tail.id) == Some(null) {
+                    self.error(tail.span.clone(), TypeErrorKind::NullReturnsUnit);
+                }
+            }
+        }
         self.locals.pop();
     }
 
@@ -1592,7 +1610,7 @@ impl Checker<'_> {
 
             ExprKind::Block(b) => self.block(module, b, expected),
 
-            ExprKind::Is { lhs, ty } => {
+            ExprKind::Is { lhs, ty, .. } => {
                 let subject = self.expr(module, lhs, None);
                 let scope = self.type_scope(module);
                 let tested = self.env.resolve(&scope, ty);
@@ -2131,6 +2149,20 @@ impl Checker<'_> {
             }
             self.check_record_fields(module, e, fields, spread, &target_fields);
             return expected.expect("target present");
+        }
+
+        // A bare `{ }` — no path, no fields, no spread, and no record target above to
+        // claim it as an empty record — is a do-nothing BLOCK, and a block with no tail
+        // is `()`. It reaches here only when nothing wanted a record: an empty literal
+        // filling a record type (`show({})`, an all-nullable `Opts`) returned above with
+        // that type, so this steals nothing from the empty-record-satisfies-a-nullable
+        // rule. What it fixes is `(n) => { }` against `(T) -> ()`: the body parses as an
+        // empty anonymous literal, and typing it `{}` — the empty record — made a
+        // do-nothing cleanup fail its unit return. `{}` (the type) is still reachable
+        // through an explicit annotation, which resolves to a record target and returns
+        // above; only the untargeted `{ }` becomes unit.
+        if path.is_none() && fields.is_empty() && spread.is_none() {
+            return self.env.solver.t.tuple(vec![]);
         }
 
         let mut seen: Vec<String> = Vec::new();
@@ -3160,21 +3192,37 @@ impl Checker<'_> {
     fn cond_refinements(&mut self, cond: &Expr) -> Refinements {
         let nothing = (vec![], vec![]);
         match &cond.kind {
-            ExprKind::Is { lhs, .. } => {
-                let Some(name) = self.scrutinee_var(lhs) else {
-                    return nothing;
-                };
-                let Some(subject) = self.place_subject(lhs) else {
-                    return nothing;
-                };
+            ExprKind::Is { lhs, binder, .. } => {
                 let Some(tested) = self.result.tested(cond.id) else {
                     return nothing;
                 };
-                if self.env.is_error(subject) {
-                    return nothing;
+                // A bare-local scrutinee narrows *in place*: `if x is T` refines `x`.
+                let mut refs = match (self.scrutinee_var(lhs), self.place_subject(lhs)) {
+                    (Some(name), Some(subject)) if !self.env.is_error(subject) => {
+                        let refined = narrow::narrow_is(&mut self.env.solver, subject, tested);
+                        self.refinement_pair(name, subject, refined, false)
+                    }
+                    _ => (vec![], vec![]),
+                };
+                // The `as name` binder narrows an *arbitrary* scrutinee — a call, a field,
+                // whatever `lhs` was — under a fresh name. Its type is the whole of `lhs`
+                // (recorded when the condition was checked above), met with the tested
+                // type. It contributes to the then-branch only: `name` exists precisely
+                // where the test passed, so there is no else-branch fact to record, and a
+                // binding that came out `never` refines nothing rather than poisoning the
+                // branch (`Refined::both` is `None` for an impossible test). This mirrors
+                // the bare-local path but does not require `lhs` to be a place.
+                if let Some(name) = binder {
+                    if let Some(subject) = self.result.ty(lhs.id) {
+                        if !self.env.is_error(subject) {
+                            let refined = narrow::narrow_is(&mut self.env.solver, subject, tested);
+                            if let Some((then_ty, _)) = refined.both() {
+                                refs.0.push((name.clone(), then_ty));
+                            }
+                        }
+                    }
                 }
-                let refined = narrow::narrow_is(&mut self.env.solver, subject, tested);
-                self.refinement_pair(name, subject, refined, false)
+                refs
             }
             ExprKind::Binary {
                 op: op @ (BinOp::Eq | BinOp::Ne),

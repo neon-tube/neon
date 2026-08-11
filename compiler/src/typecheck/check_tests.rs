@@ -1193,3 +1193,108 @@ fn an_unresolved_name_records_nothing() {
         .defs()
         .all(|(_, d)| d.kind != super::result::DefKind::Local));
 }
+
+// ---- narrowing: `is T as name` binds an arbitrary scrutinee ----
+//
+// A bare-local scrutinee narrows in place (`if x is T` refines `x`), but a call result
+// or any non-place has no binding to refine. `is T as name` gives it one: the name is
+// the scrutinee narrowed to `T`, visible in the branch the test guards. Before this the
+// `as name` folded into a cast — `(expr is T) as name` — a cast of a `bool` to a type
+// `name`, so a runtime record narrowed through a channel reported the nonsensical "a
+// `bool` can never be a `#error`".
+
+#[test]
+fn is_as_name_narrows_a_nullable_runtime_record() {
+    // The channel-of-a-resource shape, minimised: a `@runtime` opaque record received as
+    // `R | null`, narrowed inline under a fresh name and used at the narrowed type.
+    clean(
+        "@runtime(\"r\") sealed opaque record R[T] {}\n\
+         fn g(y: R[i64]) -> i64 { 1 }\n\
+         fn f(x: R[i64] | null) -> i64 {\n\
+             if x is R[i64] as y { g(y) } else { 0 }\n\
+         }\n",
+    );
+}
+
+#[test]
+fn is_as_name_narrows_a_call_result() {
+    // The point of the binder: the scrutinee is a call, which has no binding to refine in
+    // place, so `as y` is the only way to reach the narrowed value inline.
+    clean(
+        "@runtime(\"r\") sealed opaque record R[T] {}\n\
+         fn mk() -> R[i64] | null { null }\n\
+         fn g(y: R[i64]) -> i64 { 1 }\n\
+         fn f() -> i64 { if mk() is R[i64] as y { g(y) } else { 0 } }\n",
+    );
+}
+
+#[test]
+fn is_as_name_narrows_in_a_while() {
+    clean(
+        "@runtime(\"r\") sealed opaque record R[T] {}\n\
+         fn g(y: R[i64]) -> i64 { 1 }\n\
+         fn f(x: R[i64] | null) {\n\
+             while x is R[i64] as y { let _ = g(y); x = null; }\n\
+         }\n",
+    );
+}
+
+#[test]
+fn is_as_name_is_not_a_cast_of_the_bool() {
+    // The exact regression: the binder must not fold into a cast of the `is` result.
+    let e = check(
+        "@runtime(\"r\") sealed opaque record R[T] {}\n\
+         fn f(x: R[i64] | null) -> i64 { if x is R[i64] as y { 1 } else { 0 } }\n",
+    );
+    assert!(
+        !e.iter()
+            .any(|k| matches!(k, TypeErrorKind::ImpossibleCast { .. })),
+        "the `as y` binder must not be read as a cast: {e:?}"
+    );
+    assert!(e.is_empty(), "no diagnostics expected: {e:?}");
+}
+
+// ---- `null` does not satisfy a `()` return ----
+
+#[test]
+fn a_null_tail_against_unit_return_is_rejected() {
+    // The inconsistency this closes: the annotated lambda `(n) => null` was rejected
+    // against `-> ()`, but a fn whose body ended in `null` was silently accepted.
+    let e = check("fn f() -> () { null }");
+    assert!(
+        e.iter()
+            .any(|k| matches!(k, TypeErrorKind::NullReturnsUnit)),
+        "a `null` tail against `()` must be rejected: {e:?}"
+    );
+}
+
+#[test]
+fn an_effectful_non_unit_tail_against_unit_return_stays_legal() {
+    // Only `null` is barred — a discarded effectful tail is still a procedure's business.
+    clean("fn g() -> i64 { 1 }\nfn f() -> () { g() }");
+}
+
+#[test]
+fn a_unit_tail_against_unit_return_stays_legal() {
+    // The positive path: a body that ends in a real unit expression is fine.
+    clean("fn side(x: i64) { }\nfn f() -> () { side(1) }");
+}
+
+// ---- an empty block `{ }` is unit, not the empty record ----
+
+#[test]
+fn an_empty_block_lambda_satisfies_a_unit_return() {
+    // `(n) => { }` — a do-nothing cleanup — types as `(i64) -> ()`, not `(i64) -> {}`.
+    clean("fn take(g: (i64) -> ()) { }\nfn main() { take((n: i64) => { }); }");
+}
+
+#[test]
+fn an_empty_literal_still_satisfies_an_all_nullable_record() {
+    // The other side of the same ambiguity, unbroken: `{ }` against a record target is
+    // the empty record, and an all-nullable record is satisfied by every field absent.
+    clean(
+        "type Opts = { a: i64 | null }\n\
+         fn show(o: Opts) -> i64 { o.a orelse 0 }\n\
+         fn main() { let _ = show({}); }",
+    );
+}
