@@ -1,0 +1,33 @@
+// captures returns group 0 (the whole match) plus each numbered group; a group that did
+// not participate is null, and no match at all is null.
+
+use std::io;
+use std::regex;
+
+fn dump(caps: List[str | null]) {
+    for c in caps {
+        io::println(if c is str { c } else { "<none>" });
+    };
+}
+
+fn main() {
+    let date = try! regex::compile("(\\d{4})-(\\d{2})-(\\d{2})");
+    let caps = regex::captures(date, "on 2026-08-11.");
+    if caps is List[str | null] {
+        dump(caps);
+    } else {
+        io::println("no match");
+    };
+
+    // an alternation whose first branch does not participate
+    let alt = try! regex::compile("(a)|(b)");
+    let c2 = regex::captures(alt, "b");
+    if c2 is List[str | null] {
+        dump(c2);
+    } else {
+        io::println("no match");
+    };
+
+    let none = regex::captures(date, "no digits");
+    if none is List[str | null] { io::println("unexpected") } else { io::println("null") };
+}

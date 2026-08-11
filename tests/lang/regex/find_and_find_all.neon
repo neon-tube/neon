@@ -1,0 +1,26 @@
+// find returns the first match as a Match (byte offsets), find_all returns every
+// non-overlapping match left to right.
+
+use std::io;
+use std::list;
+use std::regex;
+
+fn main() {
+    let re = try! regex::compile("[0-9]+");
+
+    let first = regex::find(re, "ab 12 cd 345");
+    if first is regex::Match {
+        io::println("first #{first.start} #{first.end} #{first.text}");
+    } else {
+        io::println("none");
+    };
+
+    let all = regex::find_all(re, "ab 12 cd 345 e6");
+    io::println("count #{list::len(all)}");
+    for m in all {
+        io::println("#{m.start}:#{m.text}");
+    };
+
+    let miss = regex::find(re, "no digits");
+    if miss is regex::Match { io::println("unexpected") } else { io::println("no first") };
+}

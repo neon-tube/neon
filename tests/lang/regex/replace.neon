@@ -1,0 +1,18 @@
+// replace / replace_all with PCRE2 replacement syntax: $1..$n groups, $0 the whole match,
+// $$ a literal dollar.
+
+use std::io;
+use std::regex;
+
+fn main() {
+    let pair = try! regex::compile("(\\w+)@(\\w+)");
+    io::println(regex::replace(pair, "a@b and c@d", "$2.$1"));     // first only
+    io::println(regex::replace_all(pair, "a@b and c@d", "$2.$1")); // all
+
+    let ws = try! regex::compile("\\s+");
+    io::println(regex::replace_all(ws, "too   many    spaces", " "));
+
+    let num = try! regex::compile("\\d+");
+    io::println(regex::replace_all(num, "x7y", "[$0]"));  // $0 = whole match
+    io::println(regex::replace(num, "cost 5", "$$$0"));   // $$ = literal $
+}

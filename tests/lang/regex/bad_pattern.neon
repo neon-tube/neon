@@ -1,0 +1,16 @@
+// A pattern PCRE2 rejects raises a catchable CompileError carrying an offset and a message.
+
+use std::io;
+use std::regex;
+use std::string;
+
+fn main() {
+    let re = try regex::compile("(unclosed") catch (e) {
+        io::println("compile failed");
+        io::println(if e.offset >= 0 { "offset present" } else { "no offset" });
+        io::println(if string::byte_len(e.message) > 0 { "has message" } else { "empty message" });
+        return
+    };
+    // Only reached if it compiled, which it does not.
+    io::println(if regex::is_match(re, "x") { "compiled" } else { "compiled" });
+}
