@@ -282,7 +282,13 @@ impl Checker<'_> {
         if self.env.is_error(a) || self.env.is_error(b) {
             return self.poison();
         }
-        self.env.solver.t.union(a, b)
+        let u = self.env.solver.t.union(a, b);
+        // Absorb a union of same-arity tuples down to its one maximal arm. Two branches
+        // returning `(str,i64)` and `(J,i64)` join to `(J,i64)` — the smaller tuple is a
+        // subtype of the larger — but the tuple BDD keeps both leaves, so without this the
+        // join reprs as a tagged union of two tuples and the coercion to the joined tuple
+        // reads the wrong arm. See `Solver::absorb_tuple_union`.
+        self.env.solver.absorb_tuple_union(u)
     }
 
     /// `actual <: expected`, unless either is already poison — a checked

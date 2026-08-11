@@ -193,6 +193,109 @@ impl Solver {
         }
     }
 
+    /// Collapse a union of same-arity tuples in which one tuple absorbs another.
+    ///
+    /// `(str, i64) | (J, i64)` denotes exactly `(J, i64)` as a set of values: a tuple is
+    /// covariant in its elements and `str <: J`, so `(str,i64) <: (J,i64)` and the smaller
+    /// arm contributes no value the larger one lacks. The tuple BDD cannot see that — its
+    /// atoms are opaque, so `A ∨ B` keeps two distinct leaves however related the shapes
+    /// behind them are — so the union carries both. `ir::repr` then emits a *tagged union
+    /// of two tuples*, and the coercion that widens it to the joined tuple `(J,i64)` reads
+    /// whichever arm sits at tag 0 and reinterprets the other arm's bytes: a `(str,i64)`
+    /// returned through the union is read back as a `(J,i64)`, a silent miscompile. Folding
+    /// the union to its one maximal arm removes the union — and the lossy coercion — outright.
+    ///
+    /// This is absorption (`A ∨ B = B` when `A <: B`), and pointedly NOT element-wise
+    /// widening. Unioning the elements position-by-position would turn `(str,i64) | (i64,str)`
+    /// into `(str|i64, i64|str)`, inventing the value `(str,str)` that lives in neither arm
+    /// and making `is_empty` — and therefore exhaustiveness, which is a leftover of `∅` —
+    /// answer over a strictly larger set than the program can produce. Dropping only an arm
+    /// *provably subsumed* by another keeps the exact set of values. It is a normalisation in
+    /// the spirit of `prune`: it interns the type the user would get by writing the absorbed
+    /// form directly, so every downstream consumer (`repr`, `is`, coercion) sees one tuple
+    /// rather than a union that happens to be equivalent to one.
+    ///
+    /// Sound under intersection and negation because it touches neither: only the positive
+    /// tuple leaves are rebuilt, into an equivalent BDD, and every other component of the
+    /// descriptor — base, atoms, vars, records, arrows — rides along by id. Two guards make
+    /// that unconditional rather than argued. `all_defined` declines while a reserved `mu`
+    /// id is still a placeholder (calling `is_subtype` then would read `never` and answer
+    /// wrongly; it is also the point at which a union inside a recursive body is still a
+    /// deferred op). And a closing `is_equiv` against the input means that if the tuple
+    /// component was ever more than a plain disjunction of positives — a negated cube left
+    /// by narrowing, say — the rebuilt type is not equivalent and the input is returned
+    /// untouched, so the rewrite can only ever canonicalise, never change a meaning.
+    pub fn absorb_tuple_union(&mut self, ty: TyId) -> TyId {
+        let d = self.t.data(ty);
+        if d.tuples == bdd::FALSE || !self.t.all_defined() {
+            return ty;
+        }
+        // The tuple atoms mentioned positively across the component. A plain union is a
+        // disjunction of these; a narrowed type may carry negatives too, which the closing
+        // equivalence check catches by refusing the rebuild.
+        let mut atoms: Vec<u32> = self
+            .t
+            .tup_bdd
+            .paths(d.tuples)
+            .into_iter()
+            .flat_map(|(pos, _)| pos)
+            .collect();
+        atoms.sort_unstable();
+        atoms.dedup();
+        if atoms.len() < 2 {
+            return ty;
+        }
+
+        // Keep only the maximal atoms. `c` is dropped when a kept atom already covers it
+        // (`c <: k`) — which folds equivalent atoms onto the first one seen — and displaces
+        // any kept atom it strictly covers. Tuples of different arity never relate (the diff
+        // subtracts nothing across arities), so mixed-arity unions keep every arm.
+        let mut kept: Vec<u32> = Vec::new();
+        for &c in &atoms {
+            let ct = self.t.tuple(self.t.tup_atoms[c as usize].elems.clone());
+            let mut covered = false;
+            for &k in &kept {
+                let kt = self.t.tuple(self.t.tup_atoms[k as usize].elems.clone());
+                if self.is_subtype(ct, kt) {
+                    covered = true;
+                    break;
+                }
+            }
+            if covered {
+                continue;
+            }
+            let mut next: Vec<u32> = Vec::new();
+            for &k in &kept {
+                let kt = self.t.tuple(self.t.tup_atoms[k as usize].elems.clone());
+                if !self.is_subtype(kt, ct) {
+                    next.push(k);
+                }
+            }
+            next.push(c);
+            kept = next;
+        }
+        if kept.len() == atoms.len() {
+            return ty;
+        }
+
+        // Rebuild the tuple component as the disjunction of the survivors, and splice it
+        // back onto the descriptor's other, untouched components.
+        let mut tup = self.t.never();
+        for &k in &kept {
+            let a = self.t.tuple(self.t.tup_atoms[k as usize].elems.clone());
+            tup = self.t.union(tup, a);
+        }
+        let mut nd = d;
+        nd.tuples = self.t.data(tup).tuples;
+        let out = self.t.intern(nd);
+
+        if self.is_equiv(ty, out) {
+            out
+        } else {
+            ty
+        }
+    }
+
     pub fn is_empty(&mut self, ty: TyId) -> bool {
         // A reserved id still awaiting its body reads as `never`, so a query that
         // races resolution answers wrongly and says nothing. That is exactly how

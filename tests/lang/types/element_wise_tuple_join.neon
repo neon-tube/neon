@@ -1,0 +1,75 @@
+// Joining two same-arity tuples where one element WIDENS the other is the element-wise
+// (covariant) join, not a union of the two whole tuples.
+//
+// `(str, i64)` joined with `(J, i64)` is `(J, i64)`: a tuple is covariant in its elements
+// and `str <: J`, so `(str,i64) <: (J,i64)` and the smaller arm is absorbed. The tuple BDD
+// cannot see that -- its atoms are opaque, so `A | B` keeps two distinct leaves however
+// related the shapes behind them are -- and before the fix the join stayed the two-arm
+// union `(str,i64) | (J,i64)`. That reprs as a TAGGED UNION OF TWO TUPLES, and the coercion
+// widening it to the joined tuple `(J,i64)` read whichever arm sat at tag 0 and
+// reinterpreted the other arm's bytes: the `(str,i64)` produced by the first branch was read
+// back as a `(J,i64)`, a silent miscompile that printed the second element of the wrong arm.
+//
+// So this destructures the joined tuple and checks BOTH elements: the one that differs
+// between the arms (element 0, which must survive as the value the branch actually built)
+// and the shared one (element 1). `t` is deliberately left un-annotated, so the `if`'s type
+// is the bottom-up join rather than an expected `(J,i64)` flowed down onto each arm.
+//
+// The second half pins the other direction: absorption must NOT over-widen. `(str, i64)`
+// joined with `(i64, str)` has incomparable elements, so it stays the genuine two-arm union
+// `(str,i64) | (i64,str)` -- element-wise widening would invent `(str,str)`, which is in
+// neither arm. The `match` is therefore exhaustive on exactly those two arms and dispatches
+// to the right one for each.
+
+use std::io;
+
+mu type J = null | i64 | str | List[J]
+
+// Element 0 widens from `str` into `J`; the arms' tuple types are in a subtype relation, so
+// the join absorbs to `(J, i64)`.
+fn widen(b: bool) -> (J, i64) {
+    let t = if b {
+        ("hi", 7)
+    } else {
+        let x: J = 99;
+        (x, 3)
+    };
+    t
+}
+
+// Incomparable arms: the join is a real `(str,i64) | (i64,str)` union that must be preserved.
+fn either(b: bool) -> (str, i64) | (i64, str) {
+    if b {
+        ("k", 1)
+    } else {
+        (2, "v")
+    }
+}
+
+fn describe(p: (str, i64) | (i64, str)) -> str {
+    match p {
+        is (str, i64) => {
+            let (a, n) = p as (str, i64);
+            "si:#{a}:#{n}"
+        },
+        is (i64, str) => {
+            let (n, a) = p as (i64, str);
+            "is:#{n}:#{a}"
+        },
+    }
+}
+
+fn main() {
+    // The absorbed join: element 0 is the value the branch built, read back through `J`.
+    let (u, n) = widen(true);
+    io::println("n=#{n}");
+    if u is str { io::println("u=#{u as str}"); } else { io::println("not str"); }
+
+    let (v, m) = widen(false);
+    io::println("m=#{m}");
+    if v is i64 { io::println("v=#{v as i64}"); } else { io::println("not i64"); }
+
+    // The preserved union: each arm dispatches to its own layout.
+    io::println(describe(either(true)));
+    io::println(describe(either(false)));
+}
