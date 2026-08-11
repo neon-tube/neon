@@ -1,0 +1,14 @@
+# Standalone crate: keep it out of the repo's Cargo workspace.
+[workspace]
+
+[package]
+name = "httpdt"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "httpdt"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
