@@ -1,8 +1,25 @@
-// String operations. `str` is UTF-8 bytes; indices and lengths are byte-oriented.
-// Turning a value into a str is `to_string` (Display), not a function here.
+// String operations. `str` is UTF-8 bytes; indices and lengths are byte-oriented by default
+// -- `byte_len`, `slice`, `char_at`, `find` all count and cut bytes. The `codepoint_*`
+// functions (`codepoint_len`, `codepoints`, `codepoint_at`) are the honest character layer on
+// top, reading those bytes as Unicode scalar values; reach for them when a character is not a
+// byte. Turning a value into a str is `to_string` (Display), not a function here.
 
 @pure @native("neon_str_byte_len") fn byte_len(s: str) -> i64
 @pure @native("neon_str_concat") fn concat(a: str, b: str) -> str
+
+/// The number of Unicode scalar values in `s`, which is the character count you mean when a
+/// character is not a byte: `codepoint_len("é")` is 1 where `byte_len` is 2. Bytes that are
+/// not valid UTF-8 do not fail here -- each is counted as one U+FFFD replacement scalar (the
+/// convention this whole `codepoint_*` layer follows) so the answer is always a definite
+/// number. `is_valid_utf8` is the check to make first when garbage in must be rejected rather
+/// than counted.
+@pure @native("neon_str_codepoint_len") fn codepoint_len(s: str) -> i64
+
+/// Whether every byte of `s` is part of a well-formed UTF-8 scalar: no stray continuation
+/// bytes, truncated tails, overlong encodings, surrogates, or values past U+10FFFF. The
+/// codepoint functions tolerate all of those by substituting U+FFFD; this is the one that
+/// does not, for the caller who must know rather than paper over.
+@pure @native("neon_str_is_valid_utf8") fn is_valid_utf8(s: str) -> bool
 /// The unchecked primitives. A native can return neither a tagged result nor an
 /// `i64 | null` -- both are layouts codegen generates per program -- so the check, the error
 /// and the union all live here, where the types are declared.
@@ -13,6 +30,13 @@ internal mod raw {
     @pure @native("neon_str_index_of") fn index_of(s: str, needle: str) -> i64
     @pure @native("neon_str_is_int") fn is_int(s: str) -> bool
     @pure @native("neon_str_parse_int") fn parse_int(s: str) -> i64
+    /// The UTF-8 decode primitives behind `codepoints`/`codepoint_at`. `utf8_seq_len` is the
+    /// byte width of the scalar starting at byte offset `off` (1..=4, and 1 for a byte that
+    /// begins no valid scalar); `codepoint_here` is that scalar as a fresh one-codepoint
+    /// `str`. Advancing by the first and emitting the second is one linear pass with no
+    /// re-decoding from the start.
+    @pure @native("neon_str_utf8_seq_len") fn utf8_seq_len(s: str, off: i64) -> i64
+    @pure @native("neon_str_codepoint_here") fn codepoint_here(s: str, off: i64) -> str
 }
 
 fn slice(s: str, from: i64, to: i64) throws IndexError -> str {
@@ -24,7 +48,8 @@ fn slice(s: str, from: i64, to: i64) throws IndexError -> str {
 
 /// The single *byte* at `i`, as a one-byte `str`. Byte-oriented like the rest of this
 /// module, so on a multi-byte character it hands back a fragment that is not valid UTF-8 on
-/// its own.
+/// its own. When the unit you want is a character rather than a byte, reach for
+/// `codepoint_at`, which indexes and returns whole Unicode scalar values.
 fn char_at(s: str, i: i64) throws IndexError -> str {
     if i < 0 or i >= byte_len(s) {
         throw IndexError { message: "index #{i} out of range" };
@@ -211,12 +236,14 @@ internal mod raw2 {
 }
 
 /// The characters, as one `str` per UTF-8 sequence: `chars("héllo")` has five elements
-/// where `byte_len` counts six. The one character-oriented reader in a byte-oriented
-/// module, for when the unit of work really is the character — everything else here
-/// stays honest about bytes.
+/// where `byte_len` counts six. A structural split by lead-byte width, for when the unit of
+/// work really is the character — everything else in this module stays honest about bytes.
 ///
-/// A byte that begins no valid sequence comes back as its own one-byte `str`, un-judged:
+/// It splits by the width the LEAD byte advertises without checking the continuation bytes,
+/// so a byte that begins no valid sequence comes back as its own one-byte `str`, un-judged:
 /// this splits, it does not validate, and garbage in is garbage out one byte at a time.
+/// `codepoints` is the validating twin — it decodes each scalar and substitutes U+FFFD for
+/// malformed bytes, which is what you want when the elements must each be a real character.
 fn chars(s: str) -> List[str] {
     let out: List[str] = [];
     let n = byte_len(s);
@@ -231,6 +258,48 @@ fn chars(s: str) -> List[str] {
         i = stop;
     };
     out
+}
+
+/// The Unicode scalar values of `s`, each a full one-codepoint `str`, decoded left to right:
+/// `codepoints("aé€😀")` is four elements across all four UTF-8 sequence lengths where
+/// `byte_len` counts ten. Valid scalars come back as their own bytes, so joining the result
+/// with an empty separator reproduces well-formed input exactly; a byte that decodes to no
+/// valid scalar comes back as U+FFFD, the replacement character, one per malformed byte —
+/// the same substitution `codepoint_len` counts. One linear pass: each step emits the scalar
+/// at the cursor and advances the cursor by that scalar's byte width.
+fn codepoints(s: str) -> List[str] {
+    let out: List[str] = [];
+    let n = byte_len(s);
+    let i = 0;
+    while i < n {
+        out = std::list::push(out, raw::codepoint_here(s, i));
+        i = i + raw::utf8_seq_len(s, i);
+    };
+    out
+}
+
+/// The `i`-th Unicode scalar value as a one-codepoint `str`, counting characters and not
+/// bytes: on `"héllo"`, index 1 is `"é"`, the whole two-byte character, where `char_at(_, 1)`
+/// would hand back its lead byte alone. Out of range — negative, or at or past the codepoint
+/// count — throws `IndexError`; a malformed byte at the target position decodes to U+FFFD
+/// rather than throwing, matching `codepoints`. Walks from the start, so indexing every
+/// position in a loop is quadratic — `codepoints` is the one linear pass when you want them
+/// all.
+fn codepoint_at(s: str, i: i64) throws IndexError -> str {
+    if i < 0 {
+        throw IndexError { message: "codepoint index #{i} out of range" };
+    }
+    let n = byte_len(s);
+    let off = 0;
+    let k = 0;
+    while k < i and off < n {
+        off = off + raw::utf8_seq_len(s, off);
+        k = k + 1;
+    };
+    if k < i or off >= n {
+        throw IndexError { message: "codepoint index #{i} out of range" };
+    }
+    raw::codepoint_here(s, off)
 }
 
 /// Split at the FIRST `sep` only: `("key=a=b", "=")` is `("key", "a=b")`. `null` when

@@ -1,0 +1,27 @@
+// `codepoints` splits into one full character per element, and each valid scalar comes back
+// as its own bytes — so joining the pieces with an empty separator reproduces the original
+// exactly. That round-trip is the property worth pinning: it is the inverse of `join`, at the
+// granularity of characters rather than bytes.
+
+use std::io;
+use std::list;
+use std::string;
+
+fn roundtrip(s: str) {
+    let cps = string::codepoints(s);
+    let joined = string::join(cps, "");
+    // The element count is the codepoint count, and the join is the original back again.
+    io::println("#{list::len(cps)} #{joined == s}");
+}
+
+fn main() {
+    roundtrip("hello");   // 5 true
+    roundtrip("héllo");   // 5 true
+    roundtrip("aé€😀");   // 4 true — mixed widths
+    roundtrip("");        // 0 true — no characters, empty join
+
+    // Each element really is a whole character.
+    for c in string::codepoints("aé€😀") {
+        io::println(c);
+    };
+}

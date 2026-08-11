@@ -1,0 +1,24 @@
+// `codepoint_len` counts Unicode scalar values where `byte_len` counts bytes. The two agree
+// only on ASCII; every other string below is chosen so they differ, across all four UTF-8
+// sequence lengths. This is the honest character count on top of the byte-oriented module.
+
+use std::io;
+use std::string;
+
+fn show(s: str) {
+    io::println("#{string::codepoint_len(s)} #{string::byte_len(s)}");
+}
+
+fn main() {
+    show("hello");   // 5 chars, 5 bytes — ASCII is one byte each
+    show("héllo");   // 5 chars, 6 bytes — é is two bytes
+    show("é");       // 1 char,  2 bytes
+    show("€");       // 1 char,  3 bytes
+    show("😀");      // 1 char,  4 bytes
+    show("aé€😀");   // 4 chars, 10 bytes — one of each width
+    show("");        // 0 chars, 0 bytes
+
+    // Concatenation adds both counts; repeat multiplies both.
+    show(string::concat("é", "€"));   // 2 chars, 5 bytes
+    show(string::repeat("😀", 3));    // 3 chars, 12 bytes
+}

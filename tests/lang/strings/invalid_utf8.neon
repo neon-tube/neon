@@ -1,0 +1,32 @@
+// The codepoint layer never fails on bytes that are not UTF-8: it decodes by the U+FFFD
+// REPLACEMENT convention, consuming one malformed byte at a time and counting each as a
+// single replacement scalar. `is_valid_utf8` is the honest check that does NOT paper over
+// them. String LITERALS are always well-formed UTF-8 by construction, so the malformed bytes
+// are built from hex — the way invalid input actually arrives, off a socket or a file.
+
+use std::io;
+use std::string;
+use std::encoding;
+
+fn check(hex: str) {
+    let s = try! encoding::hex_decode(hex);
+    io::println("#{string::is_valid_utf8(s)} #{string::codepoint_len(s)} #{string::byte_len(s)}");
+}
+
+fn main() {
+    check("68656c6c6f"); // "hello"          — true 5 5
+    check("c3a9");       // "é" (U+00E9)      — true 1 2
+    check("ff");         // 0xFF begins nothing              — false 1 1
+    check("80");         // a lone continuation byte         — false 1 1
+    check("c3");         // a two-byte lead with no tail     — false 1 1
+    check("61ff62");     // a, one replacement, b            — false 3 3
+    check("e282");       // a three-byte lead truncated      — false 2 2
+    check("c080");       // an overlong encoding of NUL      — false 2 2
+    check("eda080");     // a surrogate (U+D800), forbidden  — false 3 3
+
+    // A malformed byte decodes to U+FFFD rather than throwing, so `codepoint_at` lands on the
+    // replacement character, not on the raw byte.
+    let bad = try! encoding::hex_decode("61ff62");
+    let mid = try? string::codepoint_at(bad, 1) orelse "?";
+    io::println(to_string(mid == "\u{fffd}")); // true
+}
