@@ -81,15 +81,6 @@ fiber-local ("pinned") resources are unshipped until a type needs one.
    - An EMPTY lambda block `{ }` types as the empty record `{}`, not unit, so a
      do-nothing cleanup needs a filler statement.
 
-## Found codegen bug (not yet fixed)
-
-- **`str -> Json` (union widening) miscompiles inside a tuple literal.** `(str_value, i)`
-  where the tuple type is `(Json, i64)` corrupts the adjacent `i64` (garbage index). Found
-  writing json::parse; worked around with an explicit `let v: Json = str_value;` before the
-  tuple. A `List[Json]` widens fine in the same position, so it is str-specific — a real
-  silent miscompile, the class the inert-diff exists to catch. Worth a backend
-  investigation (union coercion of a pointer-repr member in an aggregate literal).
-
 ## Residual design notes (documented, deliberate)
 
 - Composite mid-copy trap on a buffered send can orphan a staged owning ref → fd
