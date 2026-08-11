@@ -29,10 +29,13 @@ int64_t neon_net_accept(int64_t fd, neon_str* peer);
 
 // Connect, waiting for the handshake to finish. Returns the descriptor or a negative errno.
 int64_t neon_net_connect(neon_str addr);
+int64_t neon_net_connect_timeout(neon_str addr, int64_t millis);
+bool neon_net_is_timeout(int64_t code);
 
 // Up to `max` bytes, waiting until some arrive. An empty result with `*err == 0` is EOF:
 // the peer closed its end.
 neon_str neon_net_read(int64_t fd, int64_t max, int64_t* err);
+neon_str neon_net_read_timeout(int64_t fd, int64_t max, int64_t millis, int64_t* err);
 
 // Every byte of every part, waiting whenever the socket buffer fills. Consumes `parts`.
 int64_t neon_net_write(int64_t fd, neon_list* parts);

@@ -168,6 +168,12 @@ void neon_fiber_request_preempt(void);
 // waiter per fd. Must be called from within a fiber.
 void neon_fiber_io_wait(int fd, uint32_t events);
 
+// As above, bounded by a CLOCK_MONOTONIC deadline: true if `fd` came ready, false if the
+// deadline passed first. The loser of the fd/timer race is cancelled so no stale wake can
+// chase a fiber that has moved on. std::net's timed reads and connects reach it through
+// the scheduler's deadline readiness hook.
+bool neon_fiber_io_wait_deadline(int fd, uint32_t events, int64_t deadline_ms);
+
 // A fiber-yielding read: on EAGAIN it waits for `fd` (non-blocking) to become readable,
 // running other fibers meanwhile, and retries — transparent blocking, only the fiber waits.
 ssize_t neon_fiber_read(int fd, void* buf, size_t count);

@@ -87,10 +87,19 @@ internal mod raw {
 /// only in the three dispatchers below.
 type Conn = net::tcp::Stream | net::tls::Stream
 
-fn conn_read(c: Conn, max: i64) throws IoError | net::TlsError -> str {
-    match c {
-        is net::tcp::Stream => try net::tcp::read(c, max),
-        is net::tls::Stream => try net::tls::read(c, max),
+// `timeout_ms` of 0 means "wait forever" (the server's per-connection reads); a positive
+// value bounds each read so a client request cannot hang on a peer gone silent.
+fn conn_read(c: Conn, max: i64, timeout_ms: i64) throws IoError | net::TlsError | net::TimeoutError -> str {
+    if timeout_ms <= 0 {
+        match c {
+            is net::tcp::Stream => try net::tcp::read(c, max),
+            is net::tls::Stream => try net::tls::read(c, max),
+        }
+    } else {
+        match c {
+            is net::tcp::Stream => try net::tcp::read_timeout(c, max, timeout_ms),
+            is net::tls::Stream => try net::tls::read_timeout(c, max, timeout_ms),
+        }
     }
 }
 
@@ -112,7 +121,7 @@ fn conn_close(c: Conn) throws IoError {
 /// left unconsumed (a pipelined follow-up); the return is what THIS parse leaves. EOF
 /// mid-message is an error unless `finish` says the message legally ends at EOF (a
 /// response body delimited by connection close).
-fn read_message(c: Conn, p: Parser, pending: str) throws HttpError | IoError | net::TlsError -> str {
+fn read_message(c: Conn, p: Parser, pending: str, timeout_ms: i64) throws HttpError | IoError | net::TlsError | net::TimeoutError -> str {
     let buf = pending;
     while true {
         if buf != "" {
@@ -125,7 +134,7 @@ fn read_message(c: Conn, p: Parser, pending: str) throws HttpError | IoError | n
             };
             buf = "";
         } else {
-            let data = try conn_read(c, 65536);
+            let data = try conn_read(c, 65536, timeout_ms);
             if data == "" {
                 if raw::finish(p) == 1 {
                     return "";
@@ -252,7 +261,7 @@ fn connection(c: Conn, handler: (Request) throws HttpError -> Response) {
     let p = raw::new(false);
     let pending = "";
     while true {
-        let leftover = try read_message(c, p, pending) catch (e) {
+        let leftover = try read_message(c, p, pending, 0) catch (e) {
             try? conn_write(c, "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n");
             try? conn_close(c);
             return
@@ -315,19 +324,21 @@ fn split_url(u: str) throws HttpError -> (str, str, str, bool) {
 }
 
 /// One request, one connection: connect (with the TLS handshake when the URL says
-/// https), send, read the full response, close. The `Connection: close` header means an
-/// EOF-delimited body parses too (`finish`).
-fn request(method: Method, url: str, headers: List[(str, str)], body: str) throws HttpError | IoError | net::TlsError -> Response {
+/// https), send, read the full response, close. `timeout_ms` (0 = no bound) caps the
+/// connect and every read, so a peer that accepts and then stalls throws `TimeoutError`
+/// instead of hanging the fiber. The `Connection: close` header means an EOF-delimited
+/// body parses too (`finish`).
+fn request_timeout(method: Method, url: str, headers: List[(str, str)], body: str, timeout_ms: i64) throws HttpError | IoError | net::TlsError | net::TimeoutError -> Response {
     let (addr, target, host, secure) = try split_url(url);
     let c: Conn = if secure {
-        try net::tls::connect(addr, host)
+        if timeout_ms <= 0 { try net::tls::connect(addr, host) } else { try net::tls::connect_timeout(addr, host, timeout_ms) }
     } else {
-        try net::tcp::connect(addr)
+        if timeout_ms <= 0 { try net::tcp::connect(addr) } else { try net::tcp::connect_timeout(addr, timeout_ms) }
     };
     let head = "#{method_token(method)} #{target} HTTP/1.1\r\nHost: #{addr}\r\nConnection: close\r\n";
     try conn_write(c, string::concat(head, serialize_headers(headers, body)));
     let p = raw::new(true);
-    try read_message(c, p, "");
+    try read_message(c, p, "", timeout_ms);
     let resp = Response {
         status: raw::status(p),
         headers: collect_headers(p),
@@ -337,11 +348,15 @@ fn request(method: Method, url: str, headers: List[(str, str)], body: str) throw
     resp
 }
 
-fn get(url: str) throws HttpError | IoError | net::TlsError -> Response {
+fn request(method: Method, url: str, headers: List[(str, str)], body: str) throws HttpError | IoError | net::TlsError | net::TimeoutError -> Response {
+    try request_timeout(method, url, headers, body, 0)
+}
+
+fn get(url: str) throws HttpError | IoError | net::TlsError | net::TimeoutError -> Response {
     try request(:get, url, [], "")
 }
 
-fn post(url: str, body: str) throws HttpError | IoError | net::TlsError -> Response {
+fn post(url: str, body: str) throws HttpError | IoError | net::TlsError | net::TimeoutError -> Response {
     try request(:post, url, [], body)
 }
 
@@ -382,12 +397,14 @@ record Req {
     method: Method,
     headers: List[(str, str)],
     body: str,
+    // 0 = no bound. Applied to the connect and every read of the request.
+    timeout_ms: i64,
 }
 
 /// A request to `url` — `http://` or `https://`, the scheme picking the transport — GET,
-/// no headers, empty body, until the pipe says otherwise.
+/// no headers, empty body, no timeout, until the pipe says otherwise.
 fn new(url: str) -> Req {
-    Req { url: url, path: "", method: :get, headers: [], body: "" }
+    Req { url: url, path: "", method: :get, headers: [], body: "", timeout_ms: 0 }
 }
 
 /// Replace the path (and query) of the request's URL, keeping scheme/host/port. `p` is a
@@ -413,6 +430,13 @@ fn body(r: Req, b: str) -> Req {
     Req { body: b, ..r }
 }
 
+/// Bound the whole request — connect and every read — to `millis`. Past it, `send` throws
+/// `net::TimeoutError` rather than parking on a peer that has gone silent. 0 removes the
+/// bound.
+fn timeout(r: Req, millis: i64) -> Req {
+    Req { timeout_ms: millis, ..r }
+}
+
 /// Rebuild `base`'s URL with `p` as its path+query, keeping the scheme and authority.
 fn with_path(base: str, p: str) throws HttpError -> str {
     let u = try url::parse(base) catch (e) { throw HttpError { message: e.message } };
@@ -421,8 +445,8 @@ fn with_path(base: str, p: str) throws HttpError -> str {
 }
 
 /// Send the built request and read the full response. The terminal of the pipe.
-fn send(r: Req) throws HttpError | IoError | net::TlsError -> Response {
+fn send(r: Req) throws HttpError | IoError | net::TlsError | net::TimeoutError -> Response {
     let target = if r.path == "" { r.url } else { try with_path(r.url, r.path) };
-    try request(r.method, target, r.headers, r.body)
+    try request_timeout(r.method, target, r.headers, r.body, r.timeout_ms)
 }
 }

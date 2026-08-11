@@ -443,3 +443,4 @@ fibers/http_round_trip.neon
 fibers/tls_round_trip.neon
 strings/url_parse.neon
 fibers/http_client_builder.neon
+fibers/net_timeout.neon

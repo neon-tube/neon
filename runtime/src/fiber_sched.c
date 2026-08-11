@@ -279,6 +279,24 @@ static int neon_sched_readiness_hook(int fd, bool for_write) {
 #endif
 }
 
+// The deadline-bounded readiness hook: 0 ready, -ETIMEDOUT on the deadline, 1 "not mine"
+// (root, so net.c polls with the timeout itself). std::net's timed reads and connects
+// reach it through neon_net_wait when a deadline is armed.
+static int neon_sched_readiness_deadline_hook(int fd, bool for_write, int64_t deadline_ms) {
+#if defined(NEON_FIBER_IO)
+    if (neon_fiber_current()->is_root) {
+        return 1;
+    }
+    bool ready = neon_fiber_io_wait_deadline(fd, for_write ? EPOLLOUT : EPOLLIN, deadline_ms);
+    return ready ? 0 : -ETIMEDOUT;
+#else
+    (void)fd;
+    (void)for_write;
+    (void)deadline_ms;
+    return 1;
+#endif
+}
+
 static void neon_fiber_uring_arm(void) {
     neon_fiber_blocking_read = neon_sched_uring_read_hook;
     neon_fiber_blocking_writev = neon_sched_uring_writev_hook;
@@ -387,6 +405,7 @@ static void neon_sched_open(bool mesh) {
     neon_fiber_sleep_hook = neon_sched_sleep_hook; // time::sleep parks fibers from here on
     neon_fiber_pidwait_hook = neon_sched_pidwait_hook; // process waits park via pidfd
     neon_fiber_readiness_hook = neon_sched_readiness_hook; // std::net parks on descriptors
+    neon_fiber_readiness_deadline_hook = neon_sched_readiness_deadline_hook; // timed variant
     neon_fiber_timer_arm(); // THIS seat's own preemption timer
 }
 
@@ -806,6 +825,64 @@ void neon_fiber_io_wait(int fd, uint32_t events) {
     neon_fiber_park(); // the pump's epoll_wait wakes us when fd is ready
     neon_sched_io_waiter_end();
     epoll_ctl(t_sched.epfd, EPOLL_CTL_DEL, fd, NULL); // ONESHOT already disarmed it; tidy up
+}
+
+// As neon_fiber_io_wait, but bounded: park on `fd`'s readiness AND a deadline at once, and
+// return true if the descriptor came ready, false if `deadline_ms` (CLOCK_MONOTONIC)
+// passed first. Two wakers race for one parked fiber, and whichever loses is CANCELLED so
+// no stale wake reaches a fiber that has moved on:
+//   * fd ready — the pump wakes via neon_fiber_wake, which unlinks our sleeper (its
+//     stale-wake scan, the same one park_deadline leans on); we DEL the fd below.
+//   * deadline — wake_due enqueues us directly (never through neon_fiber_wake, so it does
+//     NOT touch the fd registration), leaving `s.expired` true; we must DEL the fd
+//     ourselves, or a later readiness completion would aim a wake at whatever this fiber
+//     became.
+// Epoll-oneshot only, even under a ring: a POLL_ADD has no clean POLL_REMOVE on the
+// timeout edge, and the pump services epoll registrations alongside the ring anyway (see
+// the idle-wait comment in the pump). A timed wait is the cold path; the hot untimed one
+// keeps the ring.
+bool neon_fiber_io_wait_deadline(int fd, uint32_t events, int64_t deadline_ms) {
+    neon_fiber* cur = neon_fiber_current();
+    if (cur->is_root) {
+        neon_trap("neon_fiber_io_wait_deadline: the root context cannot wait on IO");
+    }
+    int64_t now = neon_sched_now_ms();
+    if (deadline_ms <= now) {
+        return false; // already past: the timeout outcome, no park
+    }
+    if (t_sched.epfd < 0) {
+        t_sched.epfd = epoll_create1(EPOLL_CLOEXEC);
+        if (t_sched.epfd < 0) {
+            neon_trap("epoll_create1 failed");
+        }
+    }
+    struct epoll_event ev;
+    ev.events = events | EPOLLONESHOT;
+    ev.data.ptr = cur;
+    if (epoll_ctl(t_sched.epfd, EPOLL_CTL_ADD, fd, &ev) != 0) {
+        neon_trap("epoll_ctl(ADD) failed");
+    }
+    neon_sleeper s = {cur, deadline_ms, false, NULL};
+    pthread_mutex_lock(&t_sched.mu);
+    s.next = t_sched.sleepers;
+    t_sched.sleepers = &s;
+    pthread_mutex_unlock(&t_sched.mu);
+    neon_sched_io_waiter_begin();
+    atomic_fetch_add(&g_ext, 1); // the sleeper half of the wait, as park_deadline accounts it
+    neon_fiber_park();
+    neon_sched_io_waiter_end();
+    bool ready = !s.expired;
+    if (ready) {
+        // The fd won; neon_fiber_wake already pulled our sleeper. Balance g_ext (wake_due
+        // did not account for us) and tidy the oneshot-disarmed registration.
+        atomic_fetch_sub(&g_ext, 1);
+        epoll_ctl(t_sched.epfd, EPOLL_CTL_DEL, fd, NULL);
+    } else {
+        // The deadline won; wake_due enqueued us and accounted g_ext, but left the fd
+        // registered. Cancel it, or a later readiness wake would chase a moved-on fiber.
+        epoll_ctl(t_sched.epfd, EPOLL_CTL_DEL, fd, NULL);
+    }
+    return ready;
 }
 
 // A read that yields the fiber instead of blocking the thread: on EAGAIN it waits for the

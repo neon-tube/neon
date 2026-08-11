@@ -29,6 +29,8 @@
 // $SSL_CERT_DIR), MBEDTLS_SSL_VERIFY_REQUIRED. Returns a stream handle, or a negative
 // code with `*err` naming what failed. Consumes `host`; owns `fd` either way.
 int64_t neon_tls_client(int64_t fd, neon_str host, bool verify, neon_str* err);
+int64_t neon_tls_client_timeout(int64_t fd, neon_str host, bool verify, int64_t millis,
+                                neon_str* err);
 
 // Load a certificate chain and private key (both PEM files) for a server. Returns a listen
 // config handle, or a negative code with `*err` naming the file that refused. Consumes
@@ -43,6 +45,7 @@ int64_t neon_tls_accept(int64_t cfg, int64_t fd, neon_str* err);
 // Up to `max` decrypted bytes, waiting until some arrive. An empty result with `*err == 0`
 // is EOF: the peer sent close_notify or closed its end.
 neon_str neon_tls_read(int64_t h, int64_t max, int64_t* err);
+neon_str neon_tls_read_timeout(int64_t h, int64_t max, int64_t millis, int64_t* err);
 
 // Every byte, encrypted, waiting whenever the socket buffer fills. 0 or a negative code.
 // Consumes `data`.

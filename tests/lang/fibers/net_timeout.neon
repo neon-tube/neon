@@ -1,0 +1,48 @@
+// Network timeouts, deterministically: a local server accepts a connection and holds it
+// open in silence, and a client bounded by a short deadline gets `TimeoutError` — at the
+// raw socket level and through the http client's `timeout` — instead of parking forever.
+// The server keeps the accepted socket alive across a `sleep` (using it after) so the
+// client's read genuinely blocks on an open-but-silent peer, which is what a timeout is
+// for. `runtime_on(1, ..)` keeps the interleaving a golden can pin.
+
+use std::channel;
+use std::fiber;
+use std::http;
+use std::io;
+use std::net;
+use std::time;
+
+// Accept and sit on the connection, silent, long enough for the client's short timeout to
+// fire twice; then close and report done.
+fn silent_server(l: net::tcp::Listener, done: channel::Channel[i64]) {
+    let c = try! net::tcp::accept(l);
+    let c2 = try! net::tcp::accept(l);
+    time::sleep(2000);
+    try! net::tcp::close(c);
+    try! net::tcp::close(c2);
+    try! channel::send(done, 1);
+}
+
+fn main() {
+    let l = try! net::tcp::listen("127.0.0.1:0");
+    let addr = try! net::tcp::local_addr(l);
+    fiber::runtime_on(1, move () => {
+        let done: channel::Channel[i64] = channel::new();
+        fiber::spawn(move () => silent_server(l, done));
+
+        // Raw read timeout.
+        let c = try! net::tcp::connect(addr);
+        let raw = try net::tcp::read_timeout(c, 100, 200) catch (e) { "raw: #{e.message}" };
+        io::println(raw);
+        try! net::tcp::close(c);
+
+        // The http client's timeout: the server accepts but never answers.
+        let r = http::client::new("http://#{addr}/")
+            |> http::client::timeout(200)
+            |> try http::client::send() catch (e) { io::println("http: #{e.message}"); http::server::respond(0, "") };
+        io::println("http status: #{r.status}");
+
+        io::println("server drained: #{channel::recv(done) orelse 0}");
+    });
+    io::println("done");
+}

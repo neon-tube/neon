@@ -28,8 +28,25 @@
 // The readiness bridge (internal.h). Defined here, in the always-compiled net unit, so a
 // build without the fiber sources still links with it permanently NULL.
 _Thread_local int (*neon_fiber_readiness_hook)(int fd, bool for_write) = NULL;
+_Thread_local int (*neon_fiber_readiness_deadline_hook)(int fd, bool for_write,
+                                                        int64_t deadline_ms) = NULL;
+
+// Whether a status is the timeout sentinel. Kept in C — and out of the platform split,
+// since it is pure — so the errno value never leaks into Neon.
+bool neon_net_is_timeout(int64_t code) {
+    return code == -ETIMEDOUT;
+}
 
 #ifdef _WIN32
+
+int64_t neon_net_connect_timeout(neon_str addr, int64_t millis) {
+    (void)millis;
+    return neon_net_connect(addr);
+}
+neon_str neon_net_read_timeout(int64_t fd, int64_t max, int64_t millis, int64_t* err) {
+    (void)millis;
+    return neon_net_read(fd, max, err);
+}
 
 int64_t neon_net_listen(neon_str addr, int64_t backlog) {
     (void)addr;
@@ -102,15 +119,68 @@ neon_str neon_net_udp_recv_from(int64_t fd, int64_t max, neon_str* peer, int64_t
 #include <poll.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
 // ---- waiting ----
+
+// An ABSOLUTE CLOCK_MONOTONIC deadline in milliseconds that bounds every wait until it is
+// cleared, or 0 for "wait forever". A net operation is atomic within a fiber — a read does
+// not nest inside another read — so a per-fiber thread-local is the whole mechanism: a
+// timed entry point stamps it, runs the ordinary connect/read (whose EAGAIN waits honour
+// it, including the ones mbedTLS drives through the BIO), and clears it. The hot untimed
+// path pays one predictable-not-taken branch.
+static _Thread_local int64_t t_net_deadline = 0;
+
+static int64_t neon_net_now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+// Arm the thread-local deadline for a bounded operation and return the previous value to
+// restore. `millis <= 0` clears it. This is the seam tls.c reaches through: an mbedTLS
+// read or handshake drives its socket waits through neon_net_wait, so bracketing the
+// mbedTLS call in begin/end bounds every one of them by the same deadline a plain read
+// would get. Defined in internal.h.
+int64_t neon_net_deadline_begin(int64_t millis) {
+    int64_t saved = t_net_deadline;
+    t_net_deadline = millis <= 0 ? 0 : neon_net_now_ms() + millis;
+    return saved;
+}
+void neon_net_deadline_end(int64_t saved) {
+    t_net_deadline = saved;
+}
 
 // Wait until `fd` is readable (or writable), without stopping this OS thread if we are on a
 // fiber. The hook is armed by the scheduler for the life of a runtime; off it, a plain poll.
 // Not static: this is the seam `src/tls.c`'s BIO callbacks block through (declared in
 // internal.h), so an mbedTLS handshake parks a fiber exactly the way a plain read does.
+//
+// Returns 0 ready, -errno on error, and -ETIMEDOUT when a deadline is armed and passes
+// first — a value the read/connect loops turn into the timeout each is bounded by.
 int neon_net_wait(int fd, bool for_write) {
+    int64_t deadline = t_net_deadline;
+    if (deadline != 0) {
+        if (neon_fiber_readiness_deadline_hook != NULL) {
+            int r = neon_fiber_readiness_deadline_hook(fd, for_write, deadline);
+            if (r != 1) {
+                return r; // 0 ready, -ETIMEDOUT timeout — the root falls through (r == 1)
+            }
+        }
+        int64_t now = neon_net_now_ms();
+        int ms = deadline <= now ? 0 : (int)(deadline - now > 2147483647 ? 2147483647
+                                                                         : deadline - now);
+        struct pollfd p = {fd, for_write ? POLLOUT : POLLIN, 0};
+        int r;
+        do {
+            r = poll(&p, 1, ms);
+        } while (r < 0 && errno == EINTR);
+        if (r < 0) {
+            return -errno;
+        }
+        return r == 0 ? -ETIMEDOUT : 0;
+    }
     if (neon_fiber_readiness_hook != NULL) {
         // 0 = the fiber was parked and is now ready; negative = an error to report;
         // POSITIVE = "not mine" (the caller is the root context, not a fiber), which falls
@@ -348,6 +418,20 @@ int64_t neon_net_connect(neon_str addr) {
     return neon_net_each(addr, SOCK_STREAM, false, neon_net_do_connect);
 }
 
+// Connect, bounded by `millis` (<= 0 means no bound): a peer that accepts nothing — or a
+// route that black-holes the SYN — no longer parks the fiber forever. -ETIMEDOUT on the
+// deadline, which the stdlib turns into a TimeoutError. The thread-local deadline bounds
+// every readiness wait `neon_net_each` makes across the address candidates.
+int64_t neon_net_connect_timeout(neon_str addr, int64_t millis) {
+    if (millis <= 0) {
+        return neon_net_connect(addr);
+    }
+    t_net_deadline = neon_net_now_ms() + millis;
+    int64_t r = neon_net_connect(addr);
+    t_net_deadline = 0;
+    return r;
+}
+
 // Read up to `max` bytes. A zero-length result means the peer closed (EOF) — the caller
 // distinguishes it from "nothing yet", which cannot happen here because we waited.
 neon_str neon_net_read(int64_t fd, int64_t max, int64_t* err) {
@@ -381,6 +465,20 @@ neon_str neon_net_read(int64_t fd, int64_t max, int64_t* err) {
             return neon_str_lit("", 0);
         }
     }
+}
+
+// Read, bounded by `millis` (<= 0 means no bound): -ETIMEDOUT in `*err` when nothing
+// arrives in time, so a client cannot hang on a peer that accepted the connection and then
+// went silent. The bound is per-call — each `read_timeout` gets the full `millis` — which
+// is what a request-level timeout wants when it reissues around a keep-alive loop.
+neon_str neon_net_read_timeout(int64_t fd, int64_t max, int64_t millis, int64_t* err) {
+    if (millis <= 0) {
+        return neon_net_read(fd, max, err);
+    }
+    t_net_deadline = neon_net_now_ms() + millis;
+    neon_str s = neon_net_read(fd, max, err);
+    t_net_deadline = 0;
+    return s;
 }
 
 // Write every byte of every part, waiting whenever the socket buffer fills. A short write

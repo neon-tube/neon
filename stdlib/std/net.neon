@@ -44,13 +44,25 @@ use std::io::IoError;
 record TlsError { message: str }
 impl Error for TlsError { fn message(v: TlsError) -> str { v.message } }
 
+/// A network operation that did not complete within its deadline: a connect to a peer that
+/// accepted nothing, a read from one that went silent. Distinct from `IoError` so a caller
+/// can retry or fall back on a timeout specifically, rather than treating it as a hard
+/// failure of the connection.
+record TimeoutError { message: str }
+impl Error for TimeoutError { fn message(v: TimeoutError) -> str { v.message } }
+
 internal mod raw {
     @native("neon_net_listen") fn listen(addr: str, backlog: i64) -> i64
     /// The connected descriptor, and the peer's address: the tuple's tail is a C
     /// out-parameter.
     @native("neon_net_accept") fn accept(fd: i64) -> (i64, str)
     @native("neon_net_connect") fn connect(addr: str) -> i64
+    @native("neon_net_connect_timeout") fn connect_timeout(addr: str, millis: i64) -> i64
     @native("neon_net_read") fn read(fd: i64, max: i64) -> (str, i64)
+    @native("neon_net_read_timeout") fn read_timeout(fd: i64, max: i64, millis: i64) -> (str, i64)
+    /// Whether a negative status is the timeout code (`-ETIMEDOUT`), kept in C so the
+    /// platform's errno value never leaks into Neon.
+    @native("neon_net_is_timeout") fn is_timeout(code: i64) -> bool
     @native("neon_net_write") fn write(fd: i64, parts: List[str]) -> i64
     @native("neon_net_close") fn close(fd: i64) -> i64
     @native("neon_net_shutdown") fn shutdown(fd: i64, how: i64) -> i64
@@ -68,9 +80,11 @@ internal mod raw {
     /// missing trust store) are not errnos and their detail is only readable inside the
     /// native. Read and write return mbedTLS codes; `tls_strerror` renders those.
     @native("neon_tls_client") fn tls_client(fd: i64, host: str, verify: bool) -> (i64, str)
+    @native("neon_tls_client_timeout") fn tls_client_timeout(fd: i64, host: str, verify: bool, millis: i64) -> (i64, str)
     @native("neon_tls_listen_config") fn tls_listen_config(cert: str, key: str) -> (i64, str)
     @native("neon_tls_accept") fn tls_accept(cfg: i64, fd: i64) -> (i64, str)
     @native("neon_tls_read") fn tls_read(h: i64, max: i64) -> (str, i64)
+    @native("neon_tls_read_timeout") fn tls_read_timeout(h: i64, max: i64, millis: i64) -> (str, i64)
     @native("neon_tls_write") fn tls_write(h: i64, data: str) -> i64
     @native("neon_tls_close") fn tls_close(h: i64) -> i64
     @native("neon_tls_config_free") fn tls_config_free(cfg: i64) -> i64
@@ -152,6 +166,19 @@ mod tcp {
         guard::stream(fd)
     }
 
+    /// Connect, but give up after `millis`: a peer that accepts nothing, or a route that
+    /// swallows the SYN, throws `TimeoutError` instead of parking the fiber forever.
+    fn connect_timeout(addr: str, millis: i64) throws IoError | TimeoutError -> Stream {
+        let fd = raw::connect_timeout(addr, millis);
+        if fd < 0 {
+            if raw::is_timeout(fd) {
+                throw TimeoutError { message: "connect to `#{addr}` timed out after #{millis}ms" };
+            };
+            try raw::fail(fd, "cannot connect to `#{addr}`");
+        };
+        guard::stream(fd)
+    }
+
     /// Up to `max` bytes, waiting until some arrive. An EMPTY result means the peer closed
     /// its end — the loop condition for reading a stream to its end:
     ///
@@ -160,6 +187,19 @@ mod tcp {
     fn read(s: Stream, max: i64) throws IoError -> str {
         let (data, code) = raw::read(try stream_fd(s), max);
         if code < 0 {
+            try raw::fail(code, "cannot read");
+        };
+        data
+    }
+
+    /// As `read`, bounded by `millis`: `TimeoutError` when nothing arrives in time, so a
+    /// reader cannot hang on a peer that connected and then went silent.
+    fn read_timeout(s: Stream, max: i64, millis: i64) throws IoError | TimeoutError -> str {
+        let (data, code) = raw::read_timeout(try stream_fd(s), max, millis);
+        if code < 0 {
+            if raw::is_timeout(code) {
+                throw TimeoutError { message: "read timed out after #{millis}ms" };
+            };
             try raw::fail(code, "cannot read");
         };
         data
@@ -377,6 +417,40 @@ mod tls {
             throw TlsError { message: msg };
         };
         guard::stream(h)
+    }
+
+    /// As `connect`, bounded by `millis`: the TCP connect and the handshake together must
+    /// finish in time or a `TimeoutError` is thrown, so a peer that accepts the socket and
+    /// then stalls the handshake cannot park the fiber forever. The clean-timeout half is
+    /// the TCP connect; a handshake that overruns surfaces as a `TlsError`, but the hang is
+    /// prevented either way.
+    fn connect_timeout(addr: str, host: str, millis: i64) throws IoError | TlsError | TimeoutError -> Stream {
+        let fd = raw::connect_timeout(addr, millis);
+        if fd < 0 {
+            if raw::is_timeout(fd) {
+                throw TimeoutError { message: "connect to `#{addr}` timed out after #{millis}ms" };
+            };
+            try raw::fail(fd, "cannot connect to `#{addr}`");
+        };
+        let (h, msg) = raw::tls_client_timeout(fd, host, true, millis);
+        if h < 0 {
+            throw TlsError { message: msg };
+        };
+        guard::stream(h)
+    }
+
+    /// As `read`, bounded by `millis`: `TimeoutError` when no decrypted bytes arrive in
+    /// time. The BIO records the deadline overrun so the timeout is attributed cleanly,
+    /// not lost inside mbedTLS's generic record-read failure.
+    fn read_timeout(s: Stream, max: i64, millis: i64) throws IoError | TlsError | TimeoutError -> str {
+        let (data, code) = raw::tls_read_timeout(try stream_handle(s), max, millis);
+        if code < 0 {
+            if raw::is_timeout(code) {
+                throw TimeoutError { message: "TLS read timed out after #{millis}ms" };
+            };
+            throw TlsError { message: raw::tls_strerror(code) };
+        };
+        data
     }
 
     /// As `connect`, but WITHOUT verifying who is on the other end — the connection is

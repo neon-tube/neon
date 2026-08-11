@@ -92,6 +92,12 @@ extern _Thread_local void (*neon_fiber_pidwait_hook)(int64_t pid);
 // an ordinary poll(2) — which is why sockets work identically outside a fiber.
 extern _Thread_local int (*neon_fiber_readiness_hook)(int fd, bool for_write);
 
+// The deadline-bounded twin, armed beside it: park on `fd` OR a CLOCK_MONOTONIC deadline,
+// whichever comes first. 0 ready, -ETIMEDOUT on the deadline, 1 "not mine" (root context,
+// where net.c polls with the timeout itself). What a timed read/connect blocks on.
+extern _Thread_local int (*neon_fiber_readiness_deadline_hook)(int fd, bool for_write,
+                                                               int64_t deadline_ms);
+
 // The readiness wait itself, defined in net.c's POSIX half: park the calling fiber (via the
 // hook above) or poll(2) off-runtime, until `fd` is readable/writable. 0 on readiness, a
 // negative errno on failure. The one non-inline extern here, on purpose: tls.c's BIO
@@ -99,6 +105,13 @@ extern _Thread_local int (*neon_fiber_readiness_hook)(int fd, bool for_write);
 // hook-then-poll dance in a second file is how the two would drift. Unavailable on Windows
 // (net.c's stub half), where nothing references it.
 int neon_net_wait(int fd, bool for_write);
+
+// Bracket a bounded operation: arm the thread-local network deadline (relative `millis`,
+// <= 0 clears) and restore it. tls.c wraps its mbedTLS calls in these so a TLS read or
+// handshake is bounded by the same deadline a plain socket read would honour — the BIO
+// callbacks block through neon_net_wait, which reads the deadline. Defined in net.c.
+int64_t neon_net_deadline_begin(int64_t millis);
+void neon_net_deadline_end(int64_t saved);
 
 // The trap→fiber bridge. While a fiber runs, the scheduler arms this per-thread hook; a trap
 // (bounds, arithmetic, uncaught error) then calls it INSTEAD of ending the process — the hook

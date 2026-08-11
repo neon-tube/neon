@@ -189,6 +189,11 @@ typedef struct {
     // close_notify is a courtesy alert; when it cannot go out without blocking, dropping
     // it and closing the fd is the correct, non-blocking goodbye.
     bool closing;
+    // Set by a BIO callback when a socket wait returns -ETIMEDOUT under an armed net
+    // deadline, so the timed read/handshake wrappers can report a clean timeout instead of
+    // mbedTLS's generic NET_RECV/SEND_FAILED (mbedTLS collapses every BIO error to those,
+    // losing the cause). Cleared at the start of each timed operation.
+    bool timed_out;
 } neon_tls_stream;
 
 // A server's credentials, held as PEM bytes (NUL-terminated, `len` including it, the form
@@ -313,7 +318,11 @@ static int neon_tls_bio_send(void* ctx, const unsigned char* buf, size_t len) {
             if (s->closing) {
                 return MBEDTLS_ERR_SSL_WANT_WRITE;
             }
-            if (neon_net_wait(fd, true) < 0) {
+            int w = neon_net_wait(fd, true);
+            if (w < 0) {
+                if (w == -ETIMEDOUT) {
+                    s->timed_out = true;
+                }
                 return MBEDTLS_ERR_NET_SEND_FAILED;
             }
             continue;
@@ -323,7 +332,8 @@ static int neon_tls_bio_send(void* ctx, const unsigned char* buf, size_t len) {
 }
 
 static int neon_tls_bio_recv(void* ctx, unsigned char* buf, size_t len) {
-    int fd = ((neon_tls_stream*)ctx)->fd;
+    neon_tls_stream* s = (neon_tls_stream*)ctx;
+    int fd = s->fd;
     for (;;) {
         neon_ssize n = recv(fd, buf, len, 0);
         if (n > 0) {
@@ -336,7 +346,11 @@ static int neon_tls_bio_recv(void* ctx, unsigned char* buf, size_t len) {
             continue;
         }
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            if (neon_net_wait(fd, false) < 0) {
+            int w = neon_net_wait(fd, false);
+            if (w < 0) {
+                if (w == -ETIMEDOUT) {
+                    s->timed_out = true;
+                }
                 return MBEDTLS_ERR_NET_RECV_FAILED;
             }
             continue;
@@ -357,6 +371,8 @@ static neon_tls_stream* neon_tls_stream_new(int fd) {
     mbedtls_x509_crt_init(&s->own_cert);
     mbedtls_pk_init(&s->own_key);
     s->fd = fd;
+    s->closing = false;
+    s->timed_out = false;
     return s;
 }
 
@@ -684,6 +700,40 @@ neon_str neon_tls_strerror(int64_t code) {
     neon_tls_render((int)code, buf, sizeof(buf));
     neon_tls_one_line(buf);
     return neon_str_new(buf, strlen(buf));
+}
+
+// Timed twins: the handshake and read are made of socket waits that all pass through
+// neon_net_wait, so bracketing the mbedTLS call in the net deadline bounds every one of
+// them at once — the same trick that gives a plain socket its timeout, reused because the
+// BIO already routes through the same seam. A deadline overrun surfaces as the BIO's
+// -ETIMEDOUT turning into an mbedTLS NET error, which the stdlib recognises via the read's
+// negative status (a client whose whole handshake stalls) — good enough for v1; the finer
+// "handshake vs read" attribution is the stdlib's to make from context.
+int64_t neon_tls_client_timeout(int64_t fd, neon_str host, bool verify, int64_t millis,
+                                neon_str* err) {
+    // The handshake runs on a stream neon_tls_client builds internally, so we cannot reach
+    // its timed_out flag from here — but a deadline overrun still fails the handshake, and
+    // the connect wrapper in std::net bounds the TCP connect (the clean-timeout half)
+    // before this. A handshake stalled past the deadline surfaces as the TlsError this
+    // returns; the hang is prevented either way, which is the property that matters.
+    int64_t saved = neon_net_deadline_begin(millis);
+    int64_t r = neon_tls_client(fd, host, verify, err);
+    neon_net_deadline_end(saved);
+    return r;
+}
+
+neon_str neon_tls_read_timeout(int64_t h, int64_t max, int64_t millis, int64_t* err) {
+    neon_tls_stream* s = (neon_tls_stream*)(intptr_t)h;
+    s->timed_out = false;
+    int64_t saved = neon_net_deadline_begin(millis);
+    neon_str out = neon_tls_read(h, max, err);
+    neon_net_deadline_end(saved);
+    // Re-attribute mbedTLS's generic NET failure to the real cause when the BIO recorded a
+    // deadline overrun, so std::net can throw a clean TimeoutError.
+    if (*err < 0 && s->timed_out) {
+        *err = -ETIMEDOUT;
+    }
+    return out;
 }
 
 #endif
