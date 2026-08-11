@@ -196,6 +196,14 @@ void neon_task_free(neon_task* t) {
 // or to close CASes it 0->1 and becomes the winner; every other channel finds it already 1
 // and leaves this select untouched. `index`/`delivered` are the winner's report, written
 // under its channel's mutex and published before the wake, exactly as a rendezvous value is.
+//
+// The claim is taken BEFORE the winner's deep copy into the slot — it has to be, or two
+// channels could both copy into `out` and corrupt it. The cost is a liveness edge, the same
+// class a plain recv already has: if that copy TRAPS (an unsendable part inside the value),
+// the sender fiber crashes with the select claimed but never woken, and the select's other
+// branches — now locked out by the claim — never fire either. It stems from a sender-side
+// crash, already a fatal path under crash isolation, and is the correct trade for
+// exactly-once; the alternative (copy then claim) trades a hang for a memory corruption.
 typedef struct neon_channel_select {
     _Atomic int claimed; // 0 until a channel wins; CAS to 1 is the claim
     int64_t index;       // which list entry fired (stamped by the winner)

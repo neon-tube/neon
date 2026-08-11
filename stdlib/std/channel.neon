@@ -97,9 +97,12 @@ fn send[T](ch: Channel[T], v: T) throws ClosedError {
 ///     if v is i64 as n { io::println("channel #{i} -> #{n}"); }
 ///     else { io::println("channel #{i} closed"); }
 ///
-/// A ready VALUE anywhere beats a closed channel, and ties go to the lowest index, so a
-/// closed channel in the set never masks data still waiting elsewhere, and the choice is
-/// deterministic. Traps on an empty list — a select with nothing to wait on could only hang.
+/// Among channels ALREADY ready at the call, a value beats a closed channel and ties go to
+/// the lowest index — so a closed channel never masks data already waiting, and that choice
+/// is deterministic. Once this fiber parks (nothing was ready), the winner is simply
+/// whichever channel acts first, a real-time race like every select; a value already
+/// present, though, was taken before the park and never loses to a later close. Traps on
+/// an empty list — a select with nothing to wait on could only hang.
 ///
 /// v1 is receive-only and requires every channel to carry the same element type `T`; a
 /// send-select and a heterogeneous select (which would need union machinery to say which
