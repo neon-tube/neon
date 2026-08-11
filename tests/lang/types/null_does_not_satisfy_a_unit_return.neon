@@ -1,0 +1,17 @@
+//@ compile-fail
+//@ error-contains: a procedure with no value needs no
+
+// `null` is a value; `()` is the absence of one. A procedure returns nothing and needs no
+// `null` to say so, so a unit-returning body may not end in `null`. The annotated lambda
+// `(n) => null` is already rejected against a `-> ()` arrow; this is the same rule on the
+// fn-body path, where the tail was the one position the check used to be skipped -- the
+// `-> null` mistake wearing a tail. An effectful non-`null` tail (a discarded `g()`) stays
+// legal; only `null` is barred.
+
+fn f() -> () {
+    null
+}
+
+fn main() {
+    f();
+}

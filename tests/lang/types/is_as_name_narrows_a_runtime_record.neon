@@ -1,0 +1,43 @@
+// `is T as name` narrows an arbitrary scrutinee inline, binding it under a fresh name at
+// the narrowed type. The scrutinee here is a CALL that yields `Resource | null` -- a
+// runtime record arriving maybe-null, the exact shape a channel receive has -- and `as r`
+// is what reaches the narrowed value without a preceding `let`. A bare local narrows in
+// place (`if x is T` refines `x`), but a call result has no binding to refine.
+//
+// Before the binder existed, the `as r` folded into a cast of the `is` result --
+// `(recv() is T) as r`, a cast of a `bool` to a type named `r` -- reported as the
+// nonsensical "a `bool` can never be a `#error`". The binder claims `as name` right after
+// `is T`, a position where a cast could never do useful work (a `bool` casts only to
+// `bool`), so it steals nothing a program wanted.
+
+use std::io;
+use std::resource;
+
+// A concrete, inhabited error type on the resource's `E`: this is the ordinary case (a
+// channel of resources carries a real error type). `Resource[T, never]` -- infallible
+// cleanup -- does not narrow, but that is a pre-existing limitation of a `never` generic
+// argument emptying the nominal, not of the binder, and it bites bare-local narrowing the
+// same way.
+fn maybe(present: bool) -> resource::Resource[i64, resource::ReleasedError] | null {
+    if present {
+        resource::new[i64, resource::ReleasedError](7, (n: i64) => { io::println("cleanup #{n}"); null })
+    } else {
+        null
+    }
+}
+
+fn drain(present: bool) {
+    // The narrowed `r` is usable at `Resource[i64, ReleasedError]`: `take` disarms and
+    // hands the payload over (so the cleanup above does not run), proving `r` really is
+    // the record and not the `bool` the old parse produced.
+    if maybe(present) is resource::Resource[i64, resource::ReleasedError] as r {
+        io::println("got #{resource::take(r) orelse -1}");
+    } else {
+        io::println("none");
+    }
+}
+
+fn main() {
+    drain(true);
+    drain(false);
+}

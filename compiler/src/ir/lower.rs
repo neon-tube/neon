@@ -1798,8 +1798,30 @@ impl Lower<'_> {
                     ty,
                 )
             }
-            ExprKind::Is { lhs, ty: spec } => {
+            ExprKind::Is {
+                lhs,
+                ty: spec,
+                binder,
+            } => {
                 let v = self.lower_expr(lhs);
+                // `is T as name`: materialise the narrowed scrutinee under `name`. The
+                // value is `lhs` reinterpreted at the tested type's repr — the same
+                // unchecked `Cast` an infallible `as` emits, sound for the same reason
+                // (the test that guards the branch has already proved the variant). It is
+                // bound in the *current* scope, which is lowered before the branch splits,
+                // so the guarded block sees it; the checker only lets `name` be read where
+                // the test passed, so binding it here regardless of the test's outcome is
+                // never observable on the false path.
+                if let Some(name) = binder {
+                    let target = self
+                        .result
+                        .tested(e.id)
+                        .map(|t| self.repr_of_ty(t))
+                        .unwrap_or(Repr::Any);
+                    let tty = self.result.tested(e.id).unwrap_or(ty);
+                    let narrowed = self.b.emit(Op::Cast(v), target, tty);
+                    self.bind(name, narrowed);
+                }
                 self.type_test(v, spec, e.id)
             }
             ExprKind::As {
@@ -2228,6 +2250,15 @@ impl Lower<'_> {
         repr: Repr,
         ty: TyId,
     ) -> Value {
+        // A bare `{ }` the checker resolved to `()` — a do-nothing block, not the empty
+        // record. Its repr is `Unit`, and there is nothing to build: emit the unit value
+        // rather than a fieldless `MakeRecord` at a `Unit` slot, which is not a record at
+        // all. Only this untargeted empty literal lands here at `Unit`; an empty literal
+        // that fills a record type carries that record's repr.
+        if matches!(repr, Repr::Unit) {
+            return self.unit(ty);
+        }
+
         // The update form: `Point { x: 9, ..p }` evaluates the base ONCE, then builds a
         // fresh record — written fields from the literal, the rest read out of the base.
         // The reads are views; the refcount pass retains each as `MakeRecord` consumes

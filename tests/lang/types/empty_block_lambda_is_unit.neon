@@ -1,0 +1,21 @@
+// An empty block `{ }` is unit `()`, not `{}` the empty record. A do-nothing callback
+// `(n) => { }` therefore satisfies a `(i64) -> ()` parameter -- it used to type as
+// `(i64) -> {}` and fail the unit return. The empty record is still reachable where a
+// record is asked for (an all-nullable target, `missing_field_satisfies_nullable_field`);
+// only the untargeted `{ }` becomes unit.
+
+use std::io;
+
+fn each(xs: List[i64], f: (i64) -> ()) {
+    for x in xs {
+        f(x);
+    }
+}
+
+fn main() {
+    // The do-nothing callback: the empty block yields unit, so nothing is printed here.
+    each([1, 2, 3], (n: i64) => { });
+    io::println("silent pass");
+    // A real callback alongside it still runs.
+    each([1, 2, 3], (n: i64) => { io::println("saw #{n}"); });
+}
