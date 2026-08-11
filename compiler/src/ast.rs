@@ -160,6 +160,22 @@ impl AnnArg {
             _ => None,
         }
     }
+
+    /// A `@derive` argument: a protocol path, and its single string argument if it has one
+    /// (`@derive(Error("cannot open {path}"))`). `None` for any other shape -- a bare string,
+    /// or a call with more than one argument -- which `@derive` reports uniformly. This is
+    /// the wider reading `name()` refuses: `name()` is for a plain path, and a derive arg may
+    /// legitimately carry a message template.
+    pub fn derive_arg(&self) -> Option<(&[String], Option<&str>)> {
+        match self {
+            AnnArg::Item { path, args, .. } => match args.as_slice() {
+                [] => Some((path, None)),
+                [AnnArg::Str { text, .. }] => Some((path, Some(text))),
+                _ => None,
+            },
+            AnnArg::Str { .. } => None,
+        }
+    }
 }
 
 impl Annotation {

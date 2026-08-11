@@ -313,6 +313,7 @@ protocols/two_impls_for_one_target_is_an_error.neon
 protocols/two_impls_may_not_overlap_unnested.neon
 protocols/union_receiver_dispatches_by_variant.neon
 records/derive_display.neon
+records/derive_error.neon
 records/derive_from_json.neon
 records/json_decode_encode.neon
 records/derive_needs_its_fields_displayable.neon

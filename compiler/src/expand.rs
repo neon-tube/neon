@@ -559,10 +559,10 @@ impl Processor for Derive {
             );
         }
         for arg in &ann.args {
-            let Some(path) = arg.name() else {
+            let Some((path, template)) = arg.derive_arg() else {
                 cx.error(
                     arg.span().clone(),
-                    "`@derive` names a protocol, e.g. `@derive(Display)`",
+                    "`@derive` names a protocol, e.g. `@derive(Display)`, or `@derive(Error(\"..\"))`",
                 );
                 continue;
             };
@@ -577,6 +577,19 @@ impl Processor for Derive {
                     format!(
                         "cannot derive `{name}`: the compiler can write `{known}`. \
                          Anything else is an ordinary `impl {name} for ..`"
+                    ),
+                );
+                continue;
+            }
+            // A message template belongs to `Error` alone: it is that derive's way of saying
+            // how the fields render, and no other derivable protocol has somewhere to put it.
+            if template.is_some() && path.last().map(String::as_str) != Some("Error") {
+                let name = path.join("::");
+                cx.error(
+                    arg.span().clone(),
+                    format!(
+                        "`@derive({name}(\"..\"))` takes no argument; only `@derive(Error(\"..\"))` \
+                         carries a message template"
                     ),
                 );
             }

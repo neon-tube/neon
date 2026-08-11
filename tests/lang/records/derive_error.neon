@@ -1,0 +1,30 @@
+// `@derive(Error("template"))` assembles the message from the record's own fields -- computed
+// when asked for, not stored. Each `{field}` is a hole over that field; `{{`/`}}` are literal
+// braces. A bare `@derive(Error)` renders a lone `message` field, for the errors that carry
+// only that. The message is reached through the protocol method `message(e)`, the way any
+// structured error (with no `message` field to read) must be.
+
+use std::io;
+
+@derive(Error("cannot open {path}: {reason}"))
+record OpenError { path: str, reason: str }
+
+@derive(Error("key `{key}` not found"))
+record Missing { key: str }
+
+@derive(Error("HTTP {status} for {url}"))
+record HttpError { status: i64, url: str }
+
+@derive(Error("a {{literal}} brace, field {name}"))
+record Braces { name: str }
+
+@derive(Error)
+record Simple { message: str }
+
+fn main() {
+    io::println(message(OpenError { path: "/etc/hosts", reason: "denied" }));
+    io::println(message(Missing { key: "port" }));
+    io::println(message(HttpError { status: 404, url: "/x" }));
+    io::println(message(Braces { name: "n" }));
+    io::println(message(Simple { message: "boom" }));
+}

@@ -47,14 +47,23 @@ trait Derivable {
 
     /// Write the impl. `protocol` is the author's whole path, carried verbatim into the
     /// generated decl; `span` is the annotation argument's, which is what keeps two derives
-    /// on one record distinguishable (see `derive_decls`).
-    fn write(&self, protocol: &[String], r: &RecordDecl, ann: &Annotation, span: &Span) -> Decl;
+    /// on one record distinguishable (see `derive_decls`). `template` is the string a derive
+    /// may carry -- only `Error`'s does; the rest ignore it, and `expand` has already
+    /// rejected one given to a protocol that has no use for it.
+    fn write(
+        &self,
+        protocol: &[String],
+        r: &RecordDecl,
+        ann: &Annotation,
+        span: &Span,
+        template: Option<&str>,
+    ) -> Decl;
 }
 
 /// The registry. A protocol not here is not derivable, and that is the whole definition —
 /// `can_derive`, the dispatch in `derive_one` and the diagnostic's list of names all read
 /// it rather than restating it.
-const DERIVABLE: &[&dyn Derivable] = &[&Display, &ToJson, &FromJson];
+const DERIVABLE: &[&dyn Derivable] = &[&Display, &ToJson, &FromJson, &ErrorMessage];
 
 fn lookup(name: &str) -> Option<&'static dyn Derivable> {
     DERIVABLE.iter().copied().find(|d| d.protocol() == name)
@@ -98,7 +107,9 @@ fn derive_decls(decls: &mut Vec<Decl>) {
                         continue;
                     }
                     for arg in &ann.args {
-                        let Some(path) = arg.name() else { continue };
+                        let Some((path, template)) = arg.derive_arg() else {
+                            continue;
+                        };
                         // The ARGUMENT's span, not the record's, and it is load-bearing
                         // rather than a nicety. `lower.rs::impl_def_at` correlates an impl's
                         // AST with its `ImplDef` by `(module, span)` and takes the first
@@ -113,7 +124,7 @@ fn derive_decls(decls: &mut Vec<Decl>) {
                         // or `@derive(A, B)`, so this distinguishes both spellings, and it
                         // points a diagnostic about the generated impl at the name that
                         // asked for it.
-                        if let Some(decl) = derive_one(path, r, ann, arg.span()) {
+                        if let Some(decl) = derive_one(path, template, r, ann, arg.span()) {
                             generated.push(decl);
                         }
                     }
@@ -143,10 +154,16 @@ fn derive_decls(decls: &mut Vec<Decl>) {
 ///
 /// `Display` needs none of them only because it is in the prelude, which is a fact about the
 /// prelude and not a privilege of the derive.
-fn derive_one(path: &[String], r: &RecordDecl, ann: &Annotation, span: &Span) -> Option<Decl> {
+fn derive_one(
+    path: &[String],
+    template: Option<&str>,
+    r: &RecordDecl,
+    ann: &Annotation,
+    span: &Span,
+) -> Option<Decl> {
     // `expand` rejected anything not in the registry before we got here.
     let d = lookup(path.last()?)?;
-    Some(d.write(path, r, ann, span))
+    Some(d.write(path, r, ann, span, template))
 }
 
 /// `impl[T] Display for P[T] where T: Display { fn to_string(v: P[T]) -> str { .. } }`
@@ -167,7 +184,14 @@ impl Derivable for Display {
         "Display"
     }
 
-    fn write(&self, protocol: &[String], r: &RecordDecl, ann: &Annotation, span: &Span) -> Decl {
+    fn write(
+        &self,
+        protocol: &[String],
+        r: &RecordDecl,
+        ann: &Annotation,
+        span: &Span,
+        _template: Option<&str>,
+    ) -> Decl {
         let sp = || ann.span.clone();
         let target = self_type(r, &sp());
 
@@ -296,7 +320,14 @@ impl Derivable for ToJson {
         "ToJson"
     }
 
-    fn write(&self, protocol: &[String], r: &RecordDecl, ann: &Annotation, span: &Span) -> Decl {
+    fn write(
+        &self,
+        protocol: &[String],
+        r: &RecordDecl,
+        ann: &Annotation,
+        span: &Span,
+        _template: Option<&str>,
+    ) -> Decl {
         let sp = || ann.span.clone();
         let target = self_type(r, &sp());
 
@@ -416,7 +447,14 @@ impl Derivable for FromJson {
         "FromJson"
     }
 
-    fn write(&self, protocol: &[String], r: &RecordDecl, ann: &Annotation, span: &Span) -> Decl {
+    fn write(
+        &self,
+        protocol: &[String],
+        r: &RecordDecl,
+        ann: &Annotation,
+        span: &Span,
+        _template: Option<&str>,
+    ) -> Decl {
         let sp = || ann.span.clone();
         let target = self_type(r, &sp());
 
@@ -531,6 +569,134 @@ impl Derivable for FromJson {
             span: span.clone(),
         }
     }
+}
+
+/// `impl Error for P { fn message(v: P) -> str { "..#{v.field}.." } }` — the message ASSEMBLED
+/// from a template rather than stored. `@derive(Error("cannot open {path}: {reason}"))` reads
+/// each `{field}` as a hole over that field, so the message is computed from the record's own
+/// fields whenever it is asked for -- no redundant rendered copy kept in a field, which is the
+/// whole reason a field-reading derive was the wrong shape. Bare `@derive(Error)` renders a
+/// single `message` field, for an error that carries only that and wants the boilerplate gone.
+///
+/// A field renders through `Display` because it is an interpolation hole. So an unknown
+/// `{field}` is the same "no field" error a hand-written `v.field` gives, and a field whose
+/// type has no `Display` is a dispatch error naming it -- exactly what writing the body out by
+/// hand would have hit. `{{` and `}}` are literal braces, as under `#{ }`.
+struct ErrorMessage;
+
+impl Derivable for ErrorMessage {
+    fn protocol(&self) -> &'static str {
+        "Error"
+    }
+
+    fn write(
+        &self,
+        protocol: &[String],
+        r: &RecordDecl,
+        ann: &Annotation,
+        span: &Span,
+        template: Option<&str>,
+    ) -> Decl {
+        let sp = || ann.span.clone();
+        let target = self_type(r, &sp());
+
+        let parts = match template {
+            Some(t) => parse_template(t, &sp()),
+            // Bare `@derive(Error)`: render the `message` field verbatim. An error with no such
+            // field and no template is a "no field `message`" error against this body, which is
+            // the nudge to give the derive a template or the record a `message`.
+            None => vec![StrPart::Interp(field_of("v", "message", &sp()))],
+        };
+
+        let body = Block {
+            stmts: vec![],
+            tail: Some(Box::new(expr(ExprKind::Str(parts), &sp()))),
+            span: sp(),
+        };
+
+        let method = FnDecl {
+            name: "message".to_string(),
+            generics: vec![],
+            params: vec![Param {
+                name: "v".to_string(),
+                ty: target.clone(),
+                span: sp(),
+            }],
+            throws: None,
+            ret: Some(named("str", vec![], &sp())),
+            wheres: vec![],
+            body: Some(body),
+            annotations: vec![],
+        };
+
+        // A generic field renders through `Display` in a hole, so bound each parameter by it.
+        // Every error record today is non-generic, so this is empty in practice.
+        let display_bound = named("Display", vec![], &sp());
+        let wheres = r
+            .generics
+            .iter()
+            .map(|g| WhereClause {
+                param: g.clone(),
+                bound: display_bound.clone(),
+            })
+            .collect();
+
+        Decl {
+            docs: Vec::new(),
+            kind: DeclKind::Impl(ImplDecl {
+                orphan: false,
+                protocol: protocol.to_vec(),
+                generics: r.generics.clone(),
+                target,
+                wheres,
+                methods: vec![method],
+                annotations: vec![],
+            }),
+            span: span.clone(),
+        }
+    }
+}
+
+/// A message template into the pieces an interpolated string is built from: literal text, and
+/// `{field}` holes that read and render a field. `{{`/`}}` are literal braces. A `{` with no
+/// closing `}` takes the rest of the string as the field name, which then fails as "no field"
+/// against whatever it spells -- the diagnostic a malformed template deserves.
+fn parse_template(t: &str, span: &Span) -> Vec<StrPart> {
+    let mut parts: Vec<StrPart> = Vec::new();
+    let mut text = String::new();
+    let mut chars = t.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '{' if chars.peek() == Some(&'{') => {
+                chars.next();
+                text.push('{');
+            }
+            '}' if chars.peek() == Some(&'}') => {
+                chars.next();
+                text.push('}');
+            }
+            '{' => {
+                if !text.is_empty() {
+                    parts.push(StrPart::Text(std::mem::take(&mut text)));
+                }
+                let mut name = String::new();
+                while let Some(&c2) = chars.peek() {
+                    if c2 == '}' {
+                        break;
+                    }
+                    name.push(c2);
+                    chars.next();
+                }
+                chars.next(); // the closing '}', if present
+                parts.push(StrPart::Interp(field_of("v", name.trim(), span)));
+            }
+            _ => text.push(c),
+        }
+    }
+    if !text.is_empty() {
+        parts.push(StrPart::Text(text));
+    }
+    parts
 }
 
 /// `try e` — the propagating form, which is the only one a derive wants: a decode that
