@@ -1,0 +1,30 @@
+// `json::decode[T]` / `encode` — wire text straight to a value and back. The turbofish is
+// the dispatch subject `from_json` otherwise takes from an expected type, so a decode needs
+// no `let x: T` annotation and works in expression position, where there is nothing to
+// annotate.
+
+use std::io;
+use std::json;
+
+@derive(json::ToJson, json::FromJson)
+record Config { host: str, port: i64, tls: bool }
+
+fn main() {
+    // No `let c: Config` -- the turbofish names the target.
+    let c = try! json::decode[Config]("{\"host\": \"a.example\", \"port\": 8080, \"tls\": true}");
+    io::println(c.host);
+    io::println("#{c.port}");
+    io::println("#{c.tls}");
+
+    // Round-trips through text: encode then decode is the identity on the value.
+    let wire = json::encode(c);
+    let again = try! json::decode[Config](wire);
+    io::println("#{again == c}");
+
+    // Expression position: a decode as a call argument, still no annotation in sight.
+    io::println("#{(try! json::decode[Config](wire)) == c}");
+
+    // A malformed document is a value, not a trap.
+    let bad = try? json::decode[Config]("not json");
+    io::println("#{bad is null}");
+}

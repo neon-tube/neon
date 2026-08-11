@@ -1,0 +1,51 @@
+// The batch draws thread the generator exactly ONCE and are identical to calling the
+// single-draw form in a loop -- reproducibility is unchanged, the per-number rebinding is
+// not. State stays on the left of every tuple, so these read straight down.
+
+use std::io;
+use std::list;
+use std::random;
+
+fn main() {
+    // `ints` equals `int` called in a loop from the same seed, same sequence.
+    let (_b, batch) = random::ints(random::new(5), 4, 0, 100);
+    let r0 = random::new(5);
+    let (r1, m0) = random::int(r0, 0, 100);
+    let (r2, m1) = random::int(r1, 0, 100);
+    let (r3, m2) = random::int(r2, 0, 100);
+    let (_r4, m3) = random::int(r3, 0, 100);
+    io::println("#{batch == [m0, m1, m2, m3]}");
+    io::println("#{list::len(batch)}");
+    io::println("#{list::all(batch, (x: i64) => x >= 0 and x < 100)}");
+
+    // `floats` gives n values in [0, 1).
+    let (_f, fs) = random::floats(random::new(2), 3);
+    io::println("#{list::len(fs)}");
+    io::println("#{list::all(fs, (x: f64) => x >= 0.0 and x < 1.0)}");
+
+    // A coin is reproducible like everything else here.
+    let (_c1, h1) = random::flip(random::new(9));
+    let (_c2, h2) = random::flip(random::new(9));
+    io::println("#{h1 == h2}");
+
+    // `sample` draws k DISTINCT elements, every one from the source.
+    let pool = [10, 20, 30, 40, 50];
+    let (_s, drawn) = try! random::sample(random::new(3), pool, 3);
+    io::println("#{list::len(drawn)}");
+    io::println("#{list::len(list::unique(drawn)) == 3}");
+    io::println("#{list::all(drawn, (x: i64) => list::contains(pool, x))}");
+
+    // k beyond the list is an error for sample: you cannot draw more distinct than exist.
+    let over = try? random::sample(random::new(1), pool, 6);
+    io::println("#{over is null}");
+
+    // `choices` draws WITH replacement, so k may exceed the list and repeats are fine.
+    let (_ch, many) = try! random::choices(random::new(4), [1, 2, 3], 5);
+    io::println("#{list::len(many)}");
+    io::println("#{list::all(many, (x: i64) => list::contains([1, 2, 3], x))}");
+
+    // Drawing from nothing is the one error `choices` reports.
+    let none: List[i64] = [];
+    let empty = try? random::choices(random::new(1), none, 3);
+    io::println("#{empty is null}");
+}

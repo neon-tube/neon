@@ -111,6 +111,7 @@ collections/nested_write_in_place.neon
 collections/partial_record_write_across_distinct_slots.neon
 collections/partial_record_write_keeps_stale_fields.neon
 collections/process_captures_and_streams.neon
+collections/random_batches.neon
 collections/random_is_reproducible_by_construction.neon
 collections/range_is_a_list_everywhere_else.neon
 collections/stdlib_breadth.neon
@@ -308,6 +309,7 @@ protocols/two_impls_may_not_overlap_unnested.neon
 protocols/union_receiver_dispatches_by_variant.neon
 records/derive_display.neon
 records/derive_from_json.neon
+records/json_decode_encode.neon
 records/derive_needs_its_fields_displayable.neon
 records/derive_to_json.neon
 records/boxed_record_reaching_a_pointer_cycle.neon

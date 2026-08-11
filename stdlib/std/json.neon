@@ -347,6 +347,32 @@ fn parse(s: str) throws JsonError -> Json {
     v
 }
 
+// ---- text straight to and from a type ----
+//
+// `from_json`/`to_json` dispatch on the type a call is CHECKED against, which is exactly
+// what an argument slot or a lambda body does not supply -- there you would write
+// `let v: T = try from_json(j)` just to name the target. `decode` and `encode` name it with
+// a turbofish instead, so the dispatch has a subject anywhere an expression can go, and they
+// fold the parse/stringify step in: one call from wire text to a value and back.
+//
+//     let cfg = try json::decode[Config]("{\"port\": 8080}");
+//     let wire = json::encode(cfg);
+//     let ports = try! list::map(lines, (l: str) => try json::decode[Config](l));
+
+/// Wire text into a `T`: `parse` then the `T` its impl reads back. The turbofish is the
+/// dispatch subject `from_json` otherwise takes from an expected type, so this needs no
+/// annotation and works in argument position.
+fn decode[T](text: str) throws JsonError -> T where T: FromJson {
+    try from_json(try parse(text))
+}
+
+/// A `T` into wire text: its `to_json` then `stringify`. The mirror of `decode`, and the
+/// `json.dumps`/`json.loads` pair a caller reaches for when the `Json` node in between was
+/// never the point.
+fn encode[T](v: T) -> str where T: ToJson {
+    stringify(to_json(v))
+}
+
 /// One value at `i` (whitespace already skipped): dispatch on the first byte.
 fn parse_value(s: str, i: i64) throws JsonError -> (Json, i64) {
     let b = byte(s, i);

@@ -1,8 +1,15 @@
 // Randomness as a value. An `Rng` is the generator's state — xoshiro256++, four words —
-// and every function takes one and hands back the successor beside its answer:
+// and every function takes one on the LEFT and hands the successor back on the left too,
+// its answer beside it:
 //
 //     let rng = random::new(42);
-//     let (roll, rng) = random::int(rng, 1, 7);
+//     let (rng, roll) = random::int(rng, 1, 7);
+//     let (rng, side) = random::flip(rng);
+//
+// State on the left in both directions is what makes the threading COMPOSE: the generator
+// sits in the same position at every call, so a run of draws is a column of
+// `let (rng, x) = ...(rng, ...)` lines that reads straight down, and nothing has to hunt
+// for which end of the tuple the successor came out of.
 //
 // The rebind is the language's ordinary gait (`out = push(out, x)` is the same shape),
 // and a linearly-threaded Rng is uniquely owned, so the "new" state is an in-place
@@ -15,6 +22,13 @@
 //
 // `opaque` so the words stay this module's business: reachable state would make "the
 // sequence the algorithm defines" a promise anyone could quietly break.
+//
+// The threading is the cost of that guarantee, and for a handful of draws it is a lot of
+// rebinding. There is no hidden default generator on purpose: a global one would be the
+// single impure, unreproducible thing in the module, and this language has no mutable
+// global to put it in anyway. The answer to "I just want ten numbers" is to ask for ten:
+// `ints`, `floats`, `sample` and `choices` thread the generator ONCE and hand back the
+// batch, so the rebind happens per call to them, not per number.
 
 use std::list;
 
@@ -45,49 +59,134 @@ fn from_entropy() -> Rng {
 }
 
 /// The raw 64 bits, any value an `i64` can hold.
-fn next(r: Rng) -> (i64, Rng) {
+fn next(r: Rng) -> (Rng, i64) {
     let (v, s0, s1, s2, s3) = raw::next(r.s0, r.s1, r.s2, r.s3);
-    (v, Rng { s0: s0, s1: s1, s2: s2, s3: s3 })
+    (Rng { s0: s0, s1: s1, s2: s2, s3: s3 }, v)
 }
 
 /// Uniform in the half-open `[lo, hi)`, like `range` and `slice` and everything else.
 /// An empty range traps — an element of nothing is a mistake, as dividing by zero is.
-fn int(r: Rng, lo: i64, hi: i64) -> (i64, Rng) {
+fn int(r: Rng, lo: i64, hi: i64) -> (Rng, i64) {
     let (v, s0, s1, s2, s3) = raw::bounded(r.s0, r.s1, r.s2, r.s3, hi - lo);
-    (lo + v, Rng { s0: s0, s1: s1, s2: s2, s3: s3 })
+    (Rng { s0: s0, s1: s1, s2: s2, s3: s3 }, lo + v)
 }
 
 /// Uniform in `[0, 1)`: the top 53 bits over 2^53, so every representable step is
 /// equally likely.
-fn float(r: Rng) -> (f64, Rng) {
+fn float(r: Rng) -> (Rng, f64) {
     let (v, s0, s1, s2, s3) = raw::float_bits(r.s0, r.s1, r.s2, r.s3);
-    (v, Rng { s0: s0, s1: s1, s2: s2, s3: s3 })
+    (Rng { s0: s0, s1: s1, s2: s2, s3: s3 }, v)
+}
+
+/// A fair coin. `[0, 2)` rather than the low bit of `next`, so it rides the same unbiased
+/// path `int` does and needs no claim about which of xoshiro's bits are the good ones.
+fn flip(r: Rng) -> (Rng, bool) {
+    let (r2, v) = int(r, 0, 2);
+    (r2, v == 1)
 }
 
 /// One element, uniformly. Throws on the empty list rather than trapping: a list is
 /// data, and data being empty is the caller's ordinary world, not a broken program.
-fn pick[T](r: Rng, xs: List[T]) throws IndexError -> (T, Rng) {
+fn pick[T](r: Rng, xs: List[T]) throws IndexError -> (Rng, T) {
     if list::is_empty(xs) {
         throw IndexError { message: "pick from an empty list" };
     }
-    let (i, r2) = int(r, 0, list::len(xs));
-    (xs[i], r2)
+    let (r2, i) = int(r, 0, list::len(xs));
+    (r2, xs[i])
 }
 
 /// A uniform permutation — Fisher–Yates, walking from the end. `try!` on the swaps is
 /// exact, not optimistic: both indices are bounded by the loop, so a throw is
 /// unreachable and deserves the panic it would get.
-fn shuffle[T](r: Rng, xs: List[T]) -> (List[T], Rng) {
+fn shuffle[T](r: Rng, xs: List[T]) -> (Rng, List[T]) {
     let out = xs;
     let rng = r;
     let i = list::len(out) - 1;
     while i > 0 {
-        let (j, r2) = int(rng, 0, i + 1);
+        let (r2, j) = int(rng, 0, i + 1);
         rng = r2;
         let a = out[i];
         out = try! list::set(out, i, out[j]);
         out = try! list::set(out, j, a);
         i = i - 1;
     };
-    (out, rng)
+    (rng, out)
+}
+
+// ---- batches ----
+//
+// Thread the generator once, draw many. Reach for these wherever a loop would otherwise
+// rebind an `Rng` a number at a time; the sequence is identical to calling the single-draw
+// form in a loop, so reproducibility is unchanged.
+
+/// `n` draws from the half-open `[lo, hi)`.
+fn ints(r: Rng, n: i64, lo: i64, hi: i64) -> (Rng, List[i64]) {
+    let out: List[i64] = [];
+    let rng = r;
+    let i = 0;
+    while i < n {
+        let (r2, v) = int(rng, lo, hi);
+        rng = r2;
+        out = list::push(out, v);
+        i = i + 1;
+    };
+    (rng, out)
+}
+
+/// `n` draws from `[0, 1)`.
+fn floats(r: Rng, n: i64) -> (Rng, List[f64]) {
+    let out: List[f64] = [];
+    let rng = r;
+    let i = 0;
+    while i < n {
+        let (r2, v) = float(rng);
+        rng = r2;
+        out = list::push(out, v);
+        i = i + 1;
+    };
+    (rng, out)
+}
+
+/// `k` distinct elements, in uniformly random order: a partial Fisher–Yates that stops
+/// after `k` swaps rather than shuffling the whole list. Throws when `k` exceeds the list,
+/// because you cannot draw more distinct things than there are -- for draws WITH
+/// replacement, where that ceiling does not apply, see `choices`.
+fn sample[T](r: Rng, xs: List[T], k: i64) throws IndexError -> (Rng, List[T]) {
+    if k > list::len(xs) {
+        throw IndexError { message: "sample of #{k} from #{list::len(xs)} elements" };
+    }
+    let pool = xs;
+    let rng = r;
+    let out: List[T] = [];
+    // `m` is the length of the still-active prefix `[0, m)`; a drawn slot is filled from the
+    // shrinking tail and dropped out of range, so no element is ever picked twice.
+    let m = list::len(pool);
+    let i = 0;
+    while i < k {
+        let (r2, j) = int(rng, 0, m);
+        rng = r2;
+        out = list::push(out, pool[j]);
+        pool = try! list::set(pool, j, pool[m - 1]);
+        m = m - 1;
+        i = i + 1;
+    };
+    (rng, out)
+}
+
+/// `k` elements drawn independently WITH replacement, so `k` may exceed the list and
+/// repeats are expected. Throws only on the empty list, where there is nothing to draw.
+fn choices[T](r: Rng, xs: List[T], k: i64) throws IndexError -> (Rng, List[T]) {
+    if list::is_empty(xs) {
+        throw IndexError { message: "choices from an empty list" };
+    }
+    let out: List[T] = [];
+    let rng = r;
+    let i = 0;
+    while i < k {
+        let (r2, idx) = int(rng, 0, list::len(xs));
+        rng = r2;
+        out = list::push(out, xs[idx]);
+        i = i + 1;
+    };
+    (rng, out)
 }
