@@ -5,9 +5,9 @@ are implemented and tested on the `fibers` branch. This document describes what 
 **is**; the last section is an honest list of what it is **not** yet. Where this file and a
 module comment disagree, the module comment is nearer the code and this file is the bug.
 
-Verified continuously by: 190 C unit tests under ASan/UBSan/LSan and 315 backend trials (a
+Verified continuously by: 211 C unit tests under ASan/UBSan/LSan and 330 backend trials (a
 corpus program compiled, linked against the sanitized runtime, run, and diffed), **each run
-against both IO engines**; 20 of those corpus programs are fiber programs.
+against both IO engines**; ~30 of those corpus programs are fiber programs.
 
 ## The model, as a user meets it
 
@@ -374,14 +374,22 @@ Everything below is deliberate scope, not oversight. Each is independent of the 
   a **heterogeneous** select over channels of different element types (which needs union
   machinery to say which type came back), and `select_recv_timeout` (the deadline park the
   runtime already has for `recv_timeout`).
-- **Cancellation.** A fiber carrying a token it checks, returning normally so its own cleanups
-  run through the ordinary path. The safepoint machinery is exactly the place to poll one.
-  Hard `kill(fiber)` is a separate, harder question and stays deferred.
-- **Structured concurrency / supervision.** A `scope` that awaits its children and surfaces
-  the first failure. `Task` failure already propagates along await edges, which is the
-  primitive it would be built from.
-- **Timers beyond `sleep`.** No interval/ticker, no timeout combinator over an arbitrary
-  operation (`recv_timeout` is the one timed op).
+- **Structured-concurrency `scope` with join.** `std::cancel` is built — a token is a channel
+  that only closes, so `cancel::cancel`/`is_cancelled`/`check`, and `cancel::scope(body)`
+  auto-cancels its token when the region ends (throw-safe, via a resource guard) so a spawned
+  subtree cannot outlive it. And `task::recover(t) -> T | Panic` supervises a crash — an
+  awaited task's trap surfaces as a distinct non-`Error` `Panic` rather than propagating,
+  observed with no longjmp (the crashed work's own fiber was torn down by crash isolation).
+  What remains is the *join*: a scope that spawns children, awaits them, and cancels the
+  siblings on the first `Panic`. The primitives are now all here (recover for the failure,
+  the token for the cancel); it is a stdlib combinator away. Also unbuilt: `cancel::child`
+  (a token firing when a parent does — needs a bounded-lifetime watcher fiber so a
+  never-cancelled parent cannot leave it blocked), and capturing the trap *message* into
+  `Panic` (it carries only that a crash happened).
+- **Timers beyond a per-operation timeout.** Network ops are bounded (`tcp::connect_timeout`,
+  `read_timeout`, the `tls::` twins, `net::TimeoutError`, and an `http::client` `timeout(ms)`)
+  on a deadline-aware IO wait; and `recv_timeout` times a receive. Still absent: an
+  interval/ticker, and a general timeout combinator over an *arbitrary* operation.
 - **Fiber-local storage.** Not designed. Arenas make it cheap if it is ever wanted.
 - **One awaiter per task.** A second `await` traps. Multi-await would need the result to be
   copied rather than restaged out once.

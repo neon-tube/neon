@@ -196,7 +196,23 @@ Module headers are the reference. The shape:
     std::time            monotonic, unix_millis, sleep
     std::cmp             max, min, max_by, min_by
     std::fmt             pad, pad_left, pad_left_with, fixed
-    std::json            Json, ToJson, FromJson, encode, decode, JsonError
+    std::json            Json, ToJson, FromJson, encode, decode, JsonError, parse (text),
+                         object, stringify, field
+    std::fiber           runtime, runtime_on, spawn, yield, has_fibers (a `move` lambda
+                         hands a captured resource's baton to the spawned fiber)
+    std::channel         Channel, new, bounded, send (throws ClosedError), recv, close,
+                         is_closed, recv_timeout, select_recv, ClosedError
+    std::task            Task, spawn, await (propagates a crash), recover (T | Panic —
+                         supervise instead), Panic
+    std::cancel          Token, Cancelled, new, cancel, is_cancelled, check, channel, scope
+    std::net             TlsError, TimeoutError; mod tcp (Listener, Stream, listen, accept,
+                         connect, connect_timeout, read, read_timeout, write, close, serve),
+                         mod udp, mod tls (connect, connect_insecure, connect_timeout, listen,
+                         accept, read, read_timeout, write, close — mbedTLS, verify by default)
+    std::url             Url, UrlError, parse (RFC 3986, raw components), decode
+    std::http            Request, Response, HttpError, Method; mod client (new, url, path,
+                         method, header, body, timeout, json, send, get, post) and mod server
+                         (serve, serve_tls, connection, ok, respond, json_response)
 
 Deliberate exit is `os::exit(code)`, typed `never`; abnormal termination is `neon_trap`,
 which `_exit`s 101 on stderr (`docs/decisions.md`). Earlier drafts of this file said

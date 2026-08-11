@@ -471,6 +471,26 @@ in the solver.
 - Type inference beyond local propagation of an expected type. Signatures are explicit.
 - Polymorphic set-theoretic types in their full generality.
 
+## Known limitation: a lambda parameter whose type lives in an unsolved generic
+
+`apply[R](f: (i64) -> R)` called as `apply((n) => n + 1)` needs `(n: i64)` written out. A
+lambda argument reads its parameter types from the expected arrow (`Checker::lambda`), but
+inside a generic call `solve_generics` checks each argument with `None` first — to collect
+its type before any generic is solved — and only the *re-check* after solving passes the
+parameter template down. That works whenever the generic is pinned by another argument or
+the expected result (so `map(xs, (x) => x + 1)` gets `x: i64` from `xs`), and fails only when
+the generic appears *solely* in the lambda's own return, where nothing has solved it by the
+first pass.
+
+Two fixes were tried and reverted: passing the raw template makes the lambda's concrete
+`(i64) -> i64` fail assignability against the rigid `(i64) -> R`; substituting the unsolved
+generic with `any` over-widens *value* arguments to `any` and breaks `where` bounds
+(`any` does not satisfy `Ord`). The sound fix is variance-aware substitution of unsolved
+generics (⊤ in covariant positions, ⊥ in contravariant) woven into the inference ordering —
+real work in the crown-jewels of the checker, not worth destabilising for a one-token
+annotation. Rust has the same class of limitation on closure parameters. Documented rather
+than forced.
+
 ## Risks
 
 - **Arrows are where this gets hard.** The decomposition is exponential in the number of
