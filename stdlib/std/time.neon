@@ -35,9 +35,13 @@ use std::string;
 // string are honoured on the way IN (the instant is unambiguous); everything held and
 // emitted is UTC, marked `Z`.
 
+/// Milliseconds in one second -- the unit `unix_millis` and `DateTime.millis` count in.
 const MILLIS_PER_SECOND: i64 = 1000
+/// Milliseconds in one minute.
 const MILLIS_PER_MINUTE: i64 = 60000
+/// Milliseconds in one hour.
 const MILLIS_PER_HOUR: i64 = 3600000
+/// Milliseconds in one day -- the split point between the calendar date and the time of day.
 const MILLIS_PER_DAY: i64 = 86400000
 
 /// A wall-clock instant in UTC, broken into calendar fields. `month` is 1..=12 and `day`

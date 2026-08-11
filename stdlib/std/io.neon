@@ -93,6 +93,7 @@ const CHUNK: i64 = 4096
 /// other state; reading at or past the end yields `""`.
 sealed record StringReader { data: str, at: i64 }
 
+/// A `Read` over `s`, positioned at its first byte.
 fn string_reader(s: str) -> StringReader { StringReader { data: s, at: 0 } }
 
 impl Read for StringReader {
@@ -115,8 +116,10 @@ impl Read for StringReader {
 /// bytes collected so far.
 sealed record StringWriter { data: str }
 
+/// An empty in-memory `Write`; `written` reads back what has been collected into it.
 fn string_writer() -> StringWriter { StringWriter { data: "" } }
 
+/// The bytes written into `w` so far.
 fn written(w: StringWriter) -> str { w.data }
 
 impl Write for StringWriter {
@@ -130,6 +133,7 @@ impl Write for StringWriter {
 /// the advanced buffer beside the line.
 sealed record BufReader[R] { inner: R, buf: str, eof: bool }
 
+/// Wrap any `Read` in a line-buffering reader, ready for `next_line` / `read_to_end`.
 fn buffered[R](r: R) -> BufReader[R] where R: Read {
     BufReader { inner: r, buf: "", eof: false }
 }

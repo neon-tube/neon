@@ -15,9 +15,10 @@ use std::list;
 
 // The padding lives in `std::string` -- it is a string operation, and `str.ljust`/`rjust`
 // is where every other language keeps it. These are the column-formatting names for the
-// same thing, so a caller reaching for `fmt` to lay out a table finds them here too. Pad on
-// the right to at least `width` bytes; longer input is returned unchanged, because silently
-// losing data to a layout decision is worse than a ragged column.
+// same thing, so a caller reaching for `fmt` to lay out a table finds them here too.
+
+/// Pad on the right to at least `width` bytes; longer input is returned unchanged, because
+/// silently losing data to a layout decision is worse than a ragged column.
 fn pad(s: str, width: i64) -> str {
     string::pad_end(s, width)
 }
