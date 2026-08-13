@@ -204,6 +204,25 @@ bool neon_uring_open(void) {
     for (unsigned i = 0; i < p.sq_entries; i++) {
         t_ring.sq_array[i] = i;
     }
+
+    // Probe `io_uring_enter` before trusting the ring. A seccomp policy that permits
+    // `io_uring_setup` but blocks `io_uring_enter` -- exactly what some CI sandboxes ship,
+    // GitHub's hosted runners among them -- otherwise leaves `fd >= 0`, so the scheduler
+    // commits to a ring whose every enter returns EPERM: nothing is ever submitted or waited
+    // on, no completion arrives, and the pump spins forever (the CI job's 6-hour hang). A
+    // zero-submit, zero-wait enter is a no-op on a working ring and the cheapest way to learn
+    // this. Refused, it means the same as a failed setup: an unusable ring, so tear down and
+    // let the caller keep the epoll path.
+    if (neon_uring_enter(fd, 0, 0, 0) < 0) {
+        munmap(sqes, sqe_len);
+        if (cq != sq) {
+            munmap(cq, cq_len);
+        }
+        munmap(sq, sq_len);
+        close(fd);
+        t_ring.fd = -1;
+        return false;
+    }
     return true;
 }
 

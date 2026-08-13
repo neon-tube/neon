@@ -80,8 +80,14 @@ script = '''
 set -euo pipefail
 cmake -S runtime -B runtime/build-tests -DNEON_RT_TESTS=ON -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=gcc
 cmake --build runtime/build-tests --target neon_rt_tests --parallel
-ctest --test-dir runtime/build-tests -V
-NEON_IO=epoll runtime/build-tests/neon_rt_tests
+# The whole suite is seconds per engine locally; the cap only ever fires on a HANG. Without
+# it a deadlocked test (see the io_uring large-capture hang on GitHub's kernel) ran the CI
+# job to its 6-hour ceiling instead of failing in minutes. `timeout` exits 124 on expiry,
+# which `set -e` turns into a fast, named failure telling you exactly which engine wedged.
+echo "== io_uring engine =="
+timeout 600 ctest --test-dir runtime/build-tests --timeout 120 -V
+echo "== epoll engine =="
+timeout 600 env NEON_IO=epoll runtime/build-tests/neon_rt_tests
 '''
 
 [tasks.models]

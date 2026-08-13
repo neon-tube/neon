@@ -41,8 +41,14 @@
 #include <dlfcn.h>
 #endif
 
+// Only read where the frame-pointer walk exists: a platform without `NEON_TRACE_SUPPORTED`
+// (Windows, a CBMC build) compiles neither the writer nor the readers below, so leaving these
+// at file scope there is an unused-variable error under `-Werror`. Guard them with the same
+// condition as every use.
+#ifdef NEON_TRACE_SUPPORTED
 static void* neon_trace_marked[NEON_TRACE_MAX];
 static int neon_trace_marked_n = 0;
+#endif
 
 #ifdef NEON_TRACE_SUPPORTED
 // Walk the frame-pointer chain from the caller. Every step is sanity-checked — the
