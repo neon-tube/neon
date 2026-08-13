@@ -108,6 +108,9 @@ script = '''
 set -euo pipefail
 cmake -S runtime -B runtime/build-archive -DCMAKE_BUILD_TYPE=None -DCMAKE_C_COMPILER=gcc
 cmake --build runtime/build-archive --target neon_rt --parallel
+# `target/` is cargo's; this task runs in the CI job that never invokes cargo, so create it
+# rather than assume it -- the link output and its byte-count check both land here.
+mkdir -p target
 # Flags from the one authority the archives themselves are built with.
 mapfile -t warn < runtime/flags/warn.txt
 gcc -std=c11 "${warn[@]}" -O2 runtime/tests/portability_smoke.c \
