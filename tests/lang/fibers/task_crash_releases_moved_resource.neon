@@ -7,7 +7,7 @@
 use std::fiber;
 use std::io;
 use std::resource;
-use std::task;
+use std::fiber::task;
 
 fn main() {
     fiber::runtime_on(1, () => {

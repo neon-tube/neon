@@ -1,11 +1,11 @@
-use std::cancel;
-use std::channel;
+use std::fiber::cancel;
+use std::fiber::channel;
 use std::fiber;
 use std::io;
 
 fn worker(token: cancel::Token, done: channel::Channel[str]) {
-    // block on the token; wake when the scope cancels it
-    channel::recv(cancel::channel(token));
+    // block on the token; wake (with a ClosedError, softened away) when the scope cancels it
+    try? channel::recv(cancel::channel(token));
     try! channel::send(done, "worker stopped");
 }
 
@@ -18,7 +18,7 @@ fn main() {
             io::println("scope body done");
             // returns here -> token auto-cancelled -> worker wakes
         });
-        io::println(channel::recv(done) orelse "?");
+        io::println(try? channel::recv(done) orelse "?");
     });
     io::println("done");
 }

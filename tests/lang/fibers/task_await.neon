@@ -6,7 +6,7 @@
 use std::fiber;
 use std::io;
 use std::string;
-use std::task;
+use std::fiber::task;
 
 fn compute_name() -> str {
     string::concat("neon-", to_string(42))

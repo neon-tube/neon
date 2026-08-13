@@ -1,4 +1,4 @@
-use std::channel;
+use std::fiber::channel;
 use std::fiber;
 use std::io;
 use std::string;
@@ -12,19 +12,17 @@ fn main() {
         let raw: channel::Channel[i64] = channel::new();
         let cooked: channel::Channel[str] = channel::new();
         fiber::spawn(() => {
-            let v = channel::recv(cooked);
-            while v is str {
+            loop {
+                let v = try channel::recv(cooked) catch (e) { break };
                 io::println(v);
-                v = channel::recv(cooked);
-            }
+            };
             io::println("sink: done");
         });
         fiber::spawn(() => {
-            let v = channel::recv(raw);
-            while v is i64 {
+            loop {
+                let v = try channel::recv(raw) catch (e) { break };
                 try! channel::send(cooked, string::concat("cooked-", to_string(v * v)));
-                v = channel::recv(raw);
-            }
+            };
             channel::close(cooked);
         });
         fiber::spawn(() => {

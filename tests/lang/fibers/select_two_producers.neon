@@ -1,4 +1,4 @@
-use std::channel;
+use std::fiber::channel;
 use std::fiber;
 use std::io;
 

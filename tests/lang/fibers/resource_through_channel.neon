@@ -3,7 +3,7 @@
 // uses and cleans up what it received, and a send that THROWS did not send — the closed
 // case at the end shows the baton staying home, the guarantee `try channel::send` rides on.
 
-use std::channel;
+use std::fiber::channel;
 use std::fiber;
 use std::io;
 use std::resource;
@@ -15,12 +15,11 @@ use std::resource;
 record Job { r: resource::Resource[str, resource::ReleasedError] }
 
 fn worker(jobs: channel::Channel[Job]) {
-    let v = channel::recv(jobs);
-    while v is Job {
+    loop {
+        let v = try channel::recv(jobs) catch (e) { break };
         io::println("worker got #{try! resource::get(v.r)}");
         // each message's owning ref dies inside its `get` (last use) -> cleanup here
-        v = channel::recv(jobs);
-    }
+    };
     io::println("worker: drained");
 }
 

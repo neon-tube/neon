@@ -6,7 +6,7 @@
 // leak itself is pinned by the C suite under LeakSanitizer, and by building this file with
 // `neon build --sanitize address`.
 
-use std::channel;
+use std::fiber::channel;
 use std::fiber;
 use std::io;
 

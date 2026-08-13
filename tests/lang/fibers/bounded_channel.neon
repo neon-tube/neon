@@ -4,7 +4,7 @@
 // engages). recv_timeout on a channel nobody sends to comes back null after the deadline,
 // and is_closed distinguishes that timeout from a close.
 
-use std::channel;
+use std::fiber::channel;
 use std::fiber;
 use std::io;
 
@@ -23,17 +23,17 @@ fn main() {
             channel::close(ch);
         });
         fiber::spawn(() => {
-            let v = channel::recv(ch);
-            while v is i64 {
+            loop {
+                let v = try channel::recv(ch) catch (e) { break };
                 io::println("got #{v}");
-                v = channel::recv(ch);
-            }
+            };
         });
 
-        // recv_timeout: nobody ever sends here, so this comes back null after ~20ms, and
-        // is_closed tells us it was a timeout, not a close.
+        // recv_timeout: nobody ever sends here, so this throws after ~20ms. `try?` softens
+        // that to null, and is_closed tells us it was a timeout, not a close (it would have
+        // thrown TimeoutError, not ClosedError, had we caught it by type).
         let quiet: channel::Channel[i64] = channel::new();
-        let r = channel::recv_timeout(quiet, 20);
+        let r = try? channel::recv_timeout(quiet, 20);
         io::println("timed out: #{r is null and channel::is_closed(quiet) == false}");
     });
     io::println("done");

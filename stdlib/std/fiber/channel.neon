@@ -5,7 +5,8 @@
 // channel, not a copy of it.
 //
 //     fn consumer(ch: Channel[i64]) {
-//         while channel::recv(ch) is i64 as n {
+//         loop {
+//             let n = try channel::recv(ch) catch (e) { break };
 //             io::println("got #{n}");
 //         }
 //     }
@@ -21,10 +22,11 @@
 //     }
 //
 // Sends never block (the buffer grows); a receive blocks the calling FIBER — not the
-// thread — until a value arrives, and returns `null` once the channel is closed and
-// drained, which is how a consumer loop ends. Sending on a closed channel throws
-// ClosedError — catchable, and with a guarantee worth leaning on: a send that threw did
-// NOT send, so the caller still owns the value (for a resource, the baton never left).
+// thread — until a value arrives, and throws `ClosedError` once the channel is closed and
+// drained, which is how a consumer loop ends (catch it and `break`). Sending on a closed
+// channel throws `ClosedError` too — catchable, and with a guarantee worth leaning on: a
+// send that threw did NOT send, so the caller still owns the value (for a resource, the
+// baton never left).
 //
 // What can cross: anything except a capturing closure — scalars, strings, lists, maps,
 // records, unions, boxed `any`, channels themselves (a channel in a message is the same
@@ -51,10 +53,22 @@
 record ClosedError { message: str }
 impl Error for ClosedError { fn message(v: ClosedError) -> str { v.message } }
 
+/// A `recv_timeout` that ran out its clock: the deadline passed with the channel still open
+/// and empty. Distinct from `ClosedError` -- a timeout says "nothing yet," a close says
+/// "nothing ever."
+record TimeoutError { message: str }
+impl Error for TimeoutError { fn message(v: TimeoutError) -> str { v.message } }
+
 internal mod raw {
     /// False when the channel is (or, for a parked bounded send, becomes) closed — the
     /// copy never ran on that path, so the value was untouched.
     @native("neon_channel_send") fn send[T](ch: Channel[T], v: T) -> bool
+    /// `null` once closed-and-drained. The wrappers below turn that sentinel into a
+    /// `ClosedError`, so the public API never hands back a `null` a caller must special-case
+    /// (and never confuses a closed channel with a `null` that was legitimately sent).
+    @native("neon_channel_recv") fn recv[T](ch: Channel[T]) -> T | null
+    /// `null` on timeout OR close; the wrapper asks `is_closed` to tell them apart.
+    @native("neon_channel_recv_timeout") fn recv_timeout[T](ch: Channel[T], millis: i64) -> T | null
 }
 
 /// Send `v`: deep-copy it to the shared heap, hand it to a waiting receiver (waking it)
@@ -67,11 +81,23 @@ fn send[T](ch: Channel[T], v: T) throws ClosedError {
     };
 }
 
-/// Receive the next value, blocking this fiber while the channel is open and empty.
-/// Returns `null` only once the channel is both closed and drained:
+/// Receive the next value, blocking this fiber while the channel is open and empty. Throws
+/// `ClosedError` once the channel is closed and drained -- the signal a consumer loop catches
+/// to stop. The value is a full `T`, `null` included, because "closed" is now the error, not a
+/// `null`, so a `Channel[T | null]` can send and receive `null` honestly.
 ///
-///     while channel::recv(ch) is i64 as n { ... }
-@native("neon_channel_recv") fn recv[T](ch: Channel[T]) -> T | null
+///     loop {
+///         let n = try channel::recv(ch) catch (e) { break };
+///         io::println("got #{n}");
+///     }
+fn recv[T](ch: Channel[T]) throws ClosedError -> T {
+    let v = raw::recv(ch);
+    if v is null {
+        throw ClosedError { message: "recv on a closed channel" }
+    } else {
+        v
+    }
+}
 
 /// Close the channel: every parked receiver wakes with `null`, later receives drain the
 /// buffer then return `null`, and later sends throw ClosedError (a send already blocked
@@ -79,14 +105,26 @@ fn send[T](ch: Channel[T], v: T) throws ClosedError {
 /// never taken). Idempotent.
 @native("neon_channel_close") fn close[T](ch: Channel[T])
 
-/// Whether the channel has been closed. A `null` from `recv` already means closed AND
-/// drained; this answers the sharper "will more values ever arrive" — after a
-/// `recv_timeout` came back `null`, say.
+/// Whether the channel has been closed. `recv` throwing `ClosedError` already means closed
+/// AND drained; this answers the sharper "will more values ever arrive" for a caller holding
+/// a channel it is not actively receiving on.
 @native("neon_channel_is_closed") fn is_closed[T](ch: Channel[T]) -> bool
 
-/// Receive with a deadline: a value, or `null` once the channel is closed and drained OR
-/// after `millis` with nothing arriving — `is_closed` tells the two apart when it matters.
-@native("neon_channel_recv_timeout") fn recv_timeout[T](ch: Channel[T], millis: i64) -> T | null
+/// Receive with a deadline: the value, or a throw. `TimeoutError` once `millis` pass with
+/// nothing arriving, `ClosedError` once the channel is closed and drained -- the two the old
+/// single `null` could not tell apart without a follow-up `is_closed`.
+fn recv_timeout[T](ch: Channel[T], millis: i64) throws ClosedError | TimeoutError -> T {
+    let v = raw::recv_timeout(ch, millis);
+    if v is null {
+        if is_closed(ch) {
+            throw ClosedError { message: "recv on a closed channel" }
+        } else {
+            throw TimeoutError { message: "recv timed out after #{millis}ms" }
+        }
+    } else {
+        v
+    }
+}
 
 /// Receive from whichever of several channels is ready first: block this fiber until one
 /// channel in `channels` hands over a value or is closed-and-drained, take from exactly that

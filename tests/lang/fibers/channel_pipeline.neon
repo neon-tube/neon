@@ -4,7 +4,7 @@
 // (only the deep copy to the shared heap makes that sound), and the close-drain loop
 // ending on `null`. Cooperative FIFO makes every line deterministic.
 
-use std::channel;
+use std::fiber::channel;
 use std::fiber;
 use std::io;
 use std::string;
@@ -19,11 +19,10 @@ fn producer(ch: channel::Channel[str]) {
 }
 
 fn consumer(ch: channel::Channel[str]) {
-    let v = channel::recv(ch);
-    while v is str {
+    loop {
+        let v = try channel::recv(ch) catch (e) { break };
         io::println(v);
-        v = channel::recv(ch);
-    }
+    };
     io::println("drained");
 }
 

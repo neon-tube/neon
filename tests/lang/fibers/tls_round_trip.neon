@@ -11,7 +11,7 @@
 // fs corpus test. `runtime_on(1, ..)` for a deterministic interleaving; port 0 so the test
 // never fights over a number; the golden pins outcomes, never addresses or cipher names.
 
-use std::channel;
+use std::fiber::channel;
 use std::fiber;
 use std::fs;
 use std::io;
@@ -93,8 +93,8 @@ fn main() {
             served = served + 1;
         };
 
-        io::println(channel::recv(done) orelse "?");
-        io::println(channel::recv(done) orelse "?");
+        io::println(try? channel::recv(done) orelse "?");
+        io::println(try? channel::recv(done) orelse "?");
     });
 
     try! fs::remove(cert);

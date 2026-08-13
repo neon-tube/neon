@@ -4,7 +4,7 @@
 // `runtime_on(1, ..)` and a bounded accept loop so a corpus program stays deterministic
 // and drains.
 
-use std::channel;
+use std::fiber::channel;
 use std::fiber;
 use std::http;
 use std::io;
@@ -35,7 +35,7 @@ fn main() {
         fiber::spawn(() => client(addr, done));
         let c = try! net::tcp::accept(l);
         fiber::spawn(move () => { http::server::connection(c, reflect); });
-        io::println(channel::recv(done) orelse "?");
+        io::println(try? channel::recv(done) orelse "?");
     });
     io::println("done");
 }

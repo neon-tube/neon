@@ -5,7 +5,7 @@
 // crash isolation. (The trap's own report goes to stderr; stdout is the golden.)
 use std::fiber;
 use std::io;
-use std::task;
+use std::fiber::task;
 
 fn crashy() -> i64 {
     let xs = [1, 2, 3];

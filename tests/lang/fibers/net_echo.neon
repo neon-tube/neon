@@ -15,7 +15,7 @@
 // the module's own example rather than here: it accepts FOREVER, so a runtime containing it
 // never drains, and a corpus program has to end.
 
-use std::channel;
+use std::fiber::channel;
 use std::fiber;
 use std::io;
 use std::net;
@@ -60,7 +60,7 @@ fn main() {
         };
         let n = 0;
         while n < 3 {
-            io::println("reply: #{channel::recv(done) orelse "?"}");
+            io::println("reply: #{try? channel::recv(done) orelse "?"}");
             n = n + 1;
         };
     });

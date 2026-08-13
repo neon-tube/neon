@@ -1,5 +1,5 @@
-use std::cancel;
-use std::channel;
+use std::fiber::cancel;
+use std::fiber::channel;
 use std::fiber;
 use std::io;
 
@@ -30,7 +30,7 @@ fn main() {
         io::println("cancelled before? #{cancel::is_cancelled(token)}");
         cancel::cancel(token);       // interrupts the worker's select mid-wait
         io::println("cancelled after? #{cancel::is_cancelled(token)}");
-        io::println(channel::recv(done) orelse "?");
+        io::println(try? channel::recv(done) orelse "?");
 
         // check() throws for a try boundary
         try cancel::check(token) catch (e) { io::println("check threw: #{e.message}") };

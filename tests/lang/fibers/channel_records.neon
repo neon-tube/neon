@@ -5,7 +5,7 @@
 // on both sides, not a copy: the replies the worker sends come out of the very channel main
 // holds.
 
-use std::channel;
+use std::fiber::channel;
 use std::fiber;
 use std::io;
 use std::list;
@@ -15,15 +15,14 @@ record Job { id: i64, name: str, tags: List[str], env: Map[str, str] }
 record Ports { jobs: channel::Channel[Job], replies: channel::Channel[str] }
 
 fn worker(p: Ports) {
-    let v = channel::recv(p.jobs);
-    while v is Job {
+    loop {
+        let v = try channel::recv(p.jobs) catch (e) { break };
         let mode = map::get_or(v.env, "mode", "?");
         try! channel::send(
             p.replies,
             "did #{v.name} (job #{v.id}, #{list::len(v.tags)} tags, mode #{mode})",
         );
-        v = channel::recv(p.jobs);
-    }
+    };
     channel::close(p.replies);
 }
 
@@ -39,11 +38,10 @@ fn main() {
         try! channel::send(jobs, Job { id: 1, name: "build", tags: ["fast", "hot"], env: env });
         try! channel::send(jobs, Job { id: 2, name: "deploy", tags: [], env: map::new() });
         channel::close(jobs);
-        let r = channel::recv(replies);
-        while r is str {
+        loop {
+            let r = try channel::recv(replies) catch (e) { break };
             io::println(r);
-            r = channel::recv(replies);
-        }
+        };
     });
     io::println("done");
 }

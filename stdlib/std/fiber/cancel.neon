@@ -20,7 +20,7 @@
 // `resource` and `defer`-shaped combinator runs. There is no forced kill — a hard
 // `kill(fiber)` is a different, harder question the runtime leaves alone.
 
-use std::channel;
+use std::fiber::channel;
 use std::resource;
 
 /// Something stopped because its cancellation token fired — not a failure of the work, a

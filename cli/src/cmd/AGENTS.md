@@ -171,18 +171,27 @@ write straight-line blocking code and it scales. Run a tree with `fiber::runtime
 `fiber::spawn`, and talk over channels.
 
 ```neon
+use std::fiber
+use std::fiber::channel                 // channels live under fiber:: — they need a runtime
+
 fiber::runtime(() => {
     let ch = channel::new[i64]();       // turbofish: nothing else pins the element type
     fiber::spawn(() => {                // a plain lambda's captures cross by deep copy
         try! channel::send(ch, compute());
+        channel::close(ch);             // closing is how the receiver's loop ends
     });
-    let result = channel::recv(ch) orelse 0;   // recv is `T | null` (null when closed)
-    io::println("#{result}");
+    loop {
+        let n = try channel::recv(ch) catch (e) { break };   // recv THROWS ClosedError when drained
+        io::println("#{n}");
+    };
 });
 ```
 
-Two things above trip people up: `channel::new` needs a turbofish because no argument reveals
-its element type (gotcha #8), and `channel::recv` returns `T | null`, so handle the null.
+Two things trip people up: `channel::new` needs a turbofish because no argument reveals its
+element type (gotcha #8), and `channel::recv` **throws `ClosedError`** once the channel is
+closed and drained (it does not return `null`) — so a consumer loop is `loop { let v = try
+recv(ch) catch (e) { break }; … }`. `channel`, `task`, and `cancel` are all under `std::fiber::`
+because none of them work outside a running fiber runtime.
 
 A `move` lambda (`move () => ...`) is specifically for handing an owned **resource** — a file,
 a socket, anything from `std::resource` — into a spawned fiber or a channel, moving it rather

@@ -5,7 +5,7 @@
 
 use std::fiber;
 use std::io;
-use std::task;
+use std::fiber::task;
 
 fn crashes() -> i64 {
     let xs = [1];
