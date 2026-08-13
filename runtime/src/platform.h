@@ -35,7 +35,12 @@ typedef int64_t neon_ssize;
 #ifdef _WIN32
 
 // Before <stdlib.h>: `rand_s` (the CRT's door to the OS CSPRNG) is only declared with it.
+// The build sets this globally (runtime/CMakeLists.txt) so it holds even when another header
+// reaches <stdlib.h> first; the guard keeps that -D and this fallback from colliding under
+// -Werror when platform.h happens to be the first include.
+#ifndef _CRT_RAND_S
 #define _CRT_RAND_S
+#endif
 
 #include <direct.h>
 #include <fcntl.h>

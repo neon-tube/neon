@@ -218,6 +218,15 @@ if(NOT WIN32 AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
     add_compile_definitions(NEON_RT_FIBERS=1)
 endif()
 
+# `_CRT_RAND_S` unlocks `rand_s` (the CRT door to the OS CSPRNG that `neon_plat_entropy`
+# uses on Windows). The `#define` in `platform.h` only works when nothing pulls in
+# `<stdlib.h>` first; a test TU that includes it earlier (tinyunit does) leaves `rand_s`
+# undeclared and `-Werror` turns that into a build failure. Set globally so no include
+# order can undo it -- MSVC and mingw both honour it.
+if(WIN32)
+    add_compile_definitions(_CRT_RAND_S)
+endif()
+
 # The runtime ships as prebuilt archives, one per build shape the CLI can ask for, so a
 # Neon build links a `.a` instead of recompiling the whole runtime every time (and a
 # shipped toolchain need not ship the runtime's C source). The flags here must stay in
