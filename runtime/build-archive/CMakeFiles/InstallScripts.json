@@ -1,7 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/home/kibb/projects/neon-tube/neon/runtime/build-archive/cmake_install.cmake"
-	],
-	"Parallel" : false
-}

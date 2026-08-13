@@ -1,8 +1,11 @@
 /target/
 # `verify/` is a detached workspace, so it builds into its own tree.
 /verify/target/
-/runtime/build/
-/runtime/build-tests/
+# Every CMake build tree the toolchain drops under runtime/: build/, build-tests/,
+# build-archive/ (smoke), build-wintests/ (Windows CI). One glob so a new one can never
+# slip in again -- a committed build-archive/CMakeCache.txt with an absolute source path
+# baked in breaks `cmake -S runtime -B ...` on any other machine.
+/runtime/build*/
 /runtime/models/build/
 _neon/
 compile_flags.txt
