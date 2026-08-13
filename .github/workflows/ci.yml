@@ -9,8 +9,8 @@ name: CI
 # `runtime-windows` is the third job, and it is the only one that builds the runtime for a
 # platform this repo's primary CI does not run on. It is not a duplicate of the Linux jobs:
 # what it checks is that the runtime's platform seam (`runtime/src/platform.h`) still
-# compiles and still behaves, under mingw-w64 and under MSVC. See the job's own comment for
-# what each toolchain can and cannot prove there.
+# compiles and still behaves under mingw-w64 -- archives, the smoke test, and the unit
+# suite. See the job's own comment for why the GNU-ABI toolchain is the one covered.
 #
 # fuzz/ and verify/ (the CBMC models live under runtime/models, driven from verify/) are
 # deliberately not here: both are detached workspaces needing their own toolchains
@@ -88,19 +88,18 @@ jobs:
       - name: Portability smoke test
         run: cargo make smoke
 
-  # The C runtime on Windows. Two toolchains, because they answer different questions and
-  # only one of them can answer both.
+  # The C runtime on Windows, via mingw-w64 gcc. It builds the archives *and* links a
+  # program that runs, so this job proves behaviour, not just that the source parses. The
+  # smoke test below is the shape of every Windows-specific bug the port had to fix: a byte
+  # count that changes because the CRT translated a newline, and a path that names a
+  # different file because it was decoded in the ANSI code page.
   #
-  #   * mingw-w64 gcc builds the archives *and* links a program that runs, so this job
-  #     proves behaviour, not just that the source parses. The smoke test below is the
-  #     shape of every Windows-specific bug the port had to fix: a byte count that changes
-  #     because the CRT translated a newline, and a path that names a different file
-  #     because it was decoded in the ANSI code page.
-  #   * MSVC compiles the same sources under `/W4 /WX`. It cannot go further than an
-  #     archive: `cli/src/emit.rs` builds one gcc-shaped argv (`-o`, `-I`, a `.a` passed
-  #     positionally) and `cc_flavor` has no third answer, so `neon build --cc cl.exe`
-  #     is not a thing that can work yet. Compiling the runtime is the part that *is*
-  #     checkable, and it is the part that rots silently.
+  # MSVC (cl.exe) is deliberately NOT built here. The supported Windows toolchain is the
+  # GNU-ABI one — mingw now, clang targeting `*-windows-gnu` if that is ever wanted — and
+  # `cli/src/emit.rs` only knows how to drive a gcc-shaped `cc` anyway, so `neon build`
+  # under cl.exe cannot work yet regardless. A compile-only cl.exe check was more Windows
+  # portability debt (C11 atomics behind `/experimental`, no pthreads, its own `/WX` set)
+  # than a runtime with no MSVC ship target could justify carrying green.
   #
   # The tinyunit suite DOES run here, which it could not while `EXPECT_EXIT` was a `fork`
   # and Windows had none. tinyunit now re-executes its own image per test and replays the
@@ -109,14 +108,6 @@ jobs:
   # replay costs: the child rebuilds the state a forked child would have inherited, so a
   # death test whose body is not deterministic up to the site would diverge here and not on
   # POSIX. Every one of ours is a one-liner.
-  #
-  # The MSVC step below stops at the archive, and tinyunit is NOT the reason. tinyunit
-  # builds and passes under cl.exe — it plants a pointer in `.CRT$XCU` where GNU compilers
-  # get `__attribute__((constructor))`, and its own CI runs four MSVC jobs green. What is
-  # unproven is whether *this* runtime's sources and this repo's CMake branch compile there,
-  # which is exactly what that step exists to find out. If it goes green, adding
-  # `-DNEON_RT_TESTS=ON` and a `ctest` to it is the next step and nothing in tinyunit stands
-  # in the way.
   runtime-windows:
     runs-on: windows-latest
     steps:
@@ -171,21 +162,3 @@ jobs:
             -DCMAKE_BUILD_TYPE=None -DNEON_RT_TESTS=ON
           cmake --build runtime/build-wintests
           ctest --test-dir runtime/build-wintests --output-on-failure -V
-
-      # Compile-only, and deliberately so: see the job comment. The MSVC branch of
-      # `runtime/CMakeLists.txt` is what is under test here, `/W4 /WX` included.
-      #
-      # GATING, as of the run that first proved it. This step landed non-gating because
-      # every line it exercises — `__declspec(noreturn)`, `__forceinline`, the `/wd4204
-      # /wd4221` suppressions — had been written by someone with no `cl.exe` to run it
-      # against, so its first run was an experiment rather than a check. It found exactly
-      # one thing: `neon_i64_neg`'s `-(uint64_t)a` tripping C4146, which `/WX` made fatal.
-      # With that fixed it compiles every source and links the archive clean, so it now
-      # blocks like any other step. Nothing here is a prediction any more.
-      - uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Compile the runtime archives (MSVC)
-        shell: cmd
-        run: |
-          cmake -S runtime -B runtime/build-msvc -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=None -DCMAKE_C_COMPILER=cl
-          cmake --build runtime/build-msvc
