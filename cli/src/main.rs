@@ -166,6 +166,11 @@ enum Command {
     Init {
         /// The project directory to create (defaults to the working directory).
         name: Option<OsString>,
+        /// Also write an `AGENTS.md`: a guide to writing Neon for a coding agent that
+        /// has never seen the language, covering its idioms and the gotchas that trip
+        /// up an assumption carried over from another language.
+        #[arg(long)]
+        agent: bool,
     },
     /// Compile a single source file to an executable.
     Compile {
@@ -276,7 +281,7 @@ fn main() -> Result<()> {
         Command::Check { file, lib, cfg } => cmd::check::run(file.as_ref(), lib, &cfg),
         Command::Fmt { file, write, check } => cmd::fmt::run(file.as_ref(), write, check),
         Command::Ir { file, stage } => cmd::ir::run(&file, stage.into()),
-        Command::Init { name } => cmd::init::run(name),
+        Command::Init { name, agent } => cmd::init::run(name, agent),
         Command::Compile {
             file,
             output,

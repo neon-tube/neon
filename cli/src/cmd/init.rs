@@ -4,9 +4,14 @@ use std::path::{Path, PathBuf};
 
 const MAIN_NEON: &str = "use std::io\n\nfn main() {\n    io::println(\"Hello, Neon!\")\n}\n";
 
+/// The agent guide, kept beside this file so it is edited as prose rather than as an escaped
+/// Rust string. `--agent` writes it verbatim as `AGENTS.md`.
+const AGENTS_MD: &str = include_str!("AGENTS.md");
+
 /// Scaffold a project. With a name, creates a directory of that name; without one, uses the
-/// working directory. Writes a `neon.toml` and a `src/main.neon`, never overwriting.
-pub fn run(name: Option<OsString>) -> Result<()> {
+/// working directory. Writes a `neon.toml` and a `src/main.neon`, never overwriting. With
+/// `agent`, also writes an `AGENTS.md`.
+pub fn run(name: Option<OsString>, agent: bool) -> Result<()> {
     let (root, project_name) = match name {
         Some(n) => {
             let root = PathBuf::from(&n);
@@ -37,8 +42,14 @@ pub fn run(name: Option<OsString>) -> Result<()> {
         &format!("[package]\nname = \"{project_name}\"\nversion = \"0.1.0\"\n"),
     )?;
     write_new(&root.join("src/main.neon"), MAIN_NEON)?;
+    if agent {
+        write_new(&root.join("AGENTS.md"), AGENTS_MD)?;
+    }
 
     println!("created project `{project_name}` in {}", root.display());
+    if agent {
+        println!("wrote AGENTS.md");
+    }
     Ok(())
 }
 
