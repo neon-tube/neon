@@ -509,10 +509,11 @@ if(NEON_RT_TESTS)
         find_package(Threads REQUIRED)
         target_link_libraries(neon_rt_tests PRIVATE m Threads::Threads)
     else()
-        # mbedTLS's entropy source on Windows is BCryptGenRandom. The sources are compiled
-        # straight into this binary, so the exe carries the reference even though the TLS
-        # natives are ENOSYS stubs there (src/tls.c's Windows branch).
-        target_link_libraries(neon_rt_tests PRIVATE bcrypt)
+        # mbedTLS's entropy source on Windows is BCryptGenRandom, and its X.509 path calls
+        # inet_pton (Winsock, ws2_32). Both sets of sources are compiled straight into this
+        # binary, so the exe carries the references even though the TLS natives are ENOSYS
+        # stubs there (src/tls.c's Windows branch).
+        target_link_libraries(neon_rt_tests PRIVATE bcrypt ws2_32)
     endif()
 
     # Sanitizers on the whole test binary — the runtime sources and tinyunit compiled in with

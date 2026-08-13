@@ -26,8 +26,16 @@ void neon_transfer_end(void) {
 #define NEON_RESOURCE_ROOT_CTX ((neon_fiber*)(uintptr_t)1)
 
 static neon_fiber* neon_resource_ctx(void) {
+#ifdef NEON_RT_FIBERS
     neon_fiber* f = neon_fiber_current();
     return f != NULL ? f : NEON_RESOURCE_ROOT_CTX;
+#else
+    // No fiber runtime on this target (Win64 has no swap gadget yet): a single execution
+    // context, so a single stable identity. The owner gate still holds -- every use
+    // compares equal to this one, which is exactly UNOWNED-to-me-vs-someone-else with a
+    // party of one.
+    return NEON_RESOURCE_ROOT_CTX;
+#endif
 }
 
 // The body's own drop: memory death, NOT cleanup. Cleanup ran (or was deliberately
@@ -65,9 +73,14 @@ neon_resource* neon_resource_new(const void* payload, const neon_witness* w,
     // A capturing cleanup's environment crosses to the shared heap NOW, at construction —
     // the one moment the resource's author is on the stack to hear about an unsendable
     // capture — so cleanup can later run from whatever context drops the owning ref.
+#ifdef NEON_RT_FIBERS
     if (cleanup.env != NULL && (cleanup.env->flags & NEON_ALLOC_ARENA)) {
         cleanup.env = neon_env_copy_to_shared(cleanup.env);
     }
+#else
+    // No fibers means no per-fiber arenas: nothing is ever NEON_ALLOC_ARENA, so the copy
+    // above is unreachable here and the fiber-only symbol is left unreferenced.
+#endif
     void* saved = neon_shared_routing_begin(); // the body's count is concurrent
     neon_resource_body* b = (neon_resource_body*)neon_alloc(
         sizeof(neon_resource_body) - sizeof(neon_header) + w->size, neon_resource_body_drop);
