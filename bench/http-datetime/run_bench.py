@@ -74,6 +74,32 @@ def rewrk_load(port, conns, threads, duration):
     m = re.search(r"Req/Sec:\s*([\d.]+)", res.stdout)
     return float(m.group(1)) if m else None
 
+def _ms(s):
+    """A rewrk duration like '2.99ms' / '1.20s' / '850us' as milliseconds."""
+    m = re.match(r"([\d.]+)\s*(ms|us|s)", s)
+    if not m:
+        return None
+    v = float(m.group(1))
+    return {"ms": v, "us": v / 1000, "s": v * 1000}[m.group(2)]
+
+def rewrk_latency(port, conns, threads, duration):
+    """Latency distribution under load. Returns a dict of milliseconds: p50/p99/p99_9/max/reqs."""
+    res = subprocess.run(
+        ["rewrk", "-c", str(conns), "-t", str(threads), "-d", f"{int(duration)}s",
+         "--pct", "-h", f"http://127.0.0.1:{port}"],
+        capture_output=True, text=True)
+    out = res.stdout
+    pct = {p: _ms(v + "ms") if v.replace(".", "").isdigit() else _ms(v)
+           for p, v in re.findall(r"\|\s*([\d.]+)%\s*\|\s*([\d.]+\s*(?:ms|us|s))\s*\|", out)}
+    lat = re.search(r"Avg\s+Stdev\s+Min\s+Max\s*\n\s*([\d.]+\w+)\s+([\d.]+\w+)\s+([\d.]+\w+)\s+([\d.]+\w+)", out)
+    reqs = re.search(r"Req/Sec:\s*([\d.]+)", out)
+    if not lat or not pct:
+        return None
+    return {
+        "p50": pct.get("50"), "p99": pct.get("99"), "p99_9": pct.get("99.9"),
+        "max": _ms(lat.group(4)), "reqs": float(reqs.group(1)) if reqs else 0,
+    }
+
 def python_load(port, duration, workers):
     """Fallback when rewrk is absent: a rough keep-alive number, marked as such."""
     stop = time.time() + duration
@@ -120,6 +146,7 @@ def main():
     ap.add_argument("-c", "--connections", type=int, default=64)
     ap.add_argument("-t", "--threads", type=int, default=8)
     ap.add_argument("-d", "--duration", type=float, default=10.0)
+    ap.add_argument("--latency", action="store_true", help="report latency percentiles instead of raw req/s")
     ap.add_argument("--hide-compilation", action="store_true")
     args = ap.parse_args()
 
@@ -158,7 +185,12 @@ def main():
                 console.print(f"[red]{name} did not return an ISO timestamp: {body!r}[/red]")
                 results[name] = None
                 continue
-            if have_rewrk:
+            if args.latency:
+                if not have_rewrk:
+                    console.print("[red]--latency needs rewrk.[/red]")
+                    return
+                results[name] = rewrk_latency(port, args.connections, args.threads, args.duration)
+            elif have_rewrk:
                 results[name] = rewrk_load(port, args.connections, args.threads, args.duration)
             else:
                 results[name] = python_load(port, args.duration, args.threads)
@@ -170,19 +202,37 @@ def main():
                 proc.kill()
             time.sleep(0.2)
 
-    table = Table(title="http-datetime — requests/second (higher is better)")
-    table.add_column("Language", style="cyan")
-    table.add_column("req/s", justify="right", style="green")
-    table.add_column("vs fastest", justify="right", style="magenta")
-    ok = {k: v for k, v in results.items() if v}
-    best = max(ok.values()) if ok else 0
-    for name in sorted(results, key=lambda n: results[n] or -1, reverse=True):
-        v = results[name]
-        if v:
-            table.add_row(name, f"{v:,.0f}", f"{best / v:.2f}x")
-        else:
-            table.add_row(name, "[red]—[/red]", "")
-    console.print(table)
+    if args.latency:
+        t = Table(title=f"http-datetime latency, {args.connections} connections (lower is better)")
+        t.add_column("Language", style="cyan")
+        for c in ("p50", "p99", "p99.9", "max"):
+            t.add_column(c, justify="right", style="green")
+        t.add_column("tail p99.9/p50", justify="right", style="magenta")
+        ok = {k: v for k, v in results.items() if v}
+        # Sort by the tail: p99.9 latency, ascending.
+        for name in sorted(results, key=lambda n: results[n]["p99_9"] if results[n] else 1e12):
+            v = results[name]
+            if v:
+                ratio = v["p99_9"] / v["p50"] if v["p50"] else 0
+                t.add_row(name, f"{v['p50']:.2f}ms", f"{v['p99']:.2f}ms",
+                          f"{v['p99_9']:.2f}ms", f"{v['max']:.2f}ms", f"{ratio:.1f}x")
+            else:
+                t.add_row(name, "[red]—[/red]", "", "", "", "")
+        console.print(t)
+    else:
+        table = Table(title="http-datetime — requests/second (higher is better)")
+        table.add_column("Language", style="cyan")
+        table.add_column("req/s", justify="right", style="green")
+        table.add_column("vs fastest", justify="right", style="magenta")
+        ok = {k: v for k, v in results.items() if v}
+        best = max(ok.values()) if ok else 0
+        for name in sorted(results, key=lambda n: results[n] or -1, reverse=True):
+            v = results[name]
+            if v:
+                table.add_row(name, f"{v:,.0f}", f"{best / v:.2f}x")
+            else:
+                table.add_row(name, "[red]—[/red]", "")
+        console.print(table)
 
 if __name__ == "__main__":
     main()
