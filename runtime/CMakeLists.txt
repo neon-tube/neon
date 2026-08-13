@@ -337,6 +337,12 @@ if(MSVC)
     set(NEON_RT_WARN /W4 /WX /wd4204 /wd4221 -D_CRT_SECURE_NO_WARNINGS)
     set(NEON_RT_FLAGS_RELEASE /O2)
     set(NEON_RT_FLAGS_DEBUG /Od /Zi -DNEON_DEBUG)
+    # The runtime is built on C11 `<stdatomic.h>` (owner/armed slots, the channel, the
+    # scheduler). `/std:c11` alone is not enough under `cl`: its `<stdatomic.h>` is gated and
+    # answers an un-flagged include with `#error "C atomic support is not enabled"`.
+    # `/experimental:c11atomics` is the switch that turns it on. Global (not per-variant) so
+    # it also reaches the tinyunit target, which compiles the same sources.
+    add_compile_options(/experimental:c11atomics)
     # ASan only: MSVC ships no UndefinedBehaviorSanitizer, so this variant covers strictly
     # less on MSVC than elsewhere. It is still the instrumented archive a sanitized build
     # must link -- an uninstrumented one would be a silent hole -- but it is not the same
